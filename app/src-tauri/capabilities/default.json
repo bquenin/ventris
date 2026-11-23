@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the app's one window may ask of the system: file dialogs, and opening a link or a folder",
+  "windows": ["main"],
+  "permissions": ["core:default", "opener:default", "dialog:default"]
+}

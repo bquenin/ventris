@@ -1,0 +1,54 @@
+name: A game to support
+description: Ask for a game to be supported, or say that you are starting on an adapter for one.
+labels: ["game request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A game is supported once someone writes its adapter, the code that knows where its text is and how
+        to put a translation back. [Adding a game](https://github.com/bquenin/ventris/blob/main/docs/adding-a-game.md)
+        says what that takes. A request helps whoever takes it up, and keeps two people from taking the
+        same game apart at once.
+
+        Do not attach the game or any file from it.
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      description: Its title, as it is known in its own language and, if it has one, in English.
+    validations:
+      required: true
+  - type: input
+    id: console
+    attributes:
+      label: Console
+      placeholder: Super Famicom, PlayStation 2, ...
+    validations:
+      required: true
+  - type: input
+    id: release
+    attributes:
+      label: Release and region
+      description: Which release of the game, such as "Japan, version 1.1". An adapter is made for one release.
+    validations:
+      required: true
+  - type: textarea
+    id: known
+    attributes:
+      label: What is known about it
+      description: Anything known about how the game keeps or draws its text, from your own work or from others' (documents, tools, forum threads), with links.
+  - type: textarea
+    id: fan-translation
+    attributes:
+      label: An existing fan translation
+      description: Whether a fan translation of this release exists, with a link. It can serve as an answer key for where the text is, even when its own text cannot be used.
+  - type: dropdown
+    id: writing
+    attributes:
+      label: Are you writing the adapter?
+      options:
+        - No, I am asking for it
+        - Yes, I am starting on it
+        - I would like to, with help
+    validations:
+      required: true

@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-bg font-sans text-fg antialiased;
+    /* The window is an app, not a page: text is not selected by dragging across the controls. */
+    user-select: none;
+  }
+  /* What someone may want to copy stays selectable: paths, reports, licence texts. */
+  .selectable {
+    user-select: text;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/70;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #302e3d;
+    border-radius: 5px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #413e52;
+  }
+}
+
+@layer components {
+  .button {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-bg-border bg-bg-elevated px-3 py-1.5 text-sm text-fg transition-colors hover:border-fg-faint disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-bg-border;
+  }
+  .button-main {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-3 py-1.5 text-sm font-semibold text-bg transition-colors hover:bg-[#f7c868] disabled:cursor-not-allowed disabled:border-bg-border disabled:bg-bg-elevated disabled:font-normal disabled:text-fg-faint;
+  }
+  .card {
+    @apply rounded-lg border border-bg-border bg-bg-surface;
+  }
+}

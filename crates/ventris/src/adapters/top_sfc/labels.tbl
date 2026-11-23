@@ -1,0 +1,164 @@
+menu.669#1 021D88 2608
+menu.707#1 02523C 2060
+menu.708#1 025248 20A0
+menu.707#2 025267 2060
+menu.708#2 025276 20A0
+menu.707#3 025316 2060
+menu.708#3 025325 20A0
+menu.709#1 025331 20A8
+menu.701#1 0253F3 20A0
+menu.661#1 027586 2132 main menu
+menu.654#1 02771C 2122 main menu
+menu.655#1 027721 2094 main menu
+menu.657#1 027726 20A2 main menu
+menu.660#1 02772B 20B2 main menu
+menu.656#1 027730 2106 main menu
+menu.659#1 027735 2086 main menu
+menu.658#1 02773A 2114 main menu
+menu.661#2 02773F 2132 main menu
+menu.663#1 027744 2704 main menu
+menu.664#1 027749 271A main menu
+menu.662#1 02774E 2722 main menu
+menu.665#1 027753 2784 main menu
+menu.669#2 027758 27A2 main menu
+menu.777#1 027E4B 20A0
+menu.003#1 027E60 214A
+menu.008#1 02834E 2262 equipment screen
+menu.009#1 028353 22E2 equipment screen
+menu.010#1 028358 2362 equipment screen
+menu.011#1 02835D 23E2 equipment screen
+menu.012#1 028362 2462 equipment screen
+menu.013#1 028367 24E2 equipment screen
+menu.014#1 02836C 2562 equipment screen
+menu.656#2 028372 20A0 equipment screen
+menu.702#1 028377 20AA equipment screen
+menu.703#1 02837C 20B4 equipment screen
+menu.004#1 028382 22E2 equipment screen
+menu.015#1 028387 2366 equipment screen
+menu.016#1 02838C 23E6 equipment screen
+menu.006#1 028391 2462 equipment screen
+menu.005#1 028396 24E2 equipment screen
+menu.007#1 02839B 2562 equipment screen
+menu.004#2 0283A1 2362 equipment screen
+menu.006#2 0283A6 23E2 equipment screen
+menu.005#2 0283AB 2462 equipment screen
+menu.007#2 0283B0 24E2 equipment screen
+menu.668#1 028A34 2284 status screen
+menu.001#1 028A39 2304 status screen
+menu.002#1 028A3E 2344 status screen
+menu.003#2 028A43 2312 status screen
+menu.003#3 028A48 2352 status screen
+menu.666#1 028A4D 23C4 status screen
+menu.667#1 028A52 2404 status screen
+menu.674#1 028A57 2484 status screen
+menu.784#1 028A5C 24C4 status screen
+menu.675#1 028A61 2504 status screen
+menu.676#1 028A66 2544 status screen
+menu.006#3 028A6B 26C4 status screen
+menu.005#3 028A70 2744 status screen
+menu.007#3 028A75 27C4 status screen
+menu.008#2 028A7A 0062 status screen
+menu.009#2 028A7F 00E2 status screen
+menu.010#2 028A84 0162 status screen
+menu.011#2 028A89 01E2 status screen
+menu.012#2 028A8E 0262 status screen
+menu.013#2 028A93 02E2 status screen
+menu.014#2 028A98 0362 status screen
+menu.659#2 028A9D 1082 status screen
+menu.705#1 028AA2 10C2 status screen
+menu.710#1 028AA7 10CE status screen
+menu.706#1 028AAC 10E0 status screen
+menu.710#2 028AB1 10EA status screen
+menu.785#1 028AB6 1070 status screen
+menu.659#3 028ABC 03E2 status screen
+menu.004#3 028AC1 25C4 status screen
+menu.015#2 028AC6 2608 status screen
+menu.016#2 028ACB 2648 status screen
+menu.814#1 028DE6 2204 status screen
+menu.658#2 028DFE 03E2 status screen
+menu.004#4 028E31 2644 status screen
+menu.807#1 029113 2410
+menu.680#1 029287 20AC
+menu.805#1 029295 20AC
+menu.806#1 0292A1 20B6
+menu.001#2 0295E9 230C
+menu.002#2 0295EE 234C
+menu.003#4 0295F3 231A
+menu.003#5 0295F8 235A
+menu.776#1 029772 2686
+menu.682#1 029821 2186 custom screen
+menu.690#1 029826 2206 custom screen
+menu.691#1 02982B 2220 custom screen
+menu.692#1 029830 22A0 custom screen
+menu.693#1 029835 2320 custom screen
+menu.694#1 02983A 23A0 custom screen
+menu.698#1 02983F 2886 custom screen
+menu.686#1 029844 288C custom screen
+menu.687#1 029849 28A0 custom screen
+menu.688#1 02984E 2920 custom screen
+menu.689#1 029853 29A0 custom screen
+menu.699#1 029858 2AC6 custom screen
+menu.686#2 02985D 2ACA custom screen
+menu.687#2 029862 2AE0 custom screen
+menu.688#2 029867 2B60 custom screen
+menu.689#2 02986C 2BE0 custom screen
+menu.411#1 029871 20A0 custom screen
+menu.680#2 029876 20AC custom screen
+menu.760#1 02987B 2406 custom screen
+menu.764#1 029880 2486 custom screen
+menu.767#1 029885 2506 custom screen
+menu.773#1 02988A 2586 custom screen
+menu.775#1 02988F 2606 custom screen
+menu.761#1 029BBF 2420 custom screen
+menu.762#1 029BD9 242A custom screen
+menu.763#1 029BF5 2434 custom screen
+menu.765#1 029C13 24A0 custom screen
+menu.766#1 029C2C 24A8 custom screen
+menu.768#1 029C4C 2520 custom screen
+menu.769#1 029C67 2528 custom screen
+menu.770#1 029C80 2534 custom screen
+menu.765#2 029C9E 25A0 custom screen
+menu.766#2 029CB7 25A8 custom screen
+menu.765#3 029CD5 2620 custom screen
+menu.766#3 029CEE 2628 custom screen
+menu.765#4 029D0C 26A0 custom screen
+menu.766#4 029D25 26A8 custom screen
+menu.411#2 02AAD7 20A0 naming screen
+menu.758#1 02AADC 20AC naming screen
+menu.759#1 02AAE1 225A naming screen
+menu.680#3 02AFB3 20AC
+menu.771#1 02AFC2 2242
+menu.772#1 02AFD1 2382
+menu.662#2 02B28E 20B0
+menu.662#3 02B29D 20B0
+menu.003#6 02B3D9 2164
+menu.781#1 02B3DE 23B0
+menu.782#1 02B3E3 2470
+menu.778#1 02B418 2186 shop
+menu.779#1 02B424 218E shop
+menu.780#1 02B430 2196 shop
+menu.774#1 02DFA1 2584
+menu.002#3 02DFB0 258C
+menu.790#1 02DFE0 259A
+menu.774#2 02E0B6 25A6
+menu.002#4 02E0C5 25AE
+menu.808#1 04909D 22D4
+menu.789#1 06F316 12AE
+menu.804#1 06F576 12A0
+menu.789#2 06F585 126E
+menu.787#1 06F62C 2386
+menu.786#1 06F650 2398
+menu.788#1 06F674 23AC
+menu.794#1 06F6F1 2188 sound test
+menu.795#1 06F6F6 2208 sound test
+menu.800#1 06F6FB 2288 sound test
+menu.801#1 06F700 2308 sound test
+menu.798#1 06F705 2388 sound test
+menu.799#1 06F70A 2448 sound test
+menu.796#1 06F70F 21A6 sound test
+menu.797#1 06F714 2226 sound test
+menu.802#1 06F719 22A6 sound test
+menu.803#1 06F71E 2326 sound test
+menu.792#1 06F723 23A6 sound test
+menu.793#1 06F728 2426 sound test
+menu.002#5 06F8EA 10A8

@@ -1,0 +1,57 @@
+name: A bug in ventris
+description: The program, the app or the workbench does something wrong, or refuses something it should take.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is for ventris itself. A line that reads wrong or looks wrong in a translated game belongs
+        in the [packs repository](https://github.com/bquenin/ventris-packs/issues/new/choose).
+
+        Do not attach a game, an extracted script, a built image, a saved state or a patch: none of
+        them may be shared here. A screenshot of the problem is fine.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `ventris --version` prints, or the commit if you built it from source.
+      placeholder: ventris 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      description: The game, and whether the app found your copy of it (on the command line, its id as `ventris games` shows it, and whether `ventris find` recognises your file). Leave empty if no game is involved.
+      placeholder: tod2-ps2, recognised
+  - type: textarea
+    id: what-you-did
+    attributes:
+      label: What you did
+      description: The command you ran, or the steps in the app, and the pack if one was used (its name and version, as the app or `ventris describe` shows them).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What the program printed, in full, or what you saw on screen.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true

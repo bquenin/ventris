@@ -1,0 +1,440 @@
+diff --git a/pcsx2/DebugTools/Breakpoints.cpp b/pcsx2/DebugTools/Breakpoints.cpp
+index a9677eb..b4181ec 100644
+--- a/pcsx2/DebugTools/Breakpoints.cpp
++++ b/pcsx2/DebugTools/Breakpoints.cpp
+@@ -11,6 +11,10 @@
+ #include "Memory.h"
+ #include "IopMem.h"
+ #include "common/Console.h"
++#include "Counters.h"
++
++#include <atomic>
++#include <mutex>
+ 
+ std::vector<BreakPoint> CBreakPoints::breakPoints_;
+ u32 CBreakPoints::breakSkipFirstAtEE_ = 0;
+@@ -23,6 +27,67 @@ bool CBreakPoints::breakpointTriggered_ = false;
+ BreakPointCpu CBreakPoints::breakpointTriggeredCpu_;
+ bool CBreakPoints::corePaused = false;
+ 
++namespace HitRecorder
++{
++	// More than this many hits waiting to be collected are dropped.
++	static constexpr size_t MOST = 65536;
++	static std::mutex s_mutex;
++	static std::vector<RecordedHit> s_hits;
++	static std::atomic<bool> s_enabled{false};
++} // namespace HitRecorder
++
++void HitRecorder::SetEnabled(bool enabled)
++{
++	s_enabled.store(enabled);
++}
++
++bool HitRecorder::IsEnabled()
++{
++	return s_enabled.load();
++}
++
++void HitRecorder::Record(BreakPointCpu cpu, u8 kind, u32 address)
++{
++	RecordedHit hit = {};
++	hit.kind = kind;
++	hit.cpu = static_cast<u8>(cpu);
++	hit.address = address;
++	hit.frame = static_cast<u32>(g_FrameCount);
++	if (cpu == BREAKPOINT_IOP)
++	{
++		hit.pc = psxRegs.pc;
++		hit.delaySlot = (kind == 1) ? (psxIsMemcheckNeeded(hit.pc) == 2) : (address == hit.pc + 4);
++		for (int i = 0; i < 32; i++)
++			hit.registers[i] = psxRegs.GPR.r[i];
++	}
++	else
++	{
++		hit.pc = cpuRegs.pc;
++		hit.delaySlot = (kind == 1) ? (isMemcheckNeeded(hit.pc) == 2) : (address == hit.pc + 4);
++		for (int i = 0; i < 32; i++)
++			hit.registers[i] = cpuRegs.GPR.r[i].UL[0];
++	}
++	std::lock_guard lock(s_mutex);
++	if (s_hits.size() < MOST)
++		s_hits.push_back(hit);
++}
++
++std::vector<RecordedHit> HitRecorder::Take(size_t most)
++{
++	std::lock_guard lock(s_mutex);
++	const size_t count = std::min(most, s_hits.size());
++	std::vector<RecordedHit> taken(s_hits.begin(), s_hits.begin() + count);
++	s_hits.erase(s_hits.begin(), s_hits.begin() + count);
++	return taken;
++}
++
++void HitRecorder::Clear()
++{
++	std::lock_guard lock(s_mutex);
++	s_hits.clear();
++}
++
++
+ // called from the dynarec
+ u32 standardizeBreakpointAddress(u32 addr)
+ {
+@@ -499,7 +564,10 @@ bool CBreakPoints::HandleBreakpointHit(BreakPointCpu cpu, u32 addr)
+ 		: breakpoint.logFormat;
+ 	const bool continueOnHit = breakpoint.continueOnHit;
+ 
+-	if (instrumentationEnabled)
++	// Local addition: a script collects the hit, and the log is left alone.
++	if (instrumentationEnabled && HitRecorder::IsEnabled())
++		HitRecorder::Record(cpu, 0, addr);
++	else if (instrumentationEnabled)
+ 		LogInstrumentation(cpu, logFormat);
+ 
+ 	if(breakpoint.maxHits > 0 && breakpoint.hitsSinceEnabled >= breakpoint.maxHits)
+@@ -529,7 +597,10 @@ bool CBreakPoints::HandleMemCheckHit(BreakPointCpu cpu, u32 start, u32 end)
+ 		: memCheck.logFormat;
+ 	const bool continueOnHit = memCheck.continueOnHit;
+ 
+-	if (instrumentationEnabled)
++	// Local addition: a script collects the hit, and the log is left alone.
++	if (instrumentationEnabled && HitRecorder::IsEnabled())
++		HitRecorder::Record(cpu, 1, start);
++	else if (instrumentationEnabled)
+ 		LogInstrumentation(cpu, logFormat);
+ 
+ 	if(memCheck.maxHits > 0 && memCheck.hitsSinceEnabled >= memCheck.maxHits)
+diff --git a/pcsx2/DebugTools/Breakpoints.h b/pcsx2/DebugTools/Breakpoints.h
+index 148c446..9b1aafe 100644
+--- a/pcsx2/DebugTools/Breakpoints.h
++++ b/pcsx2/DebugTools/Breakpoints.h
+@@ -211,4 +211,30 @@ private:
+ u32 standardizeBreakpointAddress(u32 addr);
+ 
+ std::string EvaluateInstrumentationLogFormat(DebugInterface& debug, const std::string& format);
+-bool ValidateInstrumentationLogFormat(DebugInterface& debug, const std::string& format, std::string& error);
+\ No newline at end of file
++bool ValidateInstrumentationLogFormat(DebugInterface& debug, const std::string& format, std::string& error);
++
++// Local addition, for driving the emulator from a script. A breakpoint or a memory check that is
++// set to carry on is only written to the log by the emulator. While the recorder is on, each hit
++// is kept here instead, with where the processor was and its registers, to be collected over the
++// control socket.
++struct RecordedHit
++{
++	u8 kind; // 0: an address was run. 1: memory was read or written.
++	u8 cpu; // a BreakPointCpu
++	u8 delaySlot; // the instruction is the one after pc, in the delay slot of the branch at pc
++	u8 unused;
++	u32 pc;
++	u32 address; // the breakpoint's address, or the start of the memory check's range
++	u32 frame; // the emulator's count of frames when it happened
++	u32 registers[32]; // the low 32 bits of each general register
++};
++
++namespace HitRecorder
++{
++	void SetEnabled(bool enabled);
++	bool IsEnabled();
++	void Record(BreakPointCpu cpu, u8 kind, u32 address);
++	// Takes up to `most` hits, oldest first, out of the recorder.
++	std::vector<RecordedHit> Take(size_t most);
++	void Clear();
++} // namespace HitRecorder
+diff --git a/pcsx2/PINE.cpp b/pcsx2/PINE.cpp
+index dd4059a..26a924e 100644
+--- a/pcsx2/PINE.cpp
++++ b/pcsx2/PINE.cpp
+@@ -3,9 +3,15 @@
+ 
+ #include "BuildVersion.h"
+ #include "Common.h"
++#include "Counters.h"
++#include "DebugTools/Breakpoints.h"
++#include "GS/GS.h"
+ #include "Host.h"
+ #include "Elfheader.h"
++#include "MTGS.h"
+ #include "SaveState.h"
++#include "SIO/Pad/Pad.h"
++#include "SIO/Pad/PadBase.h"
+ #include "PINE.h"
+ #include "VMManager.h"
+ #include "vtlb.h"
+@@ -15,6 +21,7 @@
+ #include <atomic>
+ #include <cstdio>
+ #include <cstdlib>
++#include <cstring>
+ #include <span>
+ #include <sys/types.h>
+ #include <thread>
+@@ -159,6 +166,21 @@ namespace PINEServer
+ 		MsgUUID = 0xD, /**< Returns the game UUID. */
+ 		MsgGameVersion = 0xE, /**< Returns the game verion. */
+ 		MsgStatus = 0xF, /**< Returns the emulator status. */
++		// Local additions for driving the emulator from a script. Not part of the PINE standard.
++		MsgPause = 0x20, /**< Pauses (1) or resumes (0) the VM. */
++		MsgFrameAdvance = 0x21, /**< Runs a number of frames (u32), then pauses. */
++		MsgScreenshot = 0x22, /**< Saves the next frame as an image: u32 length, then the path. */
++		MsgPadSet = 0x23, /**< Sets a pad input: port, slot, input index, value 0-255 (one byte each). */
++		MsgReadBlock = 0x24, /**< Reads memory: u32 address, u32 length. */
++		MsgFrameCount = 0x25, /**< Returns the number of frames emulated so far. */
++		MsgWriteBlock = 0x26, /**< Writes memory: u32 address, u32 length, then the bytes. */
++		MsgWatch = 0x27, /**< Records each read or write of a range and carries on: cpu, kind (1 read, 2 write, 4 a write that changes it; they add up), u32 start, u32 end. */
++		MsgTrace = 0x28, /**< Records each time an address is run and carries on: cpu, u32 address. */
++		MsgHits = 0x29, /**< Returns the hits recorded since last asked, and forgets them. */
++		MsgClearWatches = 0x2A, /**< Removes every watch and trace, and forgets their hits. */
++		MsgSpeed = 0x2B, /**< Runs at the game's own speed (0) or as fast as the machine can (1). */
++		MsgSaveStateFile = 0x2C, /**< Saves a state to a file: u32 length, then the path. The file is written when the reply comes. */
++		MsgLoadStateFile = 0x2D, /**< Loads a state from a file: u32 length, then the path. */
+ 		MsgUnimplemented = 0xFF /**< Unimplemented IPC message. */
+ 	};
+ 
+@@ -644,11 +666,14 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
+ 					goto error;
+ 				if (!SafetyChecks(buf_cnt, 1, ret_cnt, 0, buf_size)) [[unlikely]]
+ 					goto error;
++				// Local change: compressed here and now, and waited for, so that the state is
++				// written when the reply is sent. A script goes on as soon as it has the reply.
+ 				Host::RunOnCPUThread([slot = FromSpan<u8>(buf, buf_cnt)] {
+-					VMManager::SaveStateToSlot(slot, true, [slot](const std::string& error) {
++					VMManager::SaveStateToSlot(slot, false, [slot](const std::string& error) {
+ 						SaveState_ReportSaveErrorOSD(error, slot);
+ 					});
+-				});
++					VMManager::WaitForSaveStateFlush();
++				}, true);
+ 				buf_cnt += 1;
+ 				break;
+ 			}
+@@ -662,7 +687,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
+ 					Error state_error;
+ 					if (!VMManager::LoadStateFromSlot(slot, false, &state_error))
+ 						SaveState_ReportLoadErrorOSD(state_error.GetDescription(), slot, false);
+-				});
++				}, true); // Local change: waited for, so that the state is loaded when the reply is sent.
+ 				buf_cnt += 1;
+ 				break;
+ 			}
+@@ -746,6 +771,219 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
+ 				ret_cnt += 4;
+ 				break;
+ 			}
++			case MsgPause:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 1, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				Host::RunOnCPUThread([paused = FromSpan<u8>(buf, buf_cnt) != 0] {
++					VMManager::SetPaused(paused);
++				});
++				buf_cnt += 1;
++				break;
++			}
++			case MsgFrameAdvance:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 4, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				Host::RunOnCPUThread([frames = FromSpan<u32>(buf, buf_cnt)] {
++					VMManager::FrameAdvance(frames);
++				});
++				buf_cnt += 4;
++				break;
++			}
++			case MsgScreenshot:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 4, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				const u32 length = FromSpan<u32>(buf, buf_cnt);
++				if (length > 4096 || !SafetyChecks(buf_cnt, 4 + length, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				std::string path(reinterpret_cast<const char*>(&buf[buf_cnt + 4]), length);
++				MTGS::RunOnGSThread([path = std::move(path)]() { GSQueueSnapshot(path, 0); });
++				buf_cnt += 4 + length;
++				break;
++			}
++			case MsgPadSet:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 4, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				const u8 port = FromSpan<u8>(buf, buf_cnt);
++				const u8 slot = FromSpan<u8>(buf, buf_cnt + 1);
++				const u8 index = FromSpan<u8>(buf, buf_cnt + 2);
++				const float value = FromSpan<u8>(buf, buf_cnt + 3) / 255.0f;
++				if (port > 1 || slot > 3)
++					goto error;
++				Host::RunOnCPUThread([port, slot, index, value] {
++					if (PadBase* pad = Pad::GetPad(port, slot))
++						pad->Set(index, value);
++				});
++				buf_cnt += 4;
++				break;
++			}
++			case MsgReadBlock:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 8, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				const u32 address = FromSpan<u32>(buf, buf_cnt);
++				const u32 length = FromSpan<u32>(buf, buf_cnt + 4);
++				if (length > MAX_IPC_RETURN_SIZE || !SafetyChecks(buf_cnt, 8, ret_cnt, length, buf_size)) [[unlikely]]
++					goto error;
++				for (u32 i = 0; i < length; i++)
++					ret_buffer[ret_cnt + i] = vtlb_ramRead<mem8_t>(address + i);
++				ret_cnt += length;
++				buf_cnt += 8;
++				break;
++			}
++			case MsgFrameCount:
++			{
++				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 4, buf_size)) [[unlikely]]
++					goto error;
++				ToResultVector(ret_buffer, static_cast<u32>(g_FrameCount), ret_cnt);
++				ret_cnt += 4;
++				break;
++			}
++			case MsgWriteBlock:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 8, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				const u32 address = FromSpan<u32>(buf, buf_cnt);
++				const u32 length = FromSpan<u32>(buf, buf_cnt + 4);
++				if (length > MAX_IPC_SIZE || !SafetyChecks(buf_cnt, 8 + length, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				for (u32 i = 0; i < length; i++)
++					vtlb_ramWrite<mem8_t>(address + i, buf[buf_cnt + 8 + i]);
++				buf_cnt += 8 + length;
++				break;
++			}
++			case MsgWatch:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 10, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				const u8 cpu = FromSpan<u8>(buf, buf_cnt);
++				const u8 kind = FromSpan<u8>(buf, buf_cnt + 1);
++				const u32 start = FromSpan<u32>(buf, buf_cnt + 2);
++				const u32 end = FromSpan<u32>(buf, buf_cnt + 6);
++				if ((cpu != BREAKPOINT_EE && cpu != BREAKPOINT_IOP) || kind == 0 || kind > 7 || end <= start)
++					goto error;
++				// A check that breaks is the kind the recompiler calls out for; set to carry on, it
++				// is recorded and the game runs on.
++				Host::RunOnCPUThread([cpu, kind, start, end] {
++					const BreakPointCpu which = static_cast<BreakPointCpu>(cpu);
++					HitRecorder::SetEnabled(true);
++					CBreakPoints::AddMemCheck(which, start, end, static_cast<MemCheckCondition>(kind), MEMCHECK_BREAK);
++					CBreakPoints::ChangeMemCheckInstrumentation(which, start, end, true, "", true);
++				}, true);
++				buf_cnt += 10;
++				break;
++			}
++			case MsgTrace:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 5, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				const u8 cpu = FromSpan<u8>(buf, buf_cnt);
++				const u32 address = FromSpan<u32>(buf, buf_cnt + 1);
++				if (cpu != BREAKPOINT_EE && cpu != BREAKPOINT_IOP)
++					goto error;
++				Host::RunOnCPUThread([cpu, address] {
++					const BreakPointCpu which = static_cast<BreakPointCpu>(cpu);
++					HitRecorder::SetEnabled(true);
++					CBreakPoints::AddBreakPoint(which, address);
++					CBreakPoints::ChangeBreakPointInstrumentation(which, address, true, "", true);
++				}, true);
++				buf_cnt += 5;
++				break;
++			}
++			case MsgHits:
++			{
++				// The reply is a count, then that many hits of 144 bytes: kind, cpu, delay slot and
++				// a spare byte, pc, address, the frame it happened in, and 32 registers.
++				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 4, buf_size)) [[unlikely]]
++					goto error;
++				const size_t room = (MAX_IPC_RETURN_SIZE - ret_cnt - 16) / sizeof(RecordedHit);
++				const std::vector<RecordedHit> hits = HitRecorder::Take(std::min<size_t>(room, 2048));
++				ToResultVector(ret_buffer, static_cast<u32>(hits.size()), ret_cnt);
++				ret_cnt += 4;
++				if (!hits.empty())
++					std::memcpy(&ret_buffer[ret_cnt], hits.data(), hits.size() * sizeof(RecordedHit));
++				ret_cnt += static_cast<u32>(hits.size() * sizeof(RecordedHit));
++				break;
++			}
++			case MsgClearWatches:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				Host::RunOnCPUThread([] {
++					CBreakPoints::ClearAllMemChecks();
++					CBreakPoints::ClearAllBreakPoints();
++					HitRecorder::SetEnabled(false);
++					HitRecorder::Clear();
++				}, true);
++				break;
++			}
++			case MsgSpeed:
++			{
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 1, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				Host::RunOnCPUThread([fast = FromSpan<u8>(buf, buf_cnt) != 0] {
++					VMManager::SetLimiterMode(fast ? LimiterModeType::Unlimited : LimiterModeType::Nominal);
++				}, true);
++				buf_cnt += 1;
++				break;
++			}
++			case MsgSaveStateFile:
++			case MsgLoadStateFile:
++			{
++				// Which of the two this is, read before anything moves past it.
++				const bool saving = static_cast<IPCCommand>(buf[buf_cnt - 1]) == MsgSaveStateFile;
++				if (!VMManager::HasValidVM())
++					goto error;
++				if (!SafetyChecks(buf_cnt, 4, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				const u32 length = FromSpan<u32>(buf, buf_cnt);
++				if (length == 0 || length > 4096 || !SafetyChecks(buf_cnt, 4 + length, ret_cnt, 0, buf_size)) [[unlikely]]
++					goto error;
++				std::string path(reinterpret_cast<const char*>(&buf[buf_cnt + 4]), length);
++				// Whether it worked, for the reply: a state that could not be saved or loaded is
++				// refused, where a state in a slot only shows a message on the screen.
++				bool ok = true;
++				if (saving)
++				{
++					Host::RunOnCPUThread([&path, &ok] {
++						// Compressed here and now, so that the file is whole when the reply is sent.
++						VMManager::SaveState(path.c_str(), false, false, [&ok](const std::string&) { ok = false; });
++						VMManager::WaitForSaveStateFlush();
++					}, true);
++				}
++				else
++				{
++					Host::RunOnCPUThread([&path, &ok] {
++						Error state_error;
++						ok = VMManager::LoadState(path.c_str(), &state_error);
++					}, true);
++				}
++				if (!ok)
++					goto error;
++				buf_cnt += 4 + length;
++				break;
++			}
+ 			default:
+ 			{
+ 			error:

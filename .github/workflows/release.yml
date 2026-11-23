@@ -1,0 +1,296 @@
+# Builds the `ventris` command-line program and the desktop app when a version tag (v0.1.0, v0.2.0,
+# ...) is pushed, and puts them in a draft GitHub release. Nothing is published: the owner reads the
+# draft, writes the notes and publishes it by hand.
+#
+# The command-line program, one archive per system, each holding the program, README.md and LICENSE:
+#   ventris-<version>-windows-x86_64.zip
+#   ventris-<version>-linux-x86_64.tar.gz
+#   ventris-<version>-macos-aarch64.tar.gz   (Apple silicon)
+#   ventris-<version>-macos-x86_64.tar.gz    (Intel)
+# The app (app/), made by Tauri's own bundler:
+#   ventris-app-<version>-windows-x86_64-setup.exe   (installs for the current user, no administrator)
+#   ventris-app-<version>-macos-aarch64.dmg
+#   ventris-app-<version>-macos-x86_64.dmg
+#   ventris-app-<version>-linux-x86_64.AppImage
+#   ventris-app-<version>-linux-x86_64.deb
+# and SHA256SUMS, the checksum of every file above.
+#
+# Nothing is signed with a certificate yet; the comments at the app's build step say where one would
+# go. The app has no updater: Tauri's updater needs a key of its own to sign updates and a place to
+# publish them, so the app is built without it and a new version is installed over the old one by hand.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The tag must name the version in crates/ventris/Cargo.toml, and the app must carry the same
+  # version, or nothing is built.
+  version:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare the tag with the engine's and the app's versions
+        id: check
+        run: |
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          version=$(jq -r '.packages[] | select(.name == "ventris") | .version' <<< "$metadata")
+          tag="${GITHUB_REF_NAME}"
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::The tag is $tag but crates/ventris/Cargo.toml says version $version; expected the tag v$version."
+            exit 1
+          fi
+          # The installers take their version from tauri.conf.json, the app's About box from its Cargo.toml.
+          app_crate=$(jq -r '.packages[] | select(.name == "ventris-app") | .version' <<< "$metadata")
+          app_bundle=$(jq -r .version app/src-tauri/tauri.conf.json)
+          if [ "$app_crate" != "$version" ] || [ "$app_bundle" != "$version" ]; then
+            echo "::error::The engine is version $version, but app/src-tauri/Cargo.toml says $app_crate and app/src-tauri/tauri.conf.json says $app_bundle."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: ventris.exe
+          # Built on the oldest Ubuntu offered, so that the program runs on any Linux with a C
+          # library (glibc) at least that old: 2.35.
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            exe: ventris
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            exe: ventris
+          # Built for Intel on the same Apple silicon runner; Rust cross-compiles between the two
+          # without anything else installed. It cannot be run there, so it is not smoke-tested.
+          - name: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            exe: ventris
+    runs-on: ${{ matrix.os }}
+    env:
+      ARCHIVE: ventris-${{ needs.version.outputs.version }}-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # No cache here: a release is built from scratch.
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }} --no-self-update
+          rustup default stable
+          rustc --version
+
+      - name: Build
+        run: cargo build --release --locked -p ventris --target ${{ matrix.target }}
+
+      - name: Smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: |
+          out=$("target/${{ matrix.target }}/release/${{ matrix.exe }}" --version)
+          echo "$out"
+          if [ "$out" != "ventris ${{ needs.version.outputs.version }}" ]; then
+            echo "::error::The program says '$out'."
+            exit 1
+          fi
+
+      # The archive holds one folder named like the archive, so that it unpacks into its own folder.
+      - name: Gather the files
+        run: |
+          mkdir "$ARCHIVE"
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" README.md LICENSE "$ARCHIVE/"
+
+      - name: Make the archive (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "$env:ARCHIVE" -DestinationPath "$env:ARCHIVE.zip"
+
+      - name: Make the archive (tar.gz)
+        if: runner.os != 'Windows'
+        run: tar -czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}.*
+          if-no-files-found: error
+
+  # The desktop app, built and packaged by the project's own Tauri command (`npm run tauri build`),
+  # which writes its installers under target/<target>/release/bundle/.
+  app:
+    name: App (${{ matrix.name }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          # Built on Ubuntu 22.04, the oldest Ubuntu that has the WebKitGTK 4.1 Tauri 2 needs, so that
+          # the AppImage runs on any Linux at least that old (Tauri's AppImage guide says the same).
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+          # Cross-compiled for Intel on the Apple silicon runner, as Tauri's own example workflow does.
+          - name: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.os }}
+    env:
+      PREFIX: ventris-app-${{ needs.version.outputs.version }}-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Tauri 2's prerequisites for Debian and Ubuntu (https://v2.tauri.app/start/prerequisites/#linux),
+      # as in ci.yml, plus the two its GitHub guide adds on ubuntu-22.04, where it makes AppImages
+      # (https://v2.tauri.app/distribute/pipelines/github/): patchelf and xdg-utils. No FUSE is needed:
+      # Tauri runs linuxdeploy, itself an AppImage, unpacked (APPIMAGE_EXTRACT_AND_RUN).
+      - name: Install system packages for Tauri
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      # No cache here: a release is built from scratch.
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }} --no-self-update
+          rustup default stable
+          rustc --version
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install the page's packages
+        working-directory: app
+        run: npm ci
+
+      # Signing. Windows: no certificate yet, so the installer is unsigned and SmartScreen warns. A
+      # certificate is given to Tauri in tauri.conf.json, bundle > windows > certificateThumbprint
+      # (with digestAlgorithm and timestampUrl), or bundle > windows > signCommand for a signing
+      # service: https://v2.tauri.app/distribute/sign/windows/
+      # macOS: tauri.conf.json signs ad hoc (bundle > macOS > signingIdentity "-"), which Apple silicon
+      # needs to start the app at all; the user still allows it once in Privacy & Security. A Developer
+      # ID certificate and notarization would be given here as secrets in `env`: APPLE_CERTIFICATE,
+      # APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY, then APPLE_API_ISSUER, APPLE_API_KEY and
+      # APPLE_API_KEY_PATH: https://v2.tauri.app/distribute/sign/macos/
+      - name: Build the installers
+        working-directory: app
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      # Tauri names its files <product>_<version>_<processor>; they are renamed to say app, version,
+      # system and processor like the archives above. Each pattern must find exactly one file.
+      - name: Name the installers
+        run: |
+          shopt -s nullglob
+          bundle="target/${{ matrix.target }}/release/bundle"
+          mkdir dist
+          take() {
+            local name="$1"
+            shift
+            if [ "$#" -ne 1 ]; then
+              echo "::error::Expected one file to become $name, found ${#}: $*"
+              exit 1
+            fi
+            cp "$1" "dist/$name"
+          }
+          case "${{ matrix.name }}" in
+            windows-*)
+              take "$PREFIX-setup.exe" "$bundle"/nsis/*-setup.exe
+              ;;
+            linux-*)
+              take "$PREFIX.AppImage" "$bundle"/appimage/*.AppImage
+              take "$PREFIX.deb" "$bundle"/deb/*.deb
+              ;;
+            macos-*)
+              take "$PREFIX.dmg" "$bundle"/dmg/*.dmg
+              ;;
+          esac
+          ls -l dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PREFIX }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Draft the release
+    needs: [version, build, app]
+    runs-on: ubuntu-latest
+    # The only job that writes: it creates the release and uploads the archives and installers to it.
+    permissions:
+      contents: write
+    steps:
+      # `ventris-*` takes both the archives (ventris-<version>-...) and the installers (ventris-app-...).
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ventris-*
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum ventris-* > SHA256SUMS
+          cat SHA256SUMS
+
+      # gh is on the runner already. --draft keeps the release private to the repository's writers
+      # until the owner publishes it.
+      - name: Create the draft release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "ventris $VERSION" \
+            --generate-notes \
+            ventris-* SHA256SUMS

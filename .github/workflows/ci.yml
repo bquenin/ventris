@@ -1,0 +1,154 @@
+# Checks every push to main and every pull request.
+#
+# - engine: the Rust engine (crates/ventris) on Linux, Windows and macOS: formatting, lints, tests.
+# - workbench: the Python workbench (src/ventris_workbench) on Linux: lints, formatting, tests.
+# - app: the desktop app (app/ and app/src-tauri) on Linux: the web page's type check, tests and build,
+#   then lints and tests for the whole Rust workspace, app included.
+#
+# Many tests need a game (a ROM or disc image) and look for it through VENTRIS_ROMS. No game is on
+# the build machine and none may be uploaded, so those tests pass here without checking anything.
+# Only the tests that need no game really check something on GitHub; run the rest on a machine
+# that has the games.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only by default; no job here needs to write anything.
+permissions:
+  contents: read
+
+# A new push to the same branch or pull request cancels the run still going for the old one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    # Bash on every system, Windows included (Git Bash), so that one script works everywhere.
+    shell: bash
+
+jobs:
+  engine:
+    name: Engine (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The project pins no toolchain, but it needs Rust 1.89 or later (edition 2024, let chains, File::try_lock).
+      # The runners come with rustup; bring stable up to date rather than trust the image's copy.
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --no-self-update
+          rustup default stable
+          rustc --version
+
+      # Keeps downloaded crates and compiled dependencies between runs, keyed on Cargo.lock.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      # Without --workspace these build the engine alone (the workspace's default member).
+      - name: Lints
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked
+
+  workbench:
+    name: Workbench
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # setup-uv publishes no major-version tag, so it is pinned to a release by its commit,
+      # as its own README does.
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: true
+
+      # --locked fails if uv.lock no longer matches pyproject.toml.
+      - name: Install
+        run: uv sync --locked
+
+      - name: Lints
+        run: uv run ruff check
+
+      - name: Formatting
+        run: uv run ruff format --check
+
+      - name: Tests
+        run: uv run pytest
+
+  app:
+    name: App
+    # Ubuntu 24.04, the release the system packages below are known under.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # What Tauri 2 needs to build on Debian and Ubuntu, from its prerequisites page:
+      # https://v2.tauri.app/start/prerequisites/#linux
+      - name: Install system packages for Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --no-self-update
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Caches npm's download cache, keyed on the app's lock file.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install the page's packages
+        working-directory: app
+        run: npm ci
+
+      - name: Type check
+        working-directory: app
+        run: npx tsc
+
+      - name: Page tests
+        working-directory: app
+        run: npm test
+
+      # The app's Rust code embeds the built page (app/dist), so the page is built before the Rust
+      # lints and tests below.
+      - name: Build the page
+        working-directory: app
+        run: npm run build
+
+      - name: Lints (whole workspace)
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: App tests
+        run: cargo test --locked -p ventris-app

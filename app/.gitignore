@@ -1,0 +1,5 @@
+node_modules
+dist
+*.local
+# The icon's source is drawn by tools/app/make_icon.py; what the app uses is under src-tauri/icons.
+/icon.png

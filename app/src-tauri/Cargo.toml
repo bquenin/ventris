@@ -1,0 +1,35 @@
+[package]
+name = "ventris-app"
+version = "0.1.0"
+description = "The ventris app: choose a translation pack and build the translated game"
+edition = "2024"
+license = "MIT"
+# The bundler takes the Linux package's maintainer from `authors`.
+authors = ["qube"]
+homepage = "https://github.com/bquenin/ventris"
+repository = "https://github.com/bquenin/ventris"
+
+[lib]
+name = "ventris_app"
+
+[[bin]]
+name = "ventris-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+ventris = { path = "../../crates/ventris" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+# Gets the translation packs from GitHub. TLS by rustls, so no OpenSSL is needed on any system, and
+# certificates are checked against the system's own trusted roots (`platform-verifier`); the roots
+# compiled in with `rustls` are not used.
+ureq = { version = "3.5", default-features = false, features = ["rustls", "platform-verifier"] }
+
+[dev-dependencies]
+tempfile = "3"

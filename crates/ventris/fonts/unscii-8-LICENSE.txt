@@ -1,0 +1,6 @@
+Unscii-8 was created by Viznut and is in the public domain.
+
+Its home page, http://viznut.fi/unscii/, says of the Unscii fonts: "unscii-16-full" falls under GPL
+because of how Unifont is licensed; the other variants are in the Public Domain.
+
+The file here is unscii-8.hex from that page, compressed with gzip and otherwise unchanged.

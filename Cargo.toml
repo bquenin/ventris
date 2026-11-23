@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/ventris", "app/src-tauri"]
+# The engine alone, so that `cargo test` at the top does not build the app and its window toolkit.
+# The app is built from `app/`, or with `-p ventris-app`.
+default-members = ["crates/ventris"]
+
+# Compression and hashing run over whole games; keep them usable in a development build.
+[profile.dev]
+opt-level = 1

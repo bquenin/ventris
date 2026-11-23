@@ -1,0 +1,71 @@
+# Game files and third-party patches must never be committed.
+# Keep them under roms/ (ignored), or anywhere outside the repo.
+roms/
+work/
+*.sfc
+*.smc
+*.swc
+*.fig
+*.nes
+*.fds
+*.gb
+*.gbc
+*.gba
+*.nds
+*.n64
+*.z64
+*.v64
+*.gen
+*.smd
+*.sms
+*.gg
+*.pce
+*.ws
+*.wsc
+*.iso
+*.bin
+*.cue
+*.chd
+*.img
+*.ips
+*.bps
+*.ups
+*.xdelta
+*.elf
+# Archives a game may be kept in.
+*.zip
+*.7z
+# Emulator saved states and save memory, which hold a copy of the game's memory.
+*.p2s
+*.mss
+*.state
+*.srm
+*.sav
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Rust
+target/
+# Each machine's own settings for cargo, such as where its games are for the tests.
+/.cargo/config.toml
+
+# Editors and the system
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs left by browser automation (Playwright)
+.playwright-mcp/
+
+# Secrets
+.env

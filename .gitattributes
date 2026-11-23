@@ -1,0 +1,10 @@
+# Text files are stored and checked out with LF line endings on every system, whatever
+# core.autocrlf says. The engine reads its own tables and assembly with either ending, but one
+# ending everywhere keeps diffs clean.
+* text=auto eol=lf
+
+# Binary files: never converted, never diffed as text.
+*.gz binary
+*.png binary
+*.ico binary
+*.icns binary

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A line is wrong in a translation
+    url: https://github.com/bquenin/ventris-packs/issues/new/choose
+    about: A line that reads wrong, means the wrong thing or does not fit on screen belongs in the packs repository, where the translations are kept.
