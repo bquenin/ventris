@@ -205,6 +205,15 @@ The address must start with `https://`, or with `http://` for your own computer 
 or `[::1]`). Only the folders with a `pack.toml` in them are unpacked.
 No test uses the network: the app's tests serve their archives from a server of their own.
 
+## How it was made
+
+ventris was built with a lot of AI assistance. An AI coding agent wrote most of the code, the study scripts
+and the documents, under the owner's direction, and drove the emulators through the workbench's scripts.
+What a game shows was checked on screen in an emulator before being called done. The two English packs are
+machine translated and have not been reviewed by a human translator yet. Two posts tell how each adapter
+came about: [Tales of Phantasia](https://github.com/bquenin/ventris/discussions/2) and
+[Tales of Destiny 2](https://github.com/bquenin/ventris/discussions/3).
+
 ## Licence
 
 The engine, the app and the workbench are under the [MIT licence](LICENSE). The fonts built into the
