@@ -95,10 +95,14 @@
 //! instructions here that is more than a number.
 //!
 //! The game does not draw the last two columns of a cell, so a new glyph sits one dot to the left
-//! of where its font has it. And a screen gives its captions only the room the game's own took: a
-//! caption with more cells than the game's has been seen to overwrite the caption beside it. How
-//! much room each screen has is not known, so the build names the captions that grew and leaves
-//! them to be looked at.
+//! of where its font has it. Nor does it draw the top row of a glyph: both routines put nothing of
+//! the letter there and use the font's top row only for the outline of the row below. The game's own
+//! glyphs leave that row empty, but Unifont puts a capital's accent there (É, Â), so a character
+//! with dots in its top row has the rows above its first empty one moved down a row.
+//!
+//! And a screen gives its captions only the room the game's own took: a caption with more cells
+//! than the game's has been seen to overwrite the caption beside it. How much room each screen has
+//! is not known, so the build names the captions that grew and leaves them to be looked at.
 //!
 //! Full names
 //!
@@ -1179,12 +1183,30 @@ fn is_spare_when_unused(glyph: usize) -> bool {
     }
 }
 
+/// A character's rows with nothing in the top one, which the game does not draw: the two routines
+/// that draw a caption's glyph ($C8:E6C3 and $C9:D4CB) put nothing of the letter in its top row and
+/// use the font's top row only for the outline of the row below it. None of the game's own glyphs has
+/// a dot there, but Unifont puts the accent of a capital (É, Â, Ô) in its two top rows, and a
+/// circumflex drawn without its top row reads as a diaeresis. So when the top row has dots, the
+/// rows above the first empty one move down a row into it, and the accent keeps all of its rows.
+/// A character with nothing in its top row is left as it is, and so is one with no empty row.
+fn below_top_row(rows: [u16; fonts::CELL]) -> [u16; fonts::CELL] {
+    let Some(empty) = rows.iter().position(|row| *row == 0).filter(|empty| *empty > 0) else {
+        return rows;
+    };
+    let mut moved = rows;
+    moved.copy_within(..empty, 1);
+    moved[0] = 0;
+    moved
+}
+
 /// A new glyph as the game's font holds one: 16 rows of the left half, then 16 of the right.
 ///
 /// The game does not draw the last two columns of a cell, so everything sits one dot to the left
 /// of where the font has it: a narrow character's last column is empty, and so is a wide one's.
+/// Nor does it draw the top row, so a character with dots there is moved down (`below_top_row`).
 fn caption_picture(glyph: CaptionGlyph, shapes: &BTreeMap<char, Glyph>) -> [u8; GLYPH_BYTES] {
-    let rows_of = |char: char| shapes.get(&char).map_or([0; fonts::CELL], |shape| shape.rows);
+    let rows_of = |char: char| shapes.get(&char).map_or([0; fonts::CELL], |shape| below_top_row(shape.rows));
     let rows: [u16; GLYPH_SIZE] = match glyph {
         CaptionGlyph::Wide(char) => rows_of(char).map(|row| row << 1),
         CaptionGlyph::Pair(left, right) => {

@@ -1340,10 +1340,62 @@ mod caption_tests {
         assert!(
             middle[..GLYPH_SIZE].iter().all(|row| *row == 0x10) && middle[GLYPH_SIZE..].iter().all(|row| *row == 0x20)
         );
+        // A shape that has no empty row keeps its top row: there is nowhere to move it.
+        assert!(pair[0] == 0x02 && whole[0] == 0xFF);
         // Unicode has a form as wide as a cell for the characters of ASCII, and for no others.
         assert_eq!(
             (full_width('a'), full_width('\''), full_width('я'), full_width(' ')),
             (Some('ａ'), Some('＇'), None, None)
         );
+    }
+
+    #[test]
+    fn an_accent_in_the_top_row_moves_down_a_row() {
+        // The game does not draw a glyph's top row. A shape with dots there and an empty row below
+        // them has those rows moved down into it; the rest is where it was.
+        let mut accent = [0x1800; fonts::CELL];
+        (accent[1], accent[2], accent[3]) = (0x2400, 0, 0);
+        let mut moved = accent;
+        (moved[0], moved[1], moved[2]) = (0, 0x1800, 0x2400);
+        assert_eq!(below_top_row(accent), moved);
+        // A shape with nothing in its top row is left as it is, and so is one with no empty row.
+        let mut low = accent;
+        low[0] = 0;
+        assert_eq!(below_top_row(low), low);
+        assert_eq!(below_top_row([0x8100; fonts::CELL]), [0x8100; fonts::CELL]);
+
+        // Unifont's capitals carry their accent in rows 0 and 1, with rows 2 and 3 empty; its plain
+        // capitals and its small letters, accented or not, have nothing in row 0.
+        let characters: Vec<char> = "ÉÂEaé ".chars().collect();
+        let shapes = fonts::load_unifont(&Font::named("unifont"), &characters, false).unwrap();
+        let rows = |char: char| shapes[&char].rows;
+        assert!(rows('É')[0] != 0 && rows('É')[1] != 0 && rows('É')[2] == 0 && rows('É')[3] == 0);
+        assert!(rows('E')[0] == 0 && rows('a')[0] == 0 && rows('é')[0] == 0);
+        // The left half of a cell, and the right, as the font has them one dot to the left.
+        let half = |row: u16| ((row >> 8 << 1) & 0xFF) as u8;
+        let picture = |glyph| caption_picture(glyph, &shapes);
+        let halves = |picture: [u8; GLYPH_BYTES]| (picture[..GLYPH_SIZE].to_vec(), picture[GLYPH_SIZE..].to_vec());
+
+        // É with Â beside it: each accent is drawn a row lower, so both of its rows are seen, and
+        // the letter under it is where the font has it.
+        let (acute, circumflex) = halves(picture(CaptionGlyph::Pair('É', 'Â')));
+        for (drawn, font) in [(acute, rows('É')), (circumflex, rows('Â'))] {
+            assert_eq!(drawn[0], 0);
+            assert_eq!(drawn[1..3], [half(font[0]), half(font[1])]);
+            assert_eq!(drawn[3..], font[3..].iter().map(|row| half(*row)).collect::<Vec<_>>());
+        }
+        // Plain letters, and an accented small letter, are drawn as they always were.
+        let (plain, small) = halves(picture(CaptionGlyph::Pair('E', 'é')));
+        assert_eq!(plain, rows('E').iter().map(|row| half(*row)).collect::<Vec<_>>());
+        assert_eq!(small, rows('é').iter().map(|row| half(*row)).collect::<Vec<_>>());
+        let (a, blank) = halves(picture(CaptionGlyph::Pair('a', ' ')));
+        assert_eq!(a, rows('a').iter().map(|row| half(*row)).collect::<Vec<_>>());
+        assert!(blank.iter().all(|row| *row == 0));
+        // A capital with a cell to itself, as on the naming screen, is moved the same way.
+        let alone = picture(CaptionGlyph::Alone('É'));
+        let middle = |row: u16| ((row & 0xFF00) >> 3).to_be_bytes();
+        assert_eq!([alone[0], alone[GLYPH_SIZE]], [0, 0]);
+        assert_eq!([alone[1], alone[GLYPH_SIZE + 1]], middle(rows('É')[0]));
+        assert_eq!([alone[2], alone[GLYPH_SIZE + 2]], middle(rows('É')[1]));
     }
 }
