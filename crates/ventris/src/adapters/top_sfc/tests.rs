@@ -1424,8 +1424,10 @@ mod caption_tests {
 }
 
 /// Party members' names as a place name meets them: (tag, characters in the record, name drawn).
+/// A player can type letters of 14 dots for each, as the game's own characters are.
 fn place_names_of<'a>(names: &[(&'a str, usize, &'a str)]) -> Vec<PlaceNameName<'a>> {
-    names.iter().map(|(tag, record, drawn)| PlaceNameName { tag, record: *record, drawn }).collect()
+    let typed = (ORIGINAL_ADVANCE, ORIGINAL_ADVANCE);
+    names.iter().map(|(tag, record, drawn)| PlaceNameName { tag, record: *record, drawn, typed }).collect()
 }
 
 #[test]
@@ -1455,6 +1457,13 @@ fn a_place_name_is_held_to_its_box() {
              start at dot {dot}, where the line ends at dot 208: use fewer or narrower letters"
         )
     };
+    let too_wide_with = |said: &str, dot: usize| {
+        format!(
+            "the game shows this string as the name of a place, centred on one line, and with {said} its last \
+             character would start at dot {dot}, where the line ends at dot 208: leave room for that, with fewer or \
+             narrower letters"
+        )
+    };
 
     // Where the routine puts the pen: half of what the window's 224 dots leave, or its edge.
     assert_eq!(
@@ -1462,11 +1471,11 @@ fn a_place_name_is_held_to_its_box() {
         (224, 80, 70, 0, 0)
     );
 
-    // Sixteen characters fit, and seventeen do not, however narrow, whichever way the name is centred.
-    for check in [&by_count as &dyn Fn(&str) -> Result<()>, &by_width] {
-        assert!(check(&"i".repeat(16)).is_ok());
-        assert_eq!(message(check(&"i".repeat(17))), too_many(17));
-    }
+    // By count, sixteen characters fit, and seventeen do not, however narrow. By width, only the line
+    // limits them: thirty narrow letters are 120 dots.
+    assert!(by_count(&"i".repeat(16)).is_ok());
+    assert_eq!(message(by_count(&"i".repeat(17))), too_many(17));
+    assert!(by_width(&"i".repeat(17)).is_ok() && by_width(&"i".repeat(30)).is_ok());
     // Sixteen of the game's own characters, 14 dots apart, put the last at dot 210, past the line,
     // both behind no space and centred on the 224 dots they fill.
     assert!(by_count(&"あ".repeat(15)).is_ok());
@@ -1525,23 +1534,62 @@ fn a_place_name_is_held_to_its_box() {
     assert_eq!(count("モーリア坑道地下{NUM:801F}階"), 11);
     assert!(by_count(&format!("{}{{NUM:801F}}あ", "あ".repeat(13))).is_ok());
     assert_eq!(message(by_count(&format!("{}{{NUM:801F}}あ", "あ".repeat(14)))), too_many(17));
-    // Centred by width, the digit's 14 dots count toward the width: 194 dots start at 15, and the
-    // last letter at 205; 210 dots start at 7, and the last at 213.
-    assert!(by_width(&format!("{}{{NUM:801F}}i", "W".repeat(11))).is_ok());
-    assert_eq!(message(by_width(&format!("{}{{NUM:801F}}i", "W".repeat(12)))), too_wide(213));
+    // Centred by width, a number in the middle of the name is held to the most digits it can show:
+    // three for a byte, which the first byte of {NUM:801F} says it is, and eight for anything wider.
+    assert_eq!(
+        (number_digits("801F"), number_digits("C01F"), number_digits("811F"), number_digits("8303")),
+        (3, 3, 8, 8)
+    );
+    // Nine wide letters, three digits and an i are 190 dots, which start at 17: the i at 203. A tenth
+    // letter makes 206 dots from 9, and the i at 211, though with one digit it would start at 197.
+    assert!(by_width(&format!("{}{{NUM:801F}}i", "W".repeat(9))).is_ok());
+    assert_eq!(
+        message(by_width(&format!("{}{{NUM:801F}}i", "W".repeat(10)))),
+        too_wide_with("{NUM:801F} showing 3 digits", 211)
+    );
+    // A number that ends the name shows its first digit only, so that is all it is held to: twelve
+    // wide letters and a digit are 206 dots from 9, the digit at 201; with a thirteenth, at 209.
+    assert!(by_width(&format!("{}{{NUM:801F}}", "W".repeat(12))).is_ok());
+    assert_eq!(message(by_width(&format!("{}{{NUM:801F}}", "W".repeat(13)))), too_wide(209));
+
+    // Centred by width, a party member's name is also held to the longest a player can type: six
+    // letters, here 14 dots each. Seven wide letters, Cress drawn as "ii" and an i are 124 dots and
+    // fit; with six typed letters in place of "ii" they are 200 dots, which put the i at 208.
+    let narrow = place_names_of(&[("クレス", 5, "ii")]);
+    let with_narrow = |text: &str, centring| place_name(text, &extra, &advance, &narrow, centring);
+    let typed_in = format!("{}{{クレス}}i", "W".repeat(7));
+    assert!(with_narrow(&typed_in, Centring::ByCount).is_ok());
+    assert_eq!(
+        message(with_narrow(&typed_in, Centring::ByWidth)),
+        too_wide_with("a name of 6 letters typed for {クレス}", 208)
+    );
+    assert!(with_narrow(&format!("{}{{クレス}}i", "W".repeat(6)), Centring::ByWidth).is_ok());
+    // A name that ends the line may end on the narrowest letter a player can type, which leaves the
+    // last start further right than six wide letters do: with letters of 4 to 14 dots, eight wide
+    // letters and five of 14 and one of 4 are 202 dots, from 11, the last at 209; six of 14 would put
+    // it at 204.
+    let mixed = vec![PlaceNameName { tag: "クレス", record: 5, drawn: "ii", typed: (4, 14) }];
+    let ends_on_name = format!("{}{{クレス}}", "W".repeat(8));
+    assert_eq!(
+        message(place_name(&ends_on_name, &extra, &advance, &mixed, Centring::ByWidth)),
+        too_wide_with("a name of 6 letters typed for {クレス}", 209)
+    );
+    assert!(place_name(&ends_on_name, &extra, &advance, &narrow, Centring::ByWidth).is_ok());
 
     // `extract` says so under each of the 122 strings, and under nothing else.
     let note = |section: &str, number: u32| Top.note(section, Some(number));
     assert_eq!(
         note("05", 2).unwrap(),
-        "The name of a place, shown on one line and centred: 16 characters at most, a party member's name \
+        "The name of a place, shown on one line and centred. Where the pack adds letters, it must fit the line: \
+         about 200 dots, some 28 Latin letters, with room for the longest name a player can type in place of a \
+         party member's name. With the game's own characters only, 16 characters at most, a party member's name \
          counting as its letters and one more."
     );
     let noted = PLACE_NAMES.iter().filter(|(block, number)| note(&format!("{block:02}"), *number).is_some()).count();
     assert_eq!(noted, 122);
     assert_eq!((note("05", 6), note("03", 1), note("04", 0)), (None, None, None));
     assert!(note("01", 4).unwrap().starts_with("The game shows this string as sprites"));
-    assert!(KINDS[0].limits.contains("centred on one line of 16 characters at most"));
+    assert!(KINDS[0].limits.contains("centred on one line, which holds about 200 dots, some 28 Latin letters"));
 }
 
 #[test]
@@ -1554,19 +1602,39 @@ fn a_real_place_name_is_held_to_its_box() {
         pack
     };
 
-    // As the English pack had it, with seventeen characters, and with sixteen.
+    // As the English pack had it, with seventeen characters, and with sixteen: its letters bring the
+    // renderer, which centres by width, so only the line holds a name back. Names of the English pack
+    // as it was before it shortened them for the game's count fit too, but not the longest of them.
+    plainly_built(&rom, &pack_of(&[("05", 2, "St. Lenios Church")]));
+    plainly_built(&rom, &pack_of(&[("05", 2, "St Lenios Church")]));
+    plainly_built(&rom, &pack_of(&[("73", 1, "Arlee, Town of Everlasting Dark")]));
     assert_eq!(
-        refused(&pack_of(&[("05", 2, "St. Lenios Church")])),
+        refused(&pack_of(&[("17", 3, "Euclid National Academy of Science")])),
+        "string 17.003: the game shows this string as the name of a place, centred on one line, and its last \
+         character would start at dot 215, where the line ends at dot 208: use fewer or narrower letters"
+    );
+    // A place name is never broken over lines, which would leave its box with the first only: breaking
+    // dialogue counts a number as four digits, and would have put this one on two lines.
+    let zodiac = "The Zodiac Tower, Floor {NUM:801F}F";
+    let (_, image) = plainly_built(&rom, &pack_of(&[("03", 0, zodiac)]));
+    let blocks = read_blocks(&image).unwrap();
+    let string = split_strings(&blocks[3]).unwrap()[0];
+    assert!(!string.contains(&0x00) && string.ends_with(&END), "{string:02x?}");
+    // In the game's own characters, without the renderer, the game's count centres the name, and holds
+    // it to sixteen (sixteen of them would already be too wide for the line).
+    plainly_built(&rom, &pack_of(&[("05", 2, &"あ".repeat(15))]));
+    assert_eq!(
+        refused(&pack_of(&[("05", 2, &"あ".repeat(17))])),
         "string 05.002: the game shows this string as the name of a place, on one line of at most 16 characters, \
          and it has 17: a party member's name counts as the letters the menus show for it, and one more"
     );
-    plainly_built(&rom, &pack_of(&[("05", 2, "St Lenios Church")]));
     // A name counts as the name in the character's record, which the menus show, and one more: six
-    // for チェスター, and eight for a new name of seven that the menus can take.
+    // for チェスター, and eight for a new name of seven that the menus can take. Centred by width,
+    // neither count matters.
     plainly_built(&rom, &pack_of(&[("05", 1, "{チェスター}'s Houses")]));
     let longer = [("チェスター", "チェスタークン")];
     plainly_built(&rom, &named(&[("05", 1, "{チェスター}'s House")], &longer));
-    assert!(refused(&named(&[("05", 1, "{チェスター}'s Houses")], &longer)).contains("and it has 17"));
+    plainly_built(&rom, &named(&[("05", 1, "{チェスター}'s Houses")], &longer));
 
     // A name longer than the menus hold leaves them the game's names, so the game counts クレス, three,
     // and dialogue draws fifteen letters of 14 dots. The game's own string with it is left alone, as

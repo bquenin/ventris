@@ -102,8 +102,10 @@ fn the_games_command_lists_every_adapter() {
         \x20 image      fdecb234f416eb1cc1924e4f3d52c080c5bcd8d0  Japan\n\
         \x20 dialogue   extract; insert, longer strings; new characters; lines fitted to the screen\n\
         \x20            limits: an area's longest string and its events must fit together in the 16,480 bytes of \
-        memory the game has for them; the name of a place, shown on entering it, is centred on one line of 16 \
-        characters at most, a party member's name counting as its letters and one more\n\
+        memory the game has for them; the name of a place, shown on entering it, is centred on one line, which \
+        holds about 200 dots, some 28 Latin letters, where the pack adds letters, with room for the longest name a \
+        player can type, and 16 characters in the game's own, a party member's name counting as its letters and one \
+        more\n\
         \x20 menu       extract; insert, longer strings, up to 26 characters; new characters\n\
         \x20            limits: a new character takes the tile of a kana that no menu string uses any more\n\
         \x20 captions   extract; insert, longer strings; new characters\n\

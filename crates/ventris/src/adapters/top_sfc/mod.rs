@@ -391,7 +391,10 @@ pub const SPRITE_PAGE: usize = 32;
 /// with a routine of its own (`centre` in vwf.asm): it measures what the line will draw, in dots, and
 /// puts the pen where the name is centred on the window (`place_name_pen`), with no spaces before it.
 /// That routine does not count characters and needs no limit on them; only the line break at dot 208
-/// still holds. The build still holds a pack to the game's 16 characters (`PLACE_NAME_LENGTH`).
+/// still holds. The build holds such a name to that line alone, with room kept for what the game may
+/// draw in place of a party member's name or a number (see `place_name`): about 200 dots, some 28
+/// Latin letters. The game's 16 characters (`PLACE_NAME_LENGTH`) hold where its own engine centres.
+/// Either way the build does not break such a name over lines, as it does other dialogue.
 #[rustfmt::skip]
 pub const PLACE_NAMES: [(usize, u32); 122] = [
     (3, 0), (5, 0), (5, 1), (5, 2), (5, 3), (5, 4), (5, 5), (13, 1), (17, 0), (17, 1), (17, 2), (17, 3), (17, 4),
@@ -407,8 +410,9 @@ pub const PLACE_NAMES: [(usize, u32); 122] = [
     (97, 0),
 ];
 /// The most characters a place name may have, as the game counts them: the limit the game's own
-/// engine has, which the build holds a pack to whether or not the routine that centres by width is
-/// installed. That routine does not depend on it.
+/// engine has, which the build holds a pack to where that engine centres the name (`Centring::ByCount`).
+/// The routine that centres by width does not depend on it, and a build that installs it does not
+/// hold a name to it.
 pub const PLACE_NAME_LENGTH: usize = 16;
 /// The text window, which a place name is centred on: 28 columns of 8 dots, from dot 16 on the screen.
 pub const PLACE_FIELD: usize = 28 * 8;
@@ -1831,6 +1835,9 @@ pub struct PlaceNameName<'a> {
     pub record: usize,
     /// The name dialogue draws, which is what takes room on the line.
     pub drawn: &'a str,
+    /// The narrowest and the widest letter a player can type for a name, in dots, as dialogue draws
+    /// it: the game's own characters, and those the pack gave the menus.
+    pub typed: (usize, usize),
 }
 
 /// How many characters the game counts in a place name, from its bytes (`data`, end marker
@@ -1850,7 +1857,8 @@ pub struct PlaceNameName<'a> {
 /// whatever number it shows.
 ///
 /// The game's engine centres by this count. The routine a build installs with the renderer does not
-/// use it; the build counts a name this way to hold it to the game's 16 characters (`PLACE_NAME_LENGTH`).
+/// use it; the build counts a name this way, where the game's engine centres it, to hold it to the
+/// game's 16 characters (`PLACE_NAME_LENGTH`).
 pub fn place_name_count(data: &[u8], record: &dyn Fn(u8) -> Option<usize>) -> usize {
     const NAME: u8 = 0x02;
     let body = data.strip_suffix(&END).unwrap_or(data);
@@ -1869,26 +1877,67 @@ pub fn place_name_count(data: &[u8], record: &dyn Fn(u8) -> Option<usize>) -> us
 }
 
 /// How the name of a place is centred in a build: by the game's own engine, which counts characters,
-/// or by the routine the renderer brings, which measures dots (see `PLACE_NAMES`).
+/// or by the routine the renderer brings, which measures dots (see `PLACE_NAMES`). The build holds a
+/// name to the first by its count and its line, and to the second by its line alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Centring {
     ByCount,
     ByWidth,
 }
 
+/// The most letters a player can give a party member on the naming screen. Its code copies the name
+/// being edited into the record six bytes at a time and no more ($C2:46E3 loads the count, 6), and
+/// opens the screen with six bytes of the record ($C2:A990), so a name typed there has at most six.
+pub const TYPED_NAME_LENGTH: usize = 6;
+
+/// The most digits a number, `{NUM:..}`, can show. The first byte of its value says how the engine
+/// reads the number ($C8:E35A): the two lowest bits are its size. Zero is a byte, up to 255, three
+/// digits; anything else is a word or more, which the engine may show with all eight of its digits
+/// (a negative word is read as a number of 24 bits).
+pub fn number_digits(value: &str) -> usize {
+    let flags = u8::from_str_radix(value.get(..2).unwrap_or(""), 16).unwrap_or(0xFF);
+    if flags & 3 == 0 { 3 } else { 8 }
+}
+
+/// How many digits of a number a place name shows at most: all it can have, except where the number
+/// ends the name. Then the drawing loop stops after its first digit, since it looks for the end of
+/// the string after each character it draws and does not finish the number first. That is how the
+/// engine behaves today, and the routine that centres the name measures the same (see vwf.asm).
+fn place_name_digits(value: &str, ends_the_name: bool) -> usize {
+    if ends_the_name { 1 } else { number_digits(value) }
+}
+
+/// What takes room on the line of a place name, for the build's check: a character of a known width,
+/// a party member's name, or a number of up to so many digits.
+enum PlacePiece<'a> {
+    Width(usize),
+    Name(&'a PlaceNameName<'a>),
+    Number(&'a str, usize),
+}
+
 /// Hold a place name (see `PLACE_NAMES`) to what its box shows. Fails with `Error::Text` when the
-/// game would count more than 16 characters in it, or when, centred, a character of it would start
-/// past the end of the line.
+/// name's last character could start past the end of the line, centred as the build centres it, or,
+/// where the game's own engine centres it, when the game would count more than 16 characters in it.
 ///
 /// `extra` gives the codes of the characters the pack adds, `advance` the width of a character in
-/// dots, `names` each party member's name as the game counts it and as it draws it, and `centring`
-/// whether the build leaves the centring to the game or installs the routine that centres by width.
+/// dots, `names` each party member's name as the game counts it, as it draws it and what a player
+/// can type for it, and `centring` whether the build leaves the centring to the game or installs the
+/// routine that centres by width.
 ///
-/// A number, `{NUM:..}`, takes the room of one of the game's digits, the least it can: what it shows
-/// is not known until the game runs. A character of the game's font with no entry in the table yet,
-/// `{K:..}`, takes the 14 dots of the game's own characters. Another tag takes no room, `{RAW:..}`
-/// included, which is for bytes the game's own text has and nothing a translator writes. A line break
-/// is counted as the game counts it, and takes no room; what the box does with one has not been seen.
+/// Centred by count, a party member's name takes the room of the name dialogue shows, and a number,
+/// `{NUM:..}`, the room of one of the game's digits, the least it can, as the build has always held
+/// it. Centred by width, the line must also hold the widest that the game can
+/// draw there: a name a player typed instead, of up to `TYPED_NAME_LENGTH` letters, and a number
+/// with as many digits as it can show (`place_name_digits`). A name is centred, so a wider one only
+/// moves the last character further right; both ends of each range are tried all the same, and the
+/// narrowest letter a player can type as well, since a name may end on it.
+///
+/// A character of the game's font with no entry in the table yet, `{K:..}`, takes the 14 dots of the
+/// game's own characters. The name of an item or a spell, `{STR:..}`, takes no room: the game finds
+/// it through a table the build does not read, and no place name has one. Another tag takes no room,
+/// `{RAW:..}` included, which is for bytes the game's own text has and nothing a translator writes. A
+/// line break is counted as the game counts it, and takes no room; what the box does with one has
+/// not been seen.
 pub fn place_name(
     text: &str,
     extra: &Extra,
@@ -1901,15 +1950,15 @@ pub fn place_name(
         names.iter().find(|name| name.tag == tag).map(|name| name.record)
     };
     let count = place_name_count(&encode(text, extra)?, &record);
-    if count > PLACE_NAME_LENGTH {
+    if centring == Centring::ByCount && count > PLACE_NAME_LENGTH {
         return text_error(format!(
             "the game shows this string as the name of a place, on one line of at most {PLACE_NAME_LENGTH} \
              characters, and it has {count}: a party member's name counts as the letters the menus show for it, \
              and one more"
         ));
     }
-    // The width of each character drawn, in order.
-    let mut widths = Vec::new();
+    // What takes room on the line, in order.
+    let mut pieces = Vec::new();
     let mut rest = text;
     while let Some(char) = rest.chars().next() {
         let mut step = char.len_utf8();
@@ -1921,32 +1970,85 @@ pub fn place_name(
             let member = value.and_then(|value| u8::from_str_radix(&value.replace(' ', ""), 16).ok());
             let tag = member.and_then(|member| tag_of(&SPEAKERS, member)).filter(|_| name == "NAME").unwrap_or(name);
             if let Some(shown) = names.iter().find(|shown| shown.tag == tag) {
-                for char in shown.drawn.chars() {
-                    widths.push(advance(char)?);
-                }
-            } else if name == "NUM" || name == "K" {
-                widths.push(ORIGINAL_ADVANCE);
+                pieces.push(PlacePiece::Name(shown));
+            } else if name == "NUM" {
+                let value = value.unwrap_or_default();
+                pieces.push(PlacePiece::Number(raw, place_name_digits(value, raw.len() == rest.len())));
+            } else if name == "K" {
+                pieces.push(PlacePiece::Width(ORIGINAL_ADVANCE));
             }
         } else if char != '\n' {
-            widths.push(advance(char)?);
+            pieces.push(PlacePiece::Width(advance(char)?));
         }
         rest = &rest[step..];
     }
-    let Some(last) = widths.last() else { return Ok(()) };
-    let width: usize = widths.iter().sum();
-    // Where the pen is before the name: after the game's spaces, or where the routine puts it.
-    let pen = match centring {
-        Centring::ByCount => ORIGINAL_ADVANCE * ((PLACE_NAME_LENGTH - count) / 2),
-        Centring::ByWidth => place_name_pen(width),
+    // Each piece's possible widths, with what is assumed for it: the first is what the pack gives,
+    // or the least a number can show.
+    let mut choices: Vec<Vec<(Vec<usize>, Option<String>)>> = Vec::new();
+    for piece in &pieces {
+        choices.push(match piece {
+            PlacePiece::Width(width) => vec![(vec![*width], None)],
+            PlacePiece::Name(name) => {
+                let drawn = name.drawn.chars().map(advance).collect::<Result<Vec<_>>>()?;
+                let mut ways = vec![(drawn, None)];
+                if centring == Centring::ByWidth {
+                    let (narrowest, widest) = name.typed;
+                    for letters in 1..=TYPED_NAME_LENGTH {
+                        for last in [widest, narrowest] {
+                            let mut typed = vec![widest; letters - 1];
+                            typed.push(last);
+                            let said = format!("a name of {letters} letters typed for {{{}}}", name.tag);
+                            ways.push((typed, Some(said)));
+                        }
+                    }
+                }
+                ways
+            }
+            PlacePiece::Number(raw, digits) => {
+                let most = if centring == Centring::ByWidth { *digits } else { 1 };
+                let said = |shown: usize| (shown > 1).then(|| format!("{raw} showing {shown} digits"));
+                (1..=most).map(|shown| (vec![ORIGINAL_ADVANCE; shown], said(shown))).collect()
+            }
+        });
+    }
+    // Where the last character starts, for each way the line can be, the pack's own first.
+    let start = |widths: &[usize]| {
+        let width: usize = widths.iter().sum();
+        let pen = match centring {
+            Centring::ByCount => ORIGINAL_ADVANCE * (PLACE_NAME_LENGTH.saturating_sub(count) / 2),
+            Centring::ByWidth => place_name_pen(width),
+        };
+        widths.last().map(|last| pen + width - last)
     };
-    let last = pen + width - last;
-    if last >= LINE_WIDTH {
-        return text_error(format!(
+    let mut ways = vec![(Vec::new(), Vec::new())];
+    for options in &choices {
+        let mut longer = Vec::new();
+        for (widths, said) in &ways {
+            for (more, assumed) in options {
+                let mut widths: Vec<usize> = widths.clone();
+                widths.extend(more);
+                let mut said: Vec<String> = said.clone();
+                said.extend(assumed.clone());
+                longer.push((widths, said));
+            }
+        }
+        ways = longer;
+    }
+    let own = start(&ways[0].0);
+    let worst = ways.iter().filter_map(|(widths, said)| Some((start(widths)?, said))).max_by_key(|(last, _)| *last);
+    match (own, worst) {
+        (Some(last), _) if last >= LINE_WIDTH => text_error(format!(
             "the game shows this string as the name of a place, centred on one line, and its last character would \
              start at dot {last}, where the line ends at dot {LINE_WIDTH}: use fewer or narrower letters"
-        ));
+        )),
+        (_, Some((last, said))) if last >= LINE_WIDTH => text_error(format!(
+            "the game shows this string as the name of a place, centred on one line, and with {} its last character \
+             would start at dot {last}, where the line ends at dot {LINE_WIDTH}: leave room for that, with fewer or \
+             narrower letters",
+            said.join(" and ")
+        )),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// The room a tag's text takes. Values are only known when the game runs, so they are estimates;
@@ -2423,13 +2525,27 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<BuildRes
     // The same names for the place names. The game counts the name in the character's record, which
     // the menus show: the menu string that holds it, where the build wrote that string and installs
     // the records, and the game's own otherwise. It draws the name dialogue shows.
+    // A name the player types is drawn in the game's own characters, and in those the pack gave the
+    // menus where the build converts names through its own table.
+    let typed_widths: Vec<usize> = std::iter::once(ORIGINAL_ADVANCE)
+        .chain(
+            menu.taken
+                .iter()
+                .filter(|_| names_installed)
+                .map(|(char, _)| advances.get(char).copied().unwrap_or(ORIGINAL_ADVANCE)),
+        )
+        .collect();
+    let typed = (
+        *typed_widths.iter().min().unwrap_or(&ORIGINAL_ADVANCE),
+        *typed_widths.iter().max().unwrap_or(&ORIGINAL_ADVANCE),
+    );
     let mut place_names = Vec::new();
     for (tag, default) in &defaults {
         let drawn = renames.iter().find(|(renamed, _)| renamed == tag).map_or(default.as_str(), |(_, name)| name);
         let number = name_numbers.iter().find(|(known, _)| known == tag).map(|(_, number)| number);
         let written = number.and_then(|number| menu.encoded.get(number)).filter(|_| names_installed);
         let record = written.map_or(default.chars().count(), Vec::len);
-        place_names.push(PlaceNameName { tag, record, drawn });
+        place_names.push(PlaceNameName { tag, record, drawn, typed });
     }
 
     let offsets = block_offsets(rom)?;
@@ -2467,7 +2583,9 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<BuildRes
                     Err(other) => return Err(other),
                 };
                 &wrapped
-            } else if options.wrap {
+            // The name of a place is not broken: its box has one line, which `place_name` holds it to
+            // below, and breaking it would leave the box with its first line only.
+            } else if options.wrap && !PLACE_NAMES.contains(&(index, *number)) {
                 wrapped = wrap_lines(text, &advance, LINE_WIDTH, &name_widths)?;
                 &wrapped
             } else {
@@ -2755,7 +2873,9 @@ const SPRITE_NOTE: &str = "The game shows this string as sprites over the scene,
     Where a page would have more than 32, put a {PAGE}, or say it in fewer letters: the build refuses a longer page.";
 
 /// What `extract` writes under the header of a place name (see `PLACE_NAMES`).
-const PLACE_NOTE: &str = "The name of a place, shown on one line and centred: 16 characters at most, a party member's name \
+const PLACE_NOTE: &str = "The name of a place, shown on one line and centred. Where the pack adds letters, it must \
+    fit the line: about 200 dots, some 28 Latin letters, with room for the longest name a player can type in place \
+    of a party member's name. With the game's own characters only, 16 characters at most, a party member's name \
     counting as its letters and one more.";
 
 /// What `extract` writes at the head of the captions' file.
@@ -2804,9 +2924,11 @@ static KINDS: [TextKind; 3] = [
         new_characters: true,
         wrap: true,
         // The number is AREA_RAM_SIZE; a test holds the sentence to it.
-        limits: "an area's longest string and its events must fit together in the 16,480 bytes of memory the game \
-                 has for them; the name of a place, shown on entering it, is centred on one line of 16 characters at \
-                 most, a party member's name counting as its letters and one more",
+        limits: "an area's longest string and its events must fit together in the 16,480 bytes of memory the game has \
+                 for them; the name of a place, shown on entering it, is centred on one line, which holds about 200 \
+                 dots, some 28 Latin letters, where the pack adds letters, with room for the longest name a player \
+                 can type, and 16 characters in the game's own, a party member's name counting as its letters and one \
+                 more",
         trial: Some(("01.001", "01.003")),
         ..TextKind::new("dialogue", is_dialogue)
     },
