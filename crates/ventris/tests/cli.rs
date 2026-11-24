@@ -263,8 +263,8 @@ fn insert_reports_dialogue_menus_names_and_the_renderer() {
             "renderer:  variable-width renderer installed",
             "size:      expanded from 6 to 8 MiB",
             // No longer the image the Python reference built: the renderer now also centres the names
-            // of places by their width in dots.
-            "identical: no, sha1 45018a5815aaff888a84144d34bd1209a2cf7c67",
+            // of places by their width in dots, and draws a number at the end of one whole.
+            "identical: no, sha1 607de0e55d97a403f459a8cf97109ef8a03c5fb6",
         ]
     );
     let built = fs::read(&output).unwrap();
@@ -285,7 +285,7 @@ fn insert_reports_dialogue_menus_names_and_the_renderer() {
             "names:     1 characters renamed (クレス)",
             "renderer:  variable-width renderer installed",
             "size:      expanded from 6 to 8 MiB",
-            "identical: no, sha1 cf857b5f7e69bc51458715f7eb50c1af4b6c0ef3",
+            "identical: no, sha1 316588bda6f9074208d4cd9df72db2a06e6a1ff3",
         ]
     );
 
@@ -305,19 +305,19 @@ fn insert_reports_dialogue_menus_names_and_the_renderer() {
             "font:      33 characters the game's font lacks:  !,.?ADabcdeghiklmnorstuwyПвеимрт",
             "renderer:  variable-width renderer installed",
             "size:      expanded from 6 to 8 MiB",
-            "identical: no, sha1 686ab6887b09c5da49de3edc1524e68f390a7be2",
+            "identical: no, sha1 61103c2be6c9633cda032a56253b8b182900f06a",
         ]
     );
     let run = ventris(&[&arguments[..], &["--no-wrap"]].concat());
     assert_eq!(run.code, Some(0), "{}", run.err);
-    assert!(run.out.contains("identical: no, sha1 14e99898f7e529940a0164b06e7d5b380f2269ed"), "{}", run.out);
+    assert!(run.out.contains("identical: no, sha1 e9b439ae3046fa89a91f36d96e9a4463a705780b"), "{}", run.out);
 
     // A scratch pack kept outside the repository, under `work/top-sfc/menu-en`, builds one known
     // image; without it, this last check is skipped. The image is no longer the one the Python
     // reference built: the letters its menus gain now also go into the captions' font, so that an
     // item's name reads in letters where the game draws it large, and the letters its dialogue gains
     // go into a font for the lines the game shows as sprites. The hashes above moved for that second
-    // reason too, and all of them for the renderer's centring of place names. And it names a character
+    // reason too, and all of them for the renderer's handling of place names. And it names a character
     // in seven letters, one more than the game's longest name, so the status screen counts seven
     // letters of a name before it places the family name.
     let (Some(menu_font), Some(english)) = (unscii(), local_file("work/top-sfc/menu-en", "the trial pack")) else {
@@ -326,7 +326,7 @@ fn insert_reports_dialogue_menus_names_and_the_renderer() {
     let fonts = ["--font", text(&font), "--menu-font", text(&menu_font)];
     let run = ventris(&[&["insert", text(&rom), text(&english), "-o", text(&output)], &fonts[..]].concat());
     assert_eq!(run.code, Some(0), "{}", run.err);
-    assert!(run.out.contains("identical: no, sha1 d31ff8db49f3c0178178d1c1b17b2346a4c24c64"), "{}", run.out);
+    assert!(run.out.contains("identical: no, sha1 5a0c7a68df7882213dc32dc16780697aac5da099"), "{}", run.out);
 }
 
 #[test]

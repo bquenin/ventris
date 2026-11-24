@@ -263,8 +263,8 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
     the line holds about 200 dots, some 28 Latin letters or 13 characters 16 dots wide. The build keeps
     room for what the game may draw instead of what the pack says: in place of a party member's name, a
     name a player typed (up to six letters, 14 dots each in the game's own characters); for a number, as
-    many digits as it can show (three for a byte, eight otherwise), except one that ends the name, of
-    which the game draws only the first digit. The message says when it is that room that is missing.
+    many digits as it can show (three for a byte, eight otherwise), wherever it stands in the name. The
+    message says when it is that room that is missing.
   - **More than 16 characters, without the renderer.** The game's own count then centres the name and
     breaks past 16. A party member's name counts as its letters, as the menus show them, and one more.
     Sixteen of the game's own characters, 14 dots each, are too wide for the line already.

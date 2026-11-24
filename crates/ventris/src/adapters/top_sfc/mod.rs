@@ -180,6 +180,9 @@
 //! ```text
 //! $DB51      centres the name of a place by counting its characters (see `PLACE_NAMES`). A build
 //!            that installs the renderer replaces it with a routine that measures dots (vwf.asm).
+//! $DE21      goes back to $DB9F after each character of a place name, which ends the line at the
+//!            end of the string even while a number is being drawn. With the renderer it goes
+//!            through `place_next` (vwf.asm), which finishes the number first.
 //! $E550      fetch character: reads [$D7],Y and returns a 16-bit code in A, or branches away on
 //!            FF FF. A two-byte code becomes page * 128 + (low & $7F). Called from $E506 and $E51C
 //!            only.
@@ -243,6 +246,10 @@ pub const SPRITE_FONT_BANK_AT: u32 = 0xC8E9AB;
 /// PHA, LDY $13C4, LDA [$D7],Y.
 pub const PLACE_CENTRING: (u32, [u8; 12]) =
     (0xC8DB51, [0xC2, 0x20, 0x64, 0x02, 0xAD, 0xC4, 0x13, 0x48, 0xAC, 0xC4, 0x13, 0xB7]);
+/// Where the engine goes on after drawing a character of a place name, and the game's bytes there:
+/// LDY #$0000, STY $13CA, JMP $DB9F. The renderer points the jump at its own code, so that a number
+/// that ends the name is drawn whole (`place_next` in vwf.asm).
+pub const PLACE_NEXT: (u32, [u8; 9]) = (0xC8DE1B, [0xA0, 0x00, 0x00, 0x8C, 0xCA, 0x13, 0x4C, 0x9F, 0xDB]);
 /// The pitch at which the game spaces its own glyphs.
 pub const ORIGINAL_ADVANCE: usize = 14;
 // Menu text: labels, item and skill names. 929 strings back to back, each ending in $FF, in the
@@ -387,6 +394,10 @@ pub const SPRITE_PAGE: usize = 32;
 ///   ($C8:DC31). The box has one line, so the page never fills: the name is not drawn at all and the
 ///   box shows what was left in it from an earlier message.
 ///
+/// And a number that ends the name shows its first digit only: after each character the engine looks
+/// for the end of the string ($C8:DB9F) and does not finish a number first. The game's own names all
+/// have a character after their number.
+///
 /// A build that installs the renderer, whose letters are narrower than 14 dots, replaces that count
 /// with a routine of its own (`centre` in vwf.asm): it measures what the line will draw, in dots, and
 /// puts the pen where the name is centred on the window (`place_name_pen`), with no spaces before it.
@@ -394,7 +405,9 @@ pub const SPRITE_PAGE: usize = 32;
 /// still holds. The build holds such a name to that line alone, with room kept for what the game may
 /// draw in place of a party member's name or a number (see `place_name`): about 200 dots, some 28
 /// Latin letters. The game's 16 characters (`PLACE_NAME_LENGTH`) hold where its own engine centres.
-/// Either way the build does not break such a name over lines, as it does other dialogue.
+/// Either way the build does not break such a name over lines, as it does other dialogue. Such a build
+/// also has a number at the end of the name drawn whole (`place_next` in vwf.asm); without the renderer
+/// the game's own code is left as it is.
 #[rustfmt::skip]
 pub const PLACE_NAMES: [(usize, u32); 122] = [
     (3, 0), (5, 0), (5, 1), (5, 2), (5, 3), (5, 4), (5, 5), (13, 1), (17, 0), (17, 1), (17, 2), (17, 3), (17, 4),
@@ -1730,7 +1743,7 @@ pub fn build_sprite_font(rom: &[u8], extra: &BTreeMap<char, Glyph>) -> Result<Ve
 
 /// Write the variable-width renderer and its font into the expanded area and hook it in, and give
 /// the routine that draws dialogue as sprites its font. The renderer also takes over centring the
-/// names of places (see `PLACE_NAMES`).
+/// names of places, and has a number at the end of one drawn whole (see `PLACE_NAMES`).
 pub fn install_renderer(rom: Vec<u8>, widths: &[u8], glyph_data: &[u8], sprite_font: &[u8]) -> Result<Vec<u8>> {
     let mut out = expanded(rom)?;
     out[RENDERER_WIDTHS..RENDERER_WIDTHS + widths.len()].copy_from_slice(widths);
@@ -1750,6 +1763,10 @@ pub fn install_renderer(rom: Vec<u8>, widths: &[u8], glyph_data: &[u8], sprite_f
     let centring = snes::snes_to_pc(PLACE_CENTRING.0, MAPPING)?;
     if out.get(centring..centring + PLACE_CENTRING.1.len()) != Some(&PLACE_CENTRING.1[..]) {
         return Err(Error::Image("the game's code at $C8DB51 is not what centres the name of a place".into()));
+    }
+    let next = snes::snes_to_pc(PLACE_NEXT.0, MAPPING)?;
+    if out.get(next..next + PLACE_NEXT.1.len()) != Some(&PLACE_NEXT.1[..]) {
+        return Err(Error::Image("the game's code at $C8DE1B is not what goes on with the name of a place".into()));
     }
     snes::write_code(&out, &assemble(include_str!("vwf.asm"), &symbols)?.segments, MAPPING)
 }
@@ -1902,14 +1919,6 @@ pub fn number_digits(value: &str) -> usize {
     if flags & 3 == 0 { 3 } else { 8 }
 }
 
-/// How many digits of a number a place name shows at most: all it can have, except where the number
-/// ends the name. Then the drawing loop stops after its first digit, since it looks for the end of
-/// the string after each character it draws and does not finish the number first. That is how the
-/// engine behaves today, and the routine that centres the name measures the same (see vwf.asm).
-fn place_name_digits(value: &str, ends_the_name: bool) -> usize {
-    if ends_the_name { 1 } else { number_digits(value) }
-}
-
 /// What takes room on the line of a place name, for the build's check: a character of a known width,
 /// a party member's name, or a number of up to so many digits.
 enum PlacePiece<'a> {
@@ -1935,10 +1944,11 @@ type PlaceWay = (Vec<usize>, Option<String>);
 /// `{NUM:..}`, the room of one of the game's digits, the least it can, as the build has always held
 /// it. Centred by width, the line must also hold the widest that the game can draw there: a name a
 /// player typed instead, of up to `TYPED_NAME_LENGTH` letters, and a number with as many digits as
-/// it can show (`place_name_digits`). The last character starts at the pen plus the width before
-/// it, and with the pen centred that never goes down when the name gets wider, so every piece but
-/// the last is taken at its widest. Only the last piece is tried each way it can be drawn, since a
-/// narrower last character, such as a typed name ending on a narrow letter, starts further right.
+/// it can show (`number_digits`), wherever it stands in the name. The last character starts at the
+/// pen plus the width before it, and with the pen centred that never goes down when the name gets
+/// wider, so every piece but the last is taken at its widest. Only the last piece is tried each way
+/// it can be drawn, since a narrower last character, such as a typed name ending on a narrow letter,
+/// starts further right.
 ///
 /// A character of the game's font with no entry in the table yet, `{K:..}`, takes the 14 dots of the
 /// game's own characters. The name of an item or a spell, `{STR:..}`, takes no room: the game finds
@@ -2012,7 +2022,7 @@ fn place_pieces<'a>(
                 pieces.push(PlacePiece::Name(shown));
             } else if name == "NUM" {
                 let value = value.unwrap_or_default();
-                pieces.push(PlacePiece::Number(raw, place_name_digits(value, raw.len() == rest.len())));
+                pieces.push(PlacePiece::Number(raw, number_digits(value)));
             } else if name == "K" {
                 pieces.push(PlacePiece::Width(ORIGINAL_ADVANCE));
             }
