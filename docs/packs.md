@@ -258,13 +258,19 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   included as the game shows them, and starts the name half of what the window's 224 dots leave from its
   left edge. A name left in Japanese is centred that way too, so one with an odd number of characters,
   or with a party member's name in it, sits on the middle where the game has it 7 dots to the left. Two
-  things leave the box without the name, and the build refuses both, naming the string:
-  - **More than 16 characters.** A party member's name counts as its letters, as the menus show them,
-    and one more. This is the game's own limit; the build holds every pack to it.
-  - **A last character that would start at dot 208 or further**, centring included. Sixteen of the
-    game's own characters, 14 dots each, are already too wide; narrower letters leave more room.
+  things leave the box without the name, and the build refuses them, naming the string:
+  - **A last character that would start at dot 208 or further**, centring included. With the renderer
+    the line holds about 200 dots, some 28 Latin letters or 13 characters 16 dots wide. The build keeps
+    room for what the game may draw instead of what the pack says: in place of a party member's name, a
+    name a player typed (up to six letters, 14 dots each in the game's own characters); for a number, as
+    many digits as it can show (three for a byte, eight otherwise), except one that ends the name, of
+    which the game draws only the first digit. The message says when it is that room that is missing.
+  - **More than 16 characters, without the renderer.** The game's own count then centres the name and
+    breaks past 16. A party member's name counts as its letters, as the menus show them, and one more.
+    Sixteen of the game's own characters, 14 dots each, are too wide for the line already.
 
-  A place name the pack gives as the game has it is not held to this.
+  A place name the pack gives as the game has it is not held to this. The build does not break a place
+  name over lines, as it does other dialogue.
 - `captions.txt` holds what a battle says, the names of skills written in kanji, the descriptions of
   items and the headings of the menu screens. Some of the game's kanji there have no entry in the
   character table yet and show as `{K:....}`. Four things are particular to captions:
