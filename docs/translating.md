@@ -178,7 +178,9 @@ pack. A pack may be in any language and any alphabet, including a revision in th
 
 Open an issue in the packs repository first, with
 [the form for a new pack](https://github.com/bquenin/ventris-packs/issues/new/choose): there is one pack per
-game and language, and a pack someone has already started is better joined than begun again.
+game and language, and a pack someone has already started is better joined than begun again. To find others
+to share the work, or to ask whether someone would take up a language, post in the
+[Translations](https://github.com/bquenin/ventris/discussions/categories/translations) category of Discussions.
 
 You need the app, with your own copy of the game found by it
 ([Playing a translated game](playing.md#the-app) says how), an emulator, and a plain text editor.
