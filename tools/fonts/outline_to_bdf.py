@@ -44,14 +44,25 @@ def sized(path: Path, cap_height: int) -> ImageFont.FreeTypeFont:
         size += 1
 
 
-def draw(font: ImageFont.FreeTypeFont, char: str, width: int, height: int, baseline: int, ink_width: int):
-    """A character in a cell of ``width`` by ``height`` pixels, or None if it has no ink there."""
+def draw(font: ImageFont.FreeTypeFont, char: str, width: int, height: int, baseline: int, ink_width: int, sliver: int):
+    """A character in a cell of ``width`` by ``height`` pixels, or None if it has no ink there.
+
+    A character whose ink rises more than ``sliver`` pixels above the cell, such as a capital with an
+    accent, would lose its top. Its part above the baseline is squeezed down instead until it reaches no
+    higher than the cell's top row, so that the accent shows over a shorter capital; what is below the
+    baseline stays as it is. A sliver above the cell, as the accent of a small letter has, is cut off.
+    """
     canvas = Image.new("L", (width * 6, height * 3), 0)
     ImageDraw.Draw(canvas).text((width * 2, height + baseline), char, font=font, fill=255, anchor="ls")
     box = canvas.getbbox()
     if box is None:
         return None
-    left, _, right, _ = box
+    left, top, right, _ = box
+    line = height + baseline  # the baseline, on the canvas
+    if top < height - sliver and height < line:
+        above = canvas.crop((0, top, canvas.width, line)).resize((canvas.width, line - height), Image.LANCZOS)
+        canvas.paste(0, (0, 0, canvas.width, line))
+        canvas.paste(above, (0, height))
     strip = canvas.crop((left, height, right, height * 2))  # the rows of the cell, the ink's columns
     if strip.width > ink_width:
         strip = strip.resize((ink_width, height), Image.LANCZOS)
@@ -76,12 +87,14 @@ def main() -> None:
     scale = arguments.scale
     width, height, baseline = cell_width * scale, cell_height * scale, arguments.baseline * scale
     font = sized(arguments.font, round(arguments.cap_height * scale))
-    missing = draw(font, "\U0010fffe", width, height, baseline, width)  # what the font draws for a character it lacks
+    # What the font draws for a character it lacks.
+    missing = draw(font, "\U0010fffe", width, height, baseline, width, scale // 2)
     blank = missing.tobytes() if missing else b""
 
     glyphs = []
     for code in parse_ranges(arguments.ranges):
-        cell = draw(font, chr(code), width, height, baseline, round(arguments.ink_width * scale))
+        # Less than half a pixel of the game's cell above it is not worth a smaller letter.
+        cell = draw(font, chr(code), width, height, baseline, round(arguments.ink_width * scale), scale // 2)
         if cell is not None and cell.getbbox() is not None and cell.tobytes() != blank:
             glyphs.append((code, cell))
 
