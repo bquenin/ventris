@@ -67,10 +67,10 @@ Download the installer for your system from the
 
 | System | File |
 | --- | --- |
-| Windows | `ventris-app-0.1.0-windows-x86_64-setup.exe` |
-| macOS, Apple silicon (M1 and later) | `ventris-app-0.1.0-macos-aarch64.dmg` |
-| macOS, Intel | `ventris-app-0.1.0-macos-x86_64.dmg` |
-| Linux | `ventris-app-0.1.0-linux-x86_64.AppImage`, or `ventris-app-0.1.0-linux-x86_64.deb` for Debian and Ubuntu |
+| Windows | `ventris-app-0.2.0-windows-x86_64-setup.exe` |
+| macOS, Apple silicon (M1 and later) | `ventris-app-0.2.0-macos-aarch64.dmg` |
+| macOS, Intel | `ventris-app-0.2.0-macos-x86_64.dmg` |
+| Linux | `ventris-app-0.2.0-linux-x86_64.AppImage`, or `ventris-app-0.2.0-linux-x86_64.deb` for Debian and Ubuntu |
 
 - **Windows**: run the installer. It installs for your own account, without administrator rights. Then
   start ventris from the Start menu.
@@ -78,11 +78,11 @@ Download the installer for your system from the
 - **Linux**: make the AppImage executable and run it:
 
   ```bash
-  chmod +x ventris-app-0.1.0-linux-x86_64.AppImage
-  ./ventris-app-0.1.0-linux-x86_64.AppImage
+  chmod +x ventris-app-0.2.0-linux-x86_64.AppImage
+  ./ventris-app-0.2.0-linux-x86_64.AppImage
   ```
 
-  Or install the `.deb` with `sudo apt install ./ventris-app-0.1.0-linux-x86_64.deb` and start ventris from
+  Or install the `.deb` with `sudo apt install ./ventris-app-0.2.0-linux-x86_64.deb` and start ventris from
   your applications menu.
 
 The app is not signed yet, so Windows and macOS warn the first time it is opened.
