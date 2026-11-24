@@ -249,6 +249,16 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
     to choose, which is why the build does not choose it.
   - A string with no space in it at all, as in Japanese, is left to the game, which starts a new row
     after every 16th character.
+- 122 strings are the name of a place or a shop, which the game shows on entering it, centred in a box
+  of one line at the top of the screen. The extracted script says which, in a comment under each. The
+  game counts a name's characters to centre it, and puts half of what 16 leaves as spaces in front, 14
+  dots each. Two things leave the box without the name, and the build refuses both, naming the string:
+  - **More than 16 characters.** A party member's name counts as its letters, as the menus show them,
+    and one more.
+  - **A last character that would start at dot 208 or further**, centring included. Sixteen of the
+    game's own characters, 14 dots each, are already too wide; narrower letters leave more room.
+
+  A place name the pack gives as the game has it is not held to this.
 - `captions.txt` holds what a battle says, the names of skills written in kanji, the descriptions of
   items and the headings of the menu screens. Some of the game's kanji there have no entry in the
   character table yet and show as `{K:....}`. Four things are particular to captions:

@@ -364,6 +364,38 @@ pub const SPRITE_LINES: [(usize, u32); 8] = [(1, 4), (7, 0), (49, 79), (59, 8), 
 pub const SPRITE_ROW: usize = 15;
 pub const SPRITE_ROW_FULL: usize = 16;
 pub const SPRITE_PAGE: usize = 32;
+/// The names of places and shops, by block and string number, which the game shows in a box of one
+/// line at the top of the screen on entering. An area's events show such a name with command $0D,
+/// then the string's number; these are the 122 strings that command names, found by reading every
+/// area's events command by command, and the game shows none of them any other way.
+///
+/// The command's code ($C4:0E96) sets bit 0 of $137D, which has the text engine centre the line
+/// ($C8:DB51 to $C8:DB9C). It counts the string's characters, draws half of what 16 leaves of the
+/// count as the game's spaces in front, 14 dots each, then the string. Two things break the box:
+///
+/// - more than 16 characters. The engine takes the count from 16 in one byte without a check, so 17
+///   gives about 127 spaces;
+/// - a character that would start at dot 208 or after (`LINE_WIDTH`), where the engine breaks the line
+///   ($C8:DC31). The box has one line, so the page never fills: the name is not drawn at all and the
+///   box shows what was left in it from an earlier message.
+///
+/// What the engine counts is set out at `place_name_count`.
+#[rustfmt::skip]
+pub const PLACE_NAMES: [(usize, u32); 122] = [
+    (3, 0), (5, 0), (5, 1), (5, 2), (5, 3), (5, 4), (5, 5), (13, 1), (17, 0), (17, 1), (17, 2), (17, 3), (17, 4),
+    (17, 5), (17, 6), (17, 7), (17, 8), (17, 9), (17, 10), (19, 0), (21, 0), (21, 1), (23, 0), (25, 0), (25, 1),
+    (25, 2), (25, 3), (25, 4), (31, 0), (35, 0), (35, 1), (35, 3), (37, 0), (37, 1), (37, 2), (37, 3), (37, 4),
+    (37, 5), (37, 6), (39, 1), (41, 0), (41, 1), (41, 2), (41, 3), (41, 4), (43, 2), (43, 3), (49, 0), (53, 17),
+    (53, 18), (53, 19), (55, 0), (55, 1), (55, 2), (55, 3), (55, 4), (55, 5), (57, 1), (57, 2), (57, 3), (57, 4),
+    (57, 5), (57, 6), (57, 7), (57, 8), (59, 0), (61, 0), (61, 1), (61, 2), (61, 3), (61, 4), (61, 5), (61, 6),
+    (61, 7), (61, 8), (61, 9), (63, 0), (63, 1), (63, 2), (63, 3), (63, 4), (65, 0), (65, 1), (65, 2), (65, 3),
+    (65, 4), (65, 5), (65, 92), (65, 96), (67, 2), (69, 0), (69, 1), (69, 2), (71, 0), (71, 1), (73, 1), (73, 2),
+    (73, 3), (73, 4), (73, 5), (75, 0), (75, 1), (77, 0), (77, 1), (77, 2), (77, 3), (77, 4), (77, 5), (79, 6),
+    (85, 0), (85, 2), (87, 0), (87, 1), (87, 2), (89, 1), (89, 2), (89, 3), (91, 0), (93, 0), (93, 1), (95, 0),
+    (97, 0),
+];
+/// The most characters a place name may have, as the game counts them.
+pub const PLACE_NAME_LENGTH: usize = 16;
 /// The menus draw most of their fixed labels at places that are plain numbers in the game: in
 /// lists of labels handed to the routine at $C2:748B (a byte for the colour, the string's number
 /// and its place, five bytes a label), or as the number an instruction loads before a call to
@@ -1761,6 +1793,114 @@ pub fn sprite_line(text: &str, wrap: bool, names: &[(&str, usize)]) -> Result<St
     Ok(laid_out.replace(' ', &GAME_SPACE.to_string()))
 }
 
+/// A party member's name as a place name meets it (see `PLACE_NAMES`).
+pub struct PlaceNameName<'a> {
+    pub tag: &'a str,
+    /// Characters of the name in the character's record in work RAM, the name the menus show,
+    /// which is what the game counts.
+    pub record: usize,
+    /// The name dialogue draws, which is what takes room on the line.
+    pub drawn: &'a str,
+}
+
+/// How many characters the game counts in a place name, from its bytes (`data`, end marker
+/// included), as the code at $C8:DB51 counts them. `record` gives the length of the name in the
+/// record of the party member of a number, where that is known.
+///
+/// Every character or code counts one, whatever its width, and a character of two bytes counts one.
+/// A name, code $02 and the member's number, counts the characters of that member's record; the
+/// engine then reads on from the member's number, not after it, and counts that byte as a character
+/// too. So a name counts as its letters and one more. Mint's number is $02 itself, so after her name
+/// the engine takes her number for another name code and the byte after it for a member's number:
+/// it counts whatever is in that record, or in the memory where it would be. That is not known, so it
+/// is counted as nothing, the least it can be, and so is a name of any number this game has no
+/// record for.
+///
+/// A number, `{NUM:..}`, is four bytes, two characters of two bytes for this count: it counts two,
+/// whatever number it shows.
+pub fn place_name_count(data: &[u8], record: &dyn Fn(u8) -> Option<usize>) -> usize {
+    const NAME: u8 = 0x02;
+    let body = data.strip_suffix(&END).unwrap_or(data);
+    let (mut count, mut at) = (0, 0);
+    while at < body.len() {
+        let byte = body[at];
+        if byte == NAME {
+            count += body.get(at + 1).and_then(|member| record(*member)).unwrap_or(0);
+            at += 1;
+        } else {
+            count += 1;
+            at += if byte >= 0x80 { 2 } else { 1 };
+        }
+    }
+    count
+}
+
+/// Hold a place name (see `PLACE_NAMES`) to what its box shows. Fails with `Error::Text` when the
+/// game would count more than 16 characters in it, or when, centred, a character of it would start
+/// past the end of the line.
+///
+/// `extra` gives the codes of the characters the pack adds, `advance` the width of a character in
+/// dots, and `names` each party member's name as the game counts it and as it draws it.
+///
+/// A number, `{NUM:..}`, takes the room of one of the game's digits, the least it can: what it shows
+/// is not known until the game runs. A character of the game's font with no entry in the table yet,
+/// `{K:..}`, takes the 14 dots of the game's own characters. Another tag takes no room, `{RAW:..}`
+/// included, which is for bytes the game's own text has and nothing a translator writes. A line break
+/// is counted as the game counts it, and takes no room; what the box does with one has not been seen.
+pub fn place_name(
+    text: &str,
+    extra: &Extra,
+    advance: &dyn Fn(char) -> Result<usize>,
+    names: &[PlaceNameName],
+) -> Result<()> {
+    let record = |member: u8| {
+        let tag = tag_of(&SPEAKERS, member)?;
+        names.iter().find(|name| name.tag == tag).map(|name| name.record)
+    };
+    let count = place_name_count(&encode(text, extra)?, &record);
+    if count > PLACE_NAME_LENGTH {
+        return text_error(format!(
+            "the game shows this string as the name of a place, on one line of at most {PLACE_NAME_LENGTH} \
+             characters, and it has {count}: a party member's name counts as the letters the menus show for it, \
+             and one more"
+        ));
+    }
+    // The width of each character drawn, in order.
+    let mut widths = Vec::new();
+    let mut rest = text;
+    while let Some(char) = rest.chars().next() {
+        let mut step = char.len_utf8();
+        if char == '{'
+            && let Some(Token::Tag { raw, name, value }) = tag_at(rest)
+        {
+            step = raw.len();
+            // A name may also be written by the member's number, as {NAME:01}.
+            let member = value.and_then(|value| u8::from_str_radix(&value.replace(' ', ""), 16).ok());
+            let tag = member.and_then(|member| tag_of(&SPEAKERS, member)).filter(|_| name == "NAME").unwrap_or(name);
+            if let Some(shown) = names.iter().find(|shown| shown.tag == tag) {
+                for char in shown.drawn.chars() {
+                    widths.push(advance(char)?);
+                }
+            } else if name == "NUM" || name == "K" {
+                widths.push(ORIGINAL_ADVANCE);
+            }
+        } else if char != '\n' {
+            widths.push(advance(char)?);
+        }
+        rest = &rest[step..];
+    }
+    let spaces = (PLACE_NAME_LENGTH - count) / 2;
+    let before_last: usize = widths.iter().rev().skip(1).sum();
+    let last = ORIGINAL_ADVANCE * spaces + before_last;
+    if !widths.is_empty() && last >= LINE_WIDTH {
+        return text_error(format!(
+            "the game shows this string as the name of a place, centred on one line, and its last character would \
+             start at dot {last}, where the line ends at dot {LINE_WIDTH}: use fewer or narrower letters"
+        ));
+    }
+    Ok(())
+}
+
 /// The room a tag's text takes. Values are only known when the game runs, so they are estimates;
 /// a name is measured, though a player who renames a character may make it longer.
 fn tag_width(tag: &str, names: &[(&str, usize)]) -> usize {
@@ -2224,6 +2364,23 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<BuildRes
         name_widths.push((*tag, width));
         name_lengths.push((*tag, name.chars().count()));
     }
+    // Dialogue shows names and item names by converting menu bytes to its own glyphs. The hook is
+    // needed when a name changed, and when the menu font did, since the game's own table no longer
+    // matches it. It also gives a new game its name records (see `install_names`).
+    let menu_glyphs: BTreeMap<u8, usize> =
+        menu.taken.iter().filter_map(|(char, byte)| Some((*byte, glyph_number(*char)?))).collect();
+    let names_installed = !renames.is_empty() || !menu_glyphs.is_empty();
+    // The same names for the place names. The game counts the name in the character's record, which
+    // the menus show: the menu string that holds it, where the build wrote that string and installs
+    // the records, and the game's own otherwise. It draws the name dialogue shows.
+    let mut place_names = Vec::new();
+    for (tag, default) in &defaults {
+        let drawn = renames.iter().find(|(renamed, _)| renamed == tag).map_or(default.as_str(), |(_, name)| name);
+        let number = name_numbers.iter().find(|(known, _)| known == tag).map(|(_, number)| number);
+        let written = number.and_then(|number| menu.encoded.get(number)).filter(|_| names_installed);
+        let record = written.map_or(default.chars().count(), Vec::len);
+        place_names.push(PlaceNameName { tag, record, drawn });
+    }
 
     let offsets = block_offsets(rom)?;
     let mut packed = Vec::new();
@@ -2249,6 +2406,9 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<BuildRes
             let Some(string) = strings.get_mut(*number as usize) else {
                 return text_error(format!("string {shown}.{number:03} does not exist: block {shown} has {count}"));
             };
+            // A string given as the game has it is held to nothing new.
+            let untouched = decode(string).is_ok_and(|original| original == *text);
+            let given = text;
             let wrapped;
             let text = if SPRITE_LINES.contains(&(index, *number)) {
                 wrapped = match sprite_line(text, options.wrap, &name_lengths) {
@@ -2268,6 +2428,13 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<BuildRes
                 Err(Error::Text(message)) => return text_error(format!("string {shown}.{number:03}: {message}")),
                 Err(other) => return Err(other),
             };
+            if PLACE_NAMES.contains(&(index, *number)) && !untouched {
+                match place_name(given, &extra, &advance, &place_names) {
+                    Ok(()) => {}
+                    Err(Error::Text(message)) => return text_error(format!("string {shown}.{number:03}: {message}")),
+                    Err(other) => return Err(other),
+                }
+            }
         }
         let data = join_strings(&strings)?;
         if data != original {
@@ -2337,12 +2504,7 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<BuildRes
     if !options.layout.is_empty() {
         built = install_layout(built, &options.layout)?;
     }
-    // Dialogue shows names and item names by converting menu bytes to its own glyphs. The hook is
-    // needed when a name changed, and when the menu font did, since the game's own table no longer
-    // matches it.
-    let menu_glyphs: BTreeMap<u8, usize> =
-        menu.taken.iter().filter_map(|(char, byte)| Some((*byte, glyph_number(*char)?))).collect();
-    if !renames.is_empty() || !menu_glyphs.is_empty() {
+    if names_installed {
         let mut records = HashMap::new();
         for (tag, number) in &name_numbers {
             if let Some(data) = menu.encoded.get(number) {
@@ -2542,6 +2704,10 @@ const SPRITE_NOTE: &str = "The game shows this string as sprites over the scene,
     A row holds 15 characters and a page 32, spaces not counted. The build breaks the rows.\n\
     Where a page would have more than 32, put a {PAGE}, or say it in fewer letters: the build refuses a longer page.";
 
+/// What `extract` writes under the header of a place name (see `PLACE_NAMES`).
+const PLACE_NOTE: &str = "The name of a place, shown on one line and centred: 16 characters at most, a party member's name \
+    counting as its letters and one more.";
+
 /// What `extract` writes at the head of the captions' file.
 const CAPTION_NOTE: &str = "The game draws a caption in cells 16 dots wide, and the build puts two narrow letters in a cell.\n\
     The game does not break a caption's lines. Break them yourself: a line holds 30 letters, and a description two lines.\n\
@@ -2589,7 +2755,8 @@ static KINDS: [TextKind; 3] = [
         wrap: true,
         // The number is AREA_RAM_SIZE; a test holds the sentence to it.
         limits: "an area's longest string and its events must fit together in the 16,480 bytes of memory the game \
-                 has for them",
+                 has for them; the name of a place, shown on entering it, is centred on one line of 16 characters at \
+                 most, a party member's name counting as its letters and one more",
         trial: Some(("01.001", "01.003")),
         ..TextKind::new("dialogue", is_dialogue)
     },
@@ -2712,8 +2879,12 @@ impl Adapter for Top {
                 (!lines.is_empty()).then(|| lines.join("\n"))
             }
             Some(number) if is_dialogue(section) => {
-                let (_, block) = block_number(section)?;
-                SPRITE_LINES.contains(&(block?, number)).then(|| SPRITE_NOTE.to_string())
+                let string = (block_number(section)?.1?, number);
+                if SPRITE_LINES.contains(&string) {
+                    Some(SPRITE_NOTE.to_string())
+                } else {
+                    PLACE_NAMES.contains(&string).then(|| PLACE_NOTE.to_string())
+                }
             }
             _ => None,
         }

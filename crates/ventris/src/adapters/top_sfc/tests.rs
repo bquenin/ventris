@@ -1152,9 +1152,10 @@ mod demand_tests {
         assert!(small.on_cartridge.is_empty());
         assert_eq!(at(&small.rom, 0xC67A16, 5), original_loader);
 
-        // Twelve strings of 3,000 bytes: 36,000 bytes of dialogue for 16,480 of memory.
+        // Twelve strings of 3,000 bytes: 36,000 bytes of dialogue for 16,480 of memory. String 03.000
+        // is the village's name, held to one line, so they start after it.
         let long = "あ".repeat(3000);
-        let strings: Vec<(&str, u32, &str)> = (0..12).map(|number| ("03", number, long.as_str())).collect();
+        let strings: Vec<(&str, u32, &str)> = (1..=12).map(|number| ("03", number, long.as_str())).collect();
         let large = build(&rom, &pack_of(&strings), &BuildOptions::default()).unwrap();
         assert_eq!((large.changed.as_slice(), large.on_cartridge.as_slice()), (&[3][..], &[3][..]));
         assert!(large.moved.is_empty());
@@ -1180,7 +1181,7 @@ mod demand_tests {
         assert_eq!(word(0), 2 * (own.len() + 1));
         for (number, original) in own.iter().enumerate() {
             let string = &block[word(2 * number)..word(2 * number + 2)];
-            if number < 12 {
+            if (1..=12).contains(&number) {
                 assert_eq!(decode(string).unwrap(), long);
             } else {
                 assert!(string == *original);
@@ -1398,4 +1399,123 @@ mod caption_tests {
         assert_eq!([alone[1], alone[GLYPH_SIZE + 1]], middle(rows('É')[0]));
         assert_eq!([alone[2], alone[GLYPH_SIZE + 2]], middle(rows('É')[1]));
     }
+}
+
+/// Party members' names as a place name meets them: (tag, characters in the record, name drawn).
+fn place_names_of<'a>(names: &[(&'a str, usize, &'a str)]) -> Vec<PlaceNameName<'a>> {
+    names.iter().map(|(tag, record, drawn)| PlaceNameName { tag, record: *record, drawn }).collect()
+}
+
+#[test]
+fn a_place_name_is_held_to_its_box() {
+    // Two letters a pack adds: i, 4 dots wide, and W, 16. The game's own characters are 14.
+    let extra = Extra::from([('i', 0x700), ('W', 0x701)]);
+    let advance = |char: char| {
+        Ok(match char {
+            'i' => 4,
+            'W' => 16,
+            _ => ORIGINAL_ADVANCE,
+        })
+    };
+    let names = place_names_of(&[("クレス", 5, "Cress"), ("ミント", 4, "Mint")]);
+    let check = |text: &str| place_name(text, &extra, &advance, &names);
+    let too_many = |count: usize| {
+        format!(
+            "the game shows this string as the name of a place, on one line of at most 16 characters, and it has \
+             {count}: a party member's name counts as the letters the menus show for it, and one more"
+        )
+    };
+    let too_wide = |dot: usize| {
+        format!(
+            "the game shows this string as the name of a place, centred on one line, and its last character would \
+             start at dot {dot}, where the line ends at dot 208: use fewer or narrower letters"
+        )
+    };
+
+    // Sixteen characters fit, and seventeen do not, however narrow.
+    assert!(check(&"i".repeat(16)).is_ok());
+    assert_eq!(message(check(&"i".repeat(17))), too_many(17));
+    // Sixteen of the game's own characters, 14 dots apart, put the last at dot 210, past the line.
+    assert!(check(&"あ".repeat(15)).is_ok());
+    assert_eq!(message(check(&"あ".repeat(16))), too_wide(210));
+    // Fourteen characters are centred behind one space of 14 dots: the last starts at 206, or at 208.
+    assert!(check(&format!("{}{}i", "あ".repeat(8), "W".repeat(5))).is_ok());
+    assert_eq!(message(check(&format!("{}{}i", "あ".repeat(7), "W".repeat(6)))), too_wide(208));
+
+    // A name counts as the letters of the name in the record and one more: 6 for Cress.
+    assert!(check("{クレス}{クレス}ii").is_ok());
+    assert_eq!(message(check("{クレス}{クレス}{クレス}i")), too_many(19));
+    assert!(check(&format!("{{クレス}}{}", "i".repeat(10))).is_ok());
+    assert_eq!(message(check(&format!("{{クレス}}{}", "i".repeat(11)))), too_many(17));
+    // The game counts the name in the record and draws the one dialogue shows, which may be longer:
+    // three for the count, and fifteen wide letters on the line, after five spaces.
+    let long = place_names_of(&[("クレス", 3, "WWWWWWWWWWWWWWW")]);
+    assert_eq!(message(place_name("{クレス}ii", &extra, &advance, &long)), too_wide(70 + 15 * 16 + 4));
+    // The same name written by the member's number is the same, and a character of the game's font
+    // written as {K:..} is 14 dots like the others.
+    assert_eq!(message(place_name("{NAME:01}ii", &extra, &advance, &long)), too_wide(70 + 15 * 16 + 4));
+    assert!(check(&"{K:0180}".repeat(15)).is_ok());
+    assert_eq!(message(check(&"{K:0180}".repeat(16))), too_wide(210));
+
+    // How the game counts, from the bytes. Mint's number is the name code itself, so the game reads
+    // it as another name, of the member numbered by the byte after; for あ there is none, so nothing.
+    let record = |member: u8| [(0x01, 5), (0x02, 4)].iter().find(|(known, _)| *known == member).map(|(_, n)| *n);
+    let count = |text: &str| place_name_count(&encoded(text).unwrap(), &record);
+    assert_eq!(count("{クレス}あ"), 7);
+    assert_eq!(count("{ミント}あ"), 5);
+    assert_eq!(count("{ミント}{クレス}"), 4 + 4 + 5 + 1);
+    // A number is two characters to the count, whatever it shows; on the line it takes a digit's room.
+    assert_eq!(count("モーリア坑道地下{NUM:801F}階"), 11);
+    assert!(check(&format!("{}{{NUM:801F}}あ", "あ".repeat(13))).is_ok());
+    assert_eq!(message(check(&format!("{}{{NUM:801F}}あ", "あ".repeat(14)))), too_many(17));
+
+    // `extract` says so under each of the 122 strings, and under nothing else.
+    let note = |section: &str, number: u32| Top.note(section, Some(number));
+    assert_eq!(
+        note("05", 2).unwrap(),
+        "The name of a place, shown on one line and centred: 16 characters at most, a party member's name \
+         counting as its letters and one more."
+    );
+    let noted = PLACE_NAMES.iter().filter(|(block, number)| note(&format!("{block:02}"), *number).is_some()).count();
+    assert_eq!(noted, 122);
+    assert_eq!((note("05", 6), note("03", 1), note("04", 0)), (None, None, None));
+    assert!(note("01", 4).unwrap().starts_with("The game shows this string as sprites"));
+    assert!(KINDS[0].limits.contains("centred on one line of 16 characters at most"));
+}
+
+#[test]
+fn a_real_place_name_is_held_to_its_box() {
+    let Some(rom) = game() else { return };
+    let refused = |pack: &Pack| message(built(&rom, pack, &BuildOptions::default()));
+    let named = |pairs: &[(&str, u32, &str)], names: &[(&str, &str)]| {
+        let mut pack = pack_of(pairs);
+        pack.names = names_of(names).names;
+        pack
+    };
+
+    // As the English pack had it, with seventeen characters, and with sixteen.
+    assert_eq!(
+        refused(&pack_of(&[("05", 2, "St. Lenios Church")])),
+        "string 05.002: the game shows this string as the name of a place, on one line of at most 16 characters, \
+         and it has 17: a party member's name counts as the letters the menus show for it, and one more"
+    );
+    plainly_built(&rom, &pack_of(&[("05", 2, "St Lenios Church")]));
+    // A name counts as the name in the character's record, which the menus show, and one more: six
+    // for チェスター, and eight for a new name of seven that the menus can take.
+    plainly_built(&rom, &pack_of(&[("05", 1, "{チェスター}'s Houses")]));
+    let longer = [("チェスター", "チェスタークン")];
+    plainly_built(&rom, &named(&[("05", 1, "{チェスター}'s House")], &longer));
+    assert!(refused(&named(&[("05", 1, "{チェスター}'s Houses")], &longer)).contains("and it has 17"));
+
+    // A name longer than the menus hold leaves them the game's names, so the game counts クレス, three,
+    // and dialogue draws fifteen letters of 14 dots. The game's own string with it is left alone, as
+    // is every string a pack gives as the game has it; changed, it is held to the line.
+    let wide = [("クレス", "ＷＷＷＷＷＷＷＷＷＷＷＷＷＷＷ")];
+    assert_eq!(extract(&rom).unwrap().texts["05"][&0], "{クレス}の家");
+    plainly_built(&rom, &named(&[("05", 0, "{クレス}の家")], &wide));
+    assert_eq!(
+        refused(&named(&[("05", 0, "{クレス}のいえ")], &wide)),
+        "string 05.000: the game shows this string as the name of a place, centred on one line, and its last \
+         character would start at dot 294, where the line ends at dot 208: use fewer or narrower letters"
+    );
 }
