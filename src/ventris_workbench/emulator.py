@@ -73,7 +73,10 @@ def find_mesen() -> Path:
         raise EmulatorError(f"{MESEN_VARIABLE} points to {binary}, which is not a file")
     # Without a settings file Mesen opens its first-run wizard, in a window, and never reaches the script.
     if not (binary.parent / "settings.json").exists():
-        raise EmulatorError(f"Mesen has not been set up yet: run {binary} once and finish its setup wizard")
+        raise EmulatorError(
+            f"Mesen has not been set up yet: there is no settings.json beside {binary}. Run it once and, in its"
+            " setup wizard, choose to store its data in the same folder as the application"
+        )
     return binary
 
 

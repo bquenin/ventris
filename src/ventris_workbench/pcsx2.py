@@ -8,11 +8,12 @@ The same build answers the two questions that find a game's code by what it does
 or writes this memory (``watch``), and what the registers hold each time this address is run
 (``trace``). The game runs on while they are recorded, and ``hits`` collects what was.
 
-Where the emulator listens: a TCP port on Windows (28011, this machine only) and a Unix socket
-elsewhere (``$TMPDIR/pcsx2.sock``). ``PCSX2_PINE`` names either, as ``host:port`` or a socket path; an
-emulator on another machine is reached by forwarding its port, for example
-``ssh -N -L 28011:127.0.0.1:28011 machine``. Paths given to the emulator, such as a screenshot's,
-are paths on the machine it runs on.
+Where the emulator listens: a TCP port on Windows (28011, this machine only), and elsewhere a Unix
+socket, ``pcsx2.sock`` in ``$TMPDIR`` on macOS and in ``$XDG_RUNTIME_DIR`` (or ``/tmp``) on Linux. This
+module connects to ``127.0.0.1:28011`` unless ``PCSX2_PINE`` says otherwise, so on macOS and Linux set
+it to the socket's path. ``PCSX2_PINE`` names either, as ``host:port`` or a socket path; an emulator on
+another machine is reached by forwarding its port, for example ``ssh -N -L 28011:127.0.0.1:28011 machine``.
+Paths given to the emulator, such as a screenshot's, are paths on the machine it runs on.
 """
 
 import os

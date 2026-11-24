@@ -184,7 +184,8 @@
 //!            pitch.
 //! $E6C3      compose glyph: reads the font through data bank $F0 and writes two bitplanes to work
 //!            RAM through $2180, the second being the glyph plus a shadow built from neighbouring
-//!            pixels. Called from $E5E2 (dialogue) and $EEA2 (another text path, not traced yet).
+//!            pixels. Called from $E5E2 (dialogue) and $EEA2, in the routine at $EE01 that draws
+//!            captions (see Captions above).
 //! $E66D, $E691
 //!            place the glyph's tiles in the tilemap copy at $7E:5980, two columns or one.
 //! ```
