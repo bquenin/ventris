@@ -334,8 +334,8 @@ fn the_injected_code_assembles_to_what_the_python_reference_assembles() {
         (
             include_str!("vwf.asm"),
             &[("CODE", 0x700000), ("WIDTHS", 0x710000), ("FONT_BANK", 0x72), ("PLACE_FIELD", 224)],
-            726,
-            "02d44e65b8bba2a646d157a320a13ef54a214d10",
+            725,
+            "dd0c63978b932c9ff04169c481cd5ac4f51b1c45",
         ),
         (
             include_str!("moved.asm"),
@@ -374,11 +374,12 @@ fn the_injected_code_assembles_to_what_the_python_reference_assembles() {
         assert_eq!(found, sha1);
     }
     // The renderer is one call in the game, the game's count of a place name's characters, which it
-    // replaces with a call and the four calls into the engine its centring needs, and the routines
-    // they go to: the renderer's 412 bytes, then the centring.
+    // replaces with a call, the four calls into the engine its centring needs and where a place name
+    // goes on after each character, the jump there, and the routines they go to: the renderer's 412
+    // bytes, then the centring.
     let renderer = assemble(sources[0].0, sources[0].1).unwrap();
     let places: Vec<(u32, usize)> = renderer.segments.iter().map(|(address, code)| (*address, code.len())).collect();
-    assert_eq!(places, [(0xC8DDFB, 4), (0xC8DB51, CENTRING_HOOK), (0x700000, 685)]);
+    assert_eq!(places, [(0xC8DDFB, 4), (0xC8DB51, CENTRING_HOOK), (0xC8DE21, 3), (0x700000, 665)]);
     assert_eq!(renderer.segments[0].1, hex("22 00 00 70"));
     assert_eq!(renderer.segments[1].1[..7], hex("22 9c 01 70 4c 9f db"));
     // The code it replaces runs to $C8:DB9E, and the drawing loop it goes on to starts after it.
@@ -593,7 +594,7 @@ fn a_real_script_is_put_back() {
 }
 
 /// How many bytes of the game's count of a place name's characters the renderer writes over.
-const CENTRING_HOOK: usize = 37;
+const CENTRING_HOOK: usize = 53;
 
 #[test]
 fn a_real_pack_with_new_characters() {
@@ -656,15 +657,23 @@ fn a_real_pack_with_new_characters() {
 
     // The game's count that centres the name of a place now calls the renderer's own centring, and
     // goes on to the loop that draws the line; the four calls after are that routine's way into the
-    // engine's own routines.
+    // engine's own routines, and after them is where the engine goes on after each character of a
+    // place name, which finishes a number before it looks for the end of the string. The engine's
+    // jump back after such a character now goes there.
     let centring = snes::snes_to_pc(PLACE_CENTRING.0, MAPPING).unwrap();
     assert_eq!(rom[centring..centring + 12], PLACE_CENTRING.1);
     assert_eq!(built_rom[centring..centring + 7], hex("22 9c 01 70 4c 9f db"));
-    let stubs = "20 cc e4 6b ac c4 13 20 63 df c2 20 6b ac c4 13 20 40 e0 c2 20 6b c2 20 20 4d de c2 20 6b";
-    assert_eq!(built_rom[centring + 7..centring + CENTRING_HOOK], hex(stubs));
+    let calls = "20 cc e4 6b ac c4 13 20 63 df c2 20 6b ac c4 13 20 40 e0 c2 20 6b c2 20 20 4d de c2 20 6b";
+    let next_stub = "bd 0f 00 89 10 d0 03 4c 9f db 9e 2b 00 4c 26 dc";
+    let stubs = format!("{calls} {next_stub}");
+    assert_eq!(built_rom[centring + 7..centring + CENTRING_HOOK], hex(&stubs));
+    let next = snes::snes_to_pc(PLACE_NEXT.0, MAPPING).unwrap();
+    assert_eq!(rom[next..next + 9], PLACE_NEXT.1);
+    assert_eq!(built_rom[next..next + 9], hex("a0 00 00 8c ca 13 4c 76 db"));
 
-    // Installing the renderer alone changes only its call site, the centring of place names, the
-    // bank of the sprite text's font and the checksum in the original 6 MiB.
+    // Installing the renderer alone changes only its call site, the centring of place names and the
+    // jump after each of their characters, the bank of the sprite text's font and the checksum in the
+    // original 6 MiB.
     let renderer = BuildOptions { switches: ["renderer".to_string()].into(), ..Default::default() };
     let (summary, plain) = built(&rom, &Pack::default(), &renderer).unwrap();
     assert_eq!(
@@ -674,8 +683,9 @@ fn a_real_pack_with_new_characters() {
     let fields = checksum_fields(&plain);
     let after = centring + CENTRING_HOOK;
     assert!(plain[..centring] == rom[..centring] && plain[after..call] == rom[after..call]);
-    assert!(plain[call + 4..bank_at] == rom[call + 4..bank_at]);
-    assert!(plain[centring..after] == built_rom[centring..after]);
+    let jump = next + 6;
+    assert!(plain[call + 4..jump] == rom[call + 4..jump] && plain[jump + 3..bank_at] == rom[jump + 3..bank_at]);
+    assert!(plain[centring..after] == built_rom[centring..after] && plain[jump..jump + 3] == built_rom[jump..jump + 3]);
     assert_eq!(plain[bank_at], 0x7B);
     assert!(plain[bank_at + 1..fields] == rom[bank_at + 1..fields]);
     assert!(plain[fields + 4..rom.len()] == rom[fields + 4..]);
@@ -1557,11 +1567,15 @@ fn a_place_name_is_held_to_its_box() {
             too_wide_with(&format!("{number} showing 3 digits"), 211)
         );
     }
-    // A number that ends the name shows its first digit only, so that is all it is held to: twelve
-    // wide letters and a digit are 206 dots from 9, the digit at 201; with a thirteenth, at 209.
+    // A number that ends the name is drawn whole too, so it is held to its most digits as well:
+    // eleven wide letters and three digits are 218 dots from 3, the last digit at 207; with a
+    // twelfth letter, from the window's edge, at 220, though one digit would start at 201.
     for number in ["{NUM:801F}", "{NUM: 801F}", "{NUM:80 1F}"] {
-        assert!(by_width(&format!("{}{number}", "W".repeat(12))).is_ok(), "{number}");
-        assert_eq!(message(by_width(&format!("{}{number}", "W".repeat(13)))), too_wide(209));
+        assert!(by_width(&format!("{}{number}", "W".repeat(11))).is_ok(), "{number}");
+        assert_eq!(
+            message(by_width(&format!("{}{number}", "W".repeat(12)))),
+            too_wide_with(&format!("{number} showing 3 digits"), 220)
+        );
     }
 
     // Centred by width, a party member's name is also held to the longest a player can type: six
@@ -1648,17 +1662,17 @@ fn a_place_name_is_checked_at_its_worst_without_trying_every_way() {
     // Twelve names and twelve numbers are checked at once, where trying every way they can be drawn
     // together would take 13 to the 12th times 3 to the 11th lines. Drawn as the pack has them they
     // fit, 216 dots from dot 4, the last digit at 206; but a player may type 84 dots for each name and
-    // each number but the last may show three digits, so they cannot, nor can any twelve names.
+    // each number may show three digits, so they cannot, nor can any twelve names.
     let names = place_names_of(&[("クレス", 5, "i")]);
     let many = "{クレス}{NUM:801F}".repeat(12);
-    let said = ["a name of 6 letters typed for {クレス}", "{NUM:801F} showing 3 digits"].repeat(12)[..23].join(" and ");
+    let said = ["a name of 6 letters typed for {クレス}", "{NUM:801F} showing 3 digits"].repeat(12).join(" and ");
     assert_eq!(
         message(place_name(&many, &extra, &advance, &names, Centring::ByWidth)),
         format!(
             "the game shows this string as the name of a place, centred on one line, and with {said} its last \
              character would start at dot {}, where the line ends at dot 208: leave room for that, with fewer or \
              narrower letters",
-            12 * 84 + 11 * 42
+            12 * 84 + 12 * 42 - 14
         )
     );
 }

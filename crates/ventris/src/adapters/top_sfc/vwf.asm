@@ -42,7 +42,7 @@ org $C8DDFB
 ; The code it replaces is only ever entered at its start, and the drawing loop goes on at $C8:DB9F.
 ; The bytes left over hold calls to four of the engine's routines, which end in RTS and so have to be
 ; called from their own bank: each takes the window state in X, as the drawing loop gives it, and
-; returns with the accumulator 16 bits wide.
+; returns with the accumulator 16 bits wide. After them is `place_next` (see below).
 org $C8DB51
     jsl centre
     jmp $DB9F
@@ -65,6 +65,29 @@ place_number:               ; a number ($4001 and where it is read from)
     jsr $DE4D
     rep #$20
     rtl
+
+; A place name is drawn whole in one go: after each character the engine goes back to $C8:DB9F,
+; which ends the line when the string is at its end. A number is drawn from its digits, one at a
+; time, after its bytes in the string are read, and that test takes no account of a number still
+; being drawn (bit 4 of +0F), as it does of a name (bit 0). So a number that ended the name showed
+; its first digit only. With a number being drawn, this goes on to its next digit at $C8:DC26, where
+; $C8:DB9F goes when the string goes on. The game comes here, from $C8:DE21, only for the name of a
+; place; other dialogue goes from $C8:DE18 to $C8:DE24.
+place_next:
+    m8
+    x16
+    lda $000F,x
+    bit #$10
+    bne .digit
+    jmp $DB9F
+.digit:
+    stz $002B,x             ; as $C8:DB9F does before each character
+    jmp $DC26
+
+; After drawing a character of a place name the engine zeroes the upload mark and jumps back to
+; $C8:DB9F; the jump now goes to `place_next`.
+org $C8DE21
+    jmp place_next
 
 org CODE
 draw:
@@ -399,9 +422,8 @@ centre:
     bra .next
 
 ; The routine has put the number's eight digits at +1D to +24 as the codes of the game's digits,
-; and at +2F how many of them, from the left, are zeros that are not drawn. The drawing loop draws
-; one digit at a time, and between two it looks at what follows the number in the string; when that
-; is the end of the string, it stops there, after the first digit. So that is all that is measured.
+; and at +2F how many of them, from the left, are zeros that are not drawn. All the others are
+; drawn, wherever the number stands in the name (see `place_next`).
 .number:
     jsl place_number
     txa
@@ -411,19 +433,8 @@ centre:
     lda $002F,x
     and #$00FF
     tay                     ; the first one drawn
-    lda #$0008
-    sta $06                 ; and one past the last
-    phy
-    ldy $13C4
-    lda [$D7],y
-    ply
-    cmp #$FFFF
-    bne .digit
-    tya
-    inc a
-    sta $06                 ; the number ends the string
 .digit:
-    cpy $06
+    cpy #$0008
     bcc .one
     jmp .next
 .one:
