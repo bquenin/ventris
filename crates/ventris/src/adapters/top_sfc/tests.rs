@@ -1593,6 +1593,65 @@ fn a_place_name_is_held_to_its_box() {
 }
 
 #[test]
+fn a_place_name_is_checked_at_its_worst_without_trying_every_way() {
+    // Letters of 4 and 16 dots, the game's own 14; a player can type letters of 4 to 14 dots.
+    let extra = Extra::from([('i', 0x700), ('W', 0x701)]);
+    let advance = |char: char| {
+        Ok(match char {
+            'i' => 4,
+            'W' => 16,
+            _ => ORIGINAL_ADVANCE,
+        })
+    };
+    let narrow = [PlaceNameName { tag: "クレス", record: 5, drawn: "ii", typed: (4, 14) }];
+    let wide = [PlaceNameName { tag: "クレス", record: 5, drawn: "WWWWWWWWW", typed: (4, 14) }];
+
+    // The worst found directly is the worst of every way the pieces can be drawn together.
+    for names in [&narrow[..], &wide[..]] {
+        for text in [
+            "WW{クレス}i{NUM:801F}",
+            "{クレス}{クレス}",
+            "W{NUM:801F}{クレス}",
+            "{NUM:811F}{クレス}{NUM:801F}",
+            "iiii{クレス}",
+            "{クレス}i{NUM:801F}W",
+        ] {
+            for (centring, count) in [(Centring::ByWidth, 0), (Centring::ByCount, 6)] {
+                let pieces = place_pieces(text, names, &advance).unwrap();
+                let mut lines = vec![Vec::new()];
+                for piece in &pieces {
+                    let ways = place_ways(piece, centring, &advance).unwrap();
+                    lines = lines
+                        .iter()
+                        .flat_map(|line| ways.iter().map(move |(way, _)| [line.as_slice(), way].concat()))
+                        .collect();
+                }
+                let brute = lines.iter().filter_map(|line| place_last_start(line, centring, count)).max();
+                let found = place_worst_start(&pieces, centring, count, &advance).unwrap().map(|(start, _)| start);
+                assert_eq!(found, brute, "{text} {centring:?}");
+            }
+        }
+    }
+
+    // Twelve names and twelve numbers are checked at once, where trying every way they can be drawn
+    // together would take 13 to the 12th times 3 to the 11th lines. Drawn as the pack has them they
+    // fit, 216 dots from dot 4, the last digit at 206; but a player may type 84 dots for each name and
+    // each number but the last may show three digits, so they cannot, nor can any twelve names.
+    let names = place_names_of(&[("クレス", 5, "i")]);
+    let many = "{クレス}{NUM:801F}".repeat(12);
+    let said = ["a name of 6 letters typed for {クレス}", "{NUM:801F} showing 3 digits"].repeat(12)[..23].join(" and ");
+    assert_eq!(
+        message(place_name(&many, &extra, &advance, &names, Centring::ByWidth)),
+        format!(
+            "the game shows this string as the name of a place, centred on one line, and with {said} its last \
+             character would start at dot {}, where the line ends at dot 208: leave room for that, with fewer or \
+             narrower letters",
+            12 * 84 + 11 * 42
+        )
+    );
+}
+
+#[test]
 fn a_real_place_name_is_held_to_its_box() {
     let Some(rom) = game() else { return };
     let refused = |pack: &Pack| message(built(&rom, pack, &BuildOptions::default()));

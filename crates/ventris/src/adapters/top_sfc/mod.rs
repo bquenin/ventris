@@ -1915,6 +1915,10 @@ enum PlacePiece<'a> {
     Number(&'a str, usize),
 }
 
+/// One way a piece of a place name can be drawn: the width of each character, and what is assumed
+/// for it where that is not the pack's own text.
+type PlaceWay = (Vec<usize>, Option<String>);
+
 /// Hold a place name (see `PLACE_NAMES`) to what its box shows. Fails with `Error::Text` when the
 /// name's last character could start past the end of the line, centred as the build centres it, or,
 /// where the game's own engine centres it, when the game would count more than 16 characters in it.
@@ -1926,11 +1930,12 @@ enum PlacePiece<'a> {
 ///
 /// Centred by count, a party member's name takes the room of the name dialogue shows, and a number,
 /// `{NUM:..}`, the room of one of the game's digits, the least it can, as the build has always held
-/// it. Centred by width, the line must also hold the widest that the game can
-/// draw there: a name a player typed instead, of up to `TYPED_NAME_LENGTH` letters, and a number
-/// with as many digits as it can show (`place_name_digits`). A name is centred, so a wider one only
-/// moves the last character further right; both ends of each range are tried all the same, and the
-/// narrowest letter a player can type as well, since a name may end on it.
+/// it. Centred by width, the line must also hold the widest that the game can draw there: a name a
+/// player typed instead, of up to `TYPED_NAME_LENGTH` letters, and a number with as many digits as
+/// it can show (`place_name_digits`). The last character starts at the pen plus the width before
+/// it, and with the pen centred that never goes down when the name gets wider, so every piece but
+/// the last is taken at its widest. Only the last piece is tried each way it can be drawn, since a
+/// narrower last character, such as a typed name ending on a narrow letter, starts further right.
 ///
 /// A character of the game's font with no entry in the table yet, `{K:..}`, takes the 14 dots of the
 /// game's own characters. The name of an item or a spell, `{STR:..}`, takes no room: the game finds
@@ -1957,7 +1962,38 @@ pub fn place_name(
              and one more"
         ));
     }
-    // What takes room on the line, in order.
+    let pieces = place_pieces(text, names, advance)?;
+    let mut own = Vec::new();
+    for piece in &pieces {
+        own.extend(place_ways(piece, centring, advance)?.swap_remove(0).0);
+    }
+    if let Some(last) = place_last_start(&own, centring, count)
+        && last >= LINE_WIDTH
+    {
+        return text_error(format!(
+            "the game shows this string as the name of a place, centred on one line, and its last character would \
+             start at dot {last}, where the line ends at dot {LINE_WIDTH}: use fewer or narrower letters"
+        ));
+    }
+    if let Some((last, said)) = place_worst_start(&pieces, centring, count, advance)?
+        && last >= LINE_WIDTH
+    {
+        return text_error(format!(
+            "the game shows this string as the name of a place, centred on one line, and with {} its last character \
+             would start at dot {last}, where the line ends at dot {LINE_WIDTH}: leave room for that, with fewer or \
+             narrower letters",
+            said.join(" and ")
+        ));
+    }
+    Ok(())
+}
+
+/// What takes room on the line of a place name, in order (see `place_name`).
+fn place_pieces<'a>(
+    text: &'a str,
+    names: &'a [PlaceNameName<'a>],
+    advance: &dyn Fn(char) -> Result<usize>,
+) -> Result<Vec<PlacePiece<'a>>> {
     let mut pieces = Vec::new();
     let mut rest = text;
     while let Some(char) = rest.chars().next() {
@@ -1982,73 +2018,82 @@ pub fn place_name(
         }
         rest = &rest[step..];
     }
-    // Each piece's possible widths, with what is assumed for it: the first is what the pack gives,
-    // or the least a number can show.
-    let mut choices: Vec<Vec<(Vec<usize>, Option<String>)>> = Vec::new();
-    for piece in &pieces {
-        choices.push(match piece {
-            PlacePiece::Width(width) => vec![(vec![*width], None)],
-            PlacePiece::Name(name) => {
-                let drawn = name.drawn.chars().map(advance).collect::<Result<Vec<_>>>()?;
-                let mut ways = vec![(drawn, None)];
-                if centring == Centring::ByWidth {
-                    let (narrowest, widest) = name.typed;
-                    for letters in 1..=TYPED_NAME_LENGTH {
-                        for last in [widest, narrowest] {
-                            let mut typed = vec![widest; letters - 1];
-                            typed.push(last);
-                            let said = format!("a name of {letters} letters typed for {{{}}}", name.tag);
-                            ways.push((typed, Some(said)));
-                        }
+    Ok(pieces)
+}
+
+/// Each way a piece can be drawn, the pack's own first: for a party member's name, the name the pack
+/// gives, then, centred by width, names a player can type of one letter to `TYPED_NAME_LENGTH`, of
+/// the widest letter but for the last, which is the widest or the narrowest; for a number, one digit,
+/// then, centred by width, each count up to its most.
+fn place_ways(
+    piece: &PlacePiece,
+    centring: Centring,
+    advance: &dyn Fn(char) -> Result<usize>,
+) -> Result<Vec<PlaceWay>> {
+    Ok(match piece {
+        PlacePiece::Width(width) => vec![(vec![*width], None)],
+        PlacePiece::Name(name) => {
+            let drawn = name.drawn.chars().map(advance).collect::<Result<Vec<_>>>()?;
+            let mut ways = vec![(drawn, None)];
+            if centring == Centring::ByWidth {
+                let (narrowest, widest) = name.typed;
+                for letters in 1..=TYPED_NAME_LENGTH {
+                    for last in [widest, narrowest] {
+                        let mut typed = vec![widest; letters - 1];
+                        typed.push(last);
+                        ways.push((typed, Some(format!("a name of {letters} letters typed for {{{}}}", name.tag))));
                     }
                 }
-                ways
             }
-            PlacePiece::Number(raw, digits) => {
-                let most = if centring == Centring::ByWidth { *digits } else { 1 };
-                let said = |shown: usize| (shown > 1).then(|| format!("{raw} showing {shown} digits"));
-                (1..=most).map(|shown| (vec![ORIGINAL_ADVANCE; shown], said(shown))).collect()
-            }
-        });
-    }
-    // Where the last character starts, for each way the line can be, the pack's own first.
-    let start = |widths: &[usize]| {
-        let width: usize = widths.iter().sum();
-        let pen = match centring {
-            Centring::ByCount => ORIGINAL_ADVANCE * (PLACE_NAME_LENGTH.saturating_sub(count) / 2),
-            Centring::ByWidth => place_name_pen(width),
-        };
-        widths.last().map(|last| pen + width - last)
-    };
-    let mut ways = vec![(Vec::new(), Vec::new())];
-    for options in &choices {
-        let mut longer = Vec::new();
-        for (widths, said) in &ways {
-            for (more, assumed) in options {
-                let mut widths: Vec<usize> = widths.clone();
-                widths.extend(more);
-                let mut said: Vec<String> = said.clone();
-                said.extend(assumed.clone());
-                longer.push((widths, said));
-            }
+            ways
         }
-        ways = longer;
+        PlacePiece::Number(raw, digits) => {
+            let most = if centring == Centring::ByWidth { *digits } else { 1 };
+            let said = |shown: usize| (shown > 1).then(|| format!("{raw} showing {shown} digits"));
+            (1..=most).map(|shown| (vec![ORIGINAL_ADVANCE; shown], said(shown))).collect()
+        }
+    })
+}
+
+/// Where the last character of a line of these widths starts, centred as the build centres it.
+fn place_last_start(widths: &[usize], centring: Centring, count: usize) -> Option<usize> {
+    let width: usize = widths.iter().sum();
+    let pen = match centring {
+        Centring::ByCount => ORIGINAL_ADVANCE * (PLACE_NAME_LENGTH.saturating_sub(count) / 2),
+        Centring::ByWidth => place_name_pen(width),
+    };
+    widths.last().map(|last| pen + width - last)
+}
+
+/// The furthest right the last character of a place name can start, and what is assumed for that:
+/// every piece but the last at its widest, and the last piece each way it can be drawn (see
+/// `place_name`). A few dozen lines at most, however many names and numbers the string holds.
+fn place_worst_start(
+    pieces: &[PlacePiece],
+    centring: Centring,
+    count: usize,
+    advance: &dyn Fn(char) -> Result<usize>,
+) -> Result<Option<(usize, Vec<String>)>> {
+    let Some((last, before)) = pieces.split_last() else { return Ok(None) };
+    let (mut widths, mut said) = (Vec::new(), Vec::new());
+    for piece in before {
+        let ways = place_ways(piece, centring, advance)?;
+        // The first of the widest, which is the pack's own where nothing is wider.
+        let widest = ways.iter().map(|(way, _)| way.iter().sum::<usize>()).max().unwrap_or(0);
+        if let Some((way, assumed)) = ways.into_iter().find(|(way, _)| way.iter().sum::<usize>() == widest) {
+            widths.extend(way);
+            said.extend(assumed);
+        }
     }
-    let own = start(&ways[0].0);
-    let worst = ways.iter().filter_map(|(widths, said)| Some((start(widths)?, said))).max_by_key(|(last, _)| *last);
-    match (own, worst) {
-        (Some(last), _) if last >= LINE_WIDTH => text_error(format!(
-            "the game shows this string as the name of a place, centred on one line, and its last character would \
-             start at dot {last}, where the line ends at dot {LINE_WIDTH}: use fewer or narrower letters"
-        )),
-        (_, Some((last, said))) if last >= LINE_WIDTH => text_error(format!(
-            "the game shows this string as the name of a place, centred on one line, and with {} its last character \
-             would start at dot {last}, where the line ends at dot {LINE_WIDTH}: leave room for that, with fewer or \
-             narrower letters",
-            said.join(" and ")
-        )),
-        _ => Ok(()),
+    let mut worst: Option<(usize, Vec<String>)> = None;
+    for (way, assumed) in place_ways(last, centring, advance)? {
+        let line = [widths.as_slice(), &way].concat();
+        let Some(start) = place_last_start(&line, centring, count) else { continue };
+        if worst.as_ref().is_none_or(|(furthest, _)| start > *furthest) {
+            worst = Some((start, said.iter().cloned().chain(assumed).collect()));
+        }
     }
+    Ok(worst)
 }
 
 /// The room a tag's text takes. Values are only known when the game runs, so they are estimates;
