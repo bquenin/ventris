@@ -21,6 +21,9 @@
 ;                   with the leftmost pixel in the top bit.
 ;
 ; Scratch: $00-$07 and $2E-$2F, the same direct-page bytes the original routine uses.
+;
+; The names of places are centred here too (`centre`, at the end), since the game centres them for
+; characters 14 dots wide.
 
 buffer      = $7969         ; tile data: 32 bytes (two tiles) per text column
 tilemap_top = $5980         ; copy of the tilemap: upper tile of each column
@@ -29,6 +32,39 @@ upload_mark = $13CA         ; where the game starts copying the tile buffer to t
 
 org $C8DDFB
     jsl draw
+
+; The name of a place is shown on entering it, on one line of a box at the top of the screen. The
+; game centres it at $C8:DB51 to $C8:DB9E: it counts the characters and puts half of what 16 leaves
+; in front as its own spaces, 14 dots each (see `PLACE_NAMES` in mod.rs). The letters drawn here
+; are narrower than that, so a translated name came out left of the middle. These bytes now call
+; `centre` instead, which measures the line in dots and puts the pen where it is centred.
+;
+; The code it replaces is only ever entered at its start, and the drawing loop goes on at $C8:DB9F.
+; The bytes left over hold calls to four of the engine's routines, which end in RTS and so have to be
+; called from their own bank: each takes the window state in X, as the drawing loop gives it, and
+; returns with the accumulator 16 bits wide.
+org $C8DB51
+    jsl centre
+    jmp $DB9F
+
+place_fetch:                ; the next code of the string, into $00; $13C4 moves past it
+    jsr $E4CC
+    rtl
+place_name:                 ; a party member's name ($02 and the member's number)
+    ldy $13C4
+    jsr $DF63
+    rep #$20
+    rtl
+place_string:               ; the name of an item or a spell ($4006 and its number)
+    ldy $13C4
+    jsr $E040
+    rep #$20
+    rtl
+place_number:               ; a number ($4001 and where it is read from)
+    rep #$20
+    jsr $DE4D
+    rep #$20
+    rtl
 
 org CODE
 draw:
@@ -268,4 +304,192 @@ clear_column:
     sta $001A,y
     sta $001C,y
     sta $001E,y
+    rts
+
+; Put the pen where the place name about to be drawn is centred on the window, to the dot: its
+; width W in dots is measured as below, and the pen goes PLACE_FIELD - W halved from the window's
+; left edge, or to the edge itself if the name is wider than the window. No space is drawn before
+; it. `place_name_pen` in mod.rs says the same, for the build's check.
+;
+; A name the game leaves in Japanese is centred the same way, so it lands where the game would not
+; put it in two cases: when it has an odd number of characters, and when it holds a party member's
+; name, which the game counts as one character more than it draws. The game puts such a name 7 dots
+; left of the middle; this puts it on the middle.
+;
+; W is what the renderer will advance for each character the drawing loop puts on the line, read
+; the way that loop reads it: a character's width in WIDTHS; for a party member's name, the name of
+; an item or a number, the characters the engine's own routine writes out for it, so that a name the
+; player typed and the digits of a number are measured as they are drawn. A speed or colour code
+; takes its value byte and no room. A line break, a page break or the end of the string ends the
+; measure: the box has one line.
+;
+; Those routines change $13C4 and the window state as they do for drawing. Both are put back as they
+; were, so that the drawing loop starts from the same place: $13C4, and +0F to +3A of the window
+; state, which hold the flags for a name or a number being drawn (+0F), the digits (+1D to +24, and
+; +2F for the first one drawn), where to go on after a name (+33) and the last code read (+38).
+;
+; In:   X    the window state; accumulator 8 bits, index registers 16, data bank $7E
+; Out:  +09, +0B and +0E (bit 7 clear: nothing drawn on the line yet) at the pen; +32, the number of
+;       the game's spaces still to draw, zero
+; Scratch: $00-$06, and what the engine's routines use when they are called for drawing
+centre:
+    php
+    rep #$30
+    lda $13C4
+    pha                     ; where the string starts
+    stx $00
+    ldy #$000F
+.save:
+    lda ($00),y
+    pha
+    iny
+    iny
+    cpy #$003B
+    bcc .save
+    pea $0000               ; the width so far, in dots
+
+.next:
+    jsl place_fetch
+    lda $00
+    cmp #$FFFF
+    beq .stop               ; the end of the string
+    cmp #$4001
+    beq .number
+    cmp #$4006
+    beq .string
+    cmp #$0005
+    bcs .character
+    cmp #$0002
+    beq .name
+    cmp #$0003
+    bcc .stop               ; a line break (0) or a page break (1)
+    inc $13C4               ; speed (3) or colour (4): its value
+    bra .next
+.stop:
+    jmp .measured
+.character:
+    sec
+    sbc #$0005
+    jsr place_width
+    bra .next
+
+.name:
+    jsl place_name
+    bra .words
+.string:
+    jsl place_string
+    lda $00
+    beq .stop               ; an item with no name: the drawing loop ends the line there too
+; The routine has written the name out at [$D7],$13C4 as glyph numbers plus $15, one word each,
+; ending in $FFFF, and put where the string goes on after it at +33.
+.words:
+    ldy $13C4
+    lda [$D7],y
+    cmp #$FFFF
+    beq .after
+    sec
+    sbc #$0015
+    jsr place_width
+    inc $13C4
+    inc $13C4
+    bra .words
+.after:
+    lda $0033,x
+    sta $13C4
+    bra .next
+
+; The routine has put the number's eight digits at +1D to +24 as the codes of the game's digits,
+; and at +2F how many of them, from the left, are zeros that are not drawn. The drawing loop draws
+; one digit at a time, and between two it looks at what follows the number in the string; when that
+; is the end of the string, it stops there, after the first digit. So that is all that is measured.
+.number:
+    jsl place_number
+    txa
+    clc
+    adc #$001D
+    sta $04                 ; the digits
+    lda $002F,x
+    and #$00FF
+    tay                     ; the first one drawn
+    lda #$0008
+    sta $06                 ; and one past the last
+    phy
+    ldy $13C4
+    lda [$D7],y
+    ply
+    cmp #$FFFF
+    bne .digit
+    tya
+    inc a
+    sta $06                 ; the number ends the string
+.digit:
+    cpy $06
+    bcc .one
+    jmp .next
+.one:
+    lda ($04),y
+    and #$00FF
+    sec
+    sbc #$0005
+    jsr place_width
+    iny
+    bra .digit
+
+.measured:
+    pla
+    sta $06                 ; the width
+    stx $00
+    ldy #$0039
+.restore:
+    pla
+    sta ($00),y
+    dey
+    dey
+    cpy #$000F
+    bcs .restore
+    pla
+    sta $13C4
+
+    lda #PLACE_FIELD
+    sec
+    sbc $06
+    bcs .fits
+    lda #$0000              ; wider than the window
+.fits:
+    lsr a                   ; the pen, in dots from the window's left edge
+    pha
+    lsr a
+    lsr a
+    lsr a
+    sep #$20
+    sta $000B,x             ; its column
+    rep #$20
+    asl a
+    asl a
+    asl a
+    asl a
+    asl a
+    clc
+    adc $0009,x
+    sta $0009,x             ; and that column's place in the tile buffer, on the line the box has
+    pla
+    and #$0007
+    sep #$20
+    sta $000E,x             ; the dot within the column; bit 7 clear
+    stz $0032,x
+    plp
+    rtl
+
+; Add the advance of glyph A to the width `centre` keeps on the stack. Changes A.
+place_width:
+    m16
+    x16
+    phx
+    tax
+    lda.l WIDTHS,x
+    plx
+    and #$00FF
+    clc
+    adc $03,s
+    sta $03,s
     rts
