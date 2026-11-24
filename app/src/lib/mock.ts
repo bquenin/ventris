@@ -260,7 +260,7 @@ export const mock = {
   about: (): Promise<About> =>
     later(
       {
-        version: "0.1.0",
+        version: "0.2.0",
         fonts: [
           { name: "unifont", about: "GNU Unifont 18.0.01", license: "OFL-1.1", terms: "SIL OPEN FONT LICENSE Version 1.1 …" },
           { name: "unscii-8", about: "Unscii-8, 8 by 8 pixels", license: "Public domain", terms: "Unscii is in the public domain." },

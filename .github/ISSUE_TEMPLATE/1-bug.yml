@@ -15,7 +15,7 @@ body:
     attributes:
       label: Version
       description: What `ventris --version` prints, or the commit if you built it from source.
-      placeholder: ventris 0.1.0
+      placeholder: ventris 0.2.0
     validations:
       required: true
   - type: dropdown

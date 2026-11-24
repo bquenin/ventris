@@ -1,6 +1,6 @@
 [project]
 name = "ventris-workbench"
-version = "0.1.0"
+version = "0.2.0"
 description = "Tools for taking a game apart, for the ventris translation patch engine"
 readme = "README.md"
 requires-python = ">=3.11"
