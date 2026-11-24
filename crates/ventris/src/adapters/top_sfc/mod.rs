@@ -1894,8 +1894,11 @@ pub const TYPED_NAME_LENGTH: usize = 6;
 /// reads the number ($C8:E35A): the two lowest bits are its size. Zero is a byte, up to 255, three
 /// digits; anything else is a word or more, which the engine may show with all eight of its digits
 /// (a negative word is read as a number of 24 bits).
+///
+/// The value is read as `encode` reads it, spaces left out, so `{NUM: 801F}` and `{NUM:80 1F}` are
+/// the same number as `{NUM:801F}`. A value that cannot be read as bytes is taken at eight digits.
 pub fn number_digits(value: &str) -> usize {
-    let flags = u8::from_str_radix(value.get(..2).unwrap_or(""), 16).unwrap_or(0xFF);
+    let flags = from_hex(&value.replace(' ', "")).and_then(|bytes| bytes.first().copied()).unwrap_or(0xFF);
     if flags & 3 == 0 { 3 } else { 8 }
 }
 

@@ -1540,17 +1540,29 @@ fn a_place_name_is_held_to_its_box() {
         (number_digits("801F"), number_digits("C01F"), number_digits("811F"), number_digits("8303")),
         (3, 3, 8, 8)
     );
+    // The value is read without its spaces, as the build encodes it, and one that cannot be read as
+    // bytes is taken at its widest.
+    assert_eq!(
+        (number_digits(" 801F"), number_digits("80 1F"), number_digits("8 01F"), number_digits("801f")),
+        (3, 3, 3, 3)
+    );
+    assert_eq!((number_digits("801"), number_digits(""), number_digits("  ")), (8, 8, 8));
     // Nine wide letters, three digits and an i are 190 dots, which start at 17: the i at 203. A tenth
     // letter makes 206 dots from 9, and the i at 211, though with one digit it would start at 197.
-    assert!(by_width(&format!("{}{{NUM:801F}}i", "W".repeat(9))).is_ok());
-    assert_eq!(
-        message(by_width(&format!("{}{{NUM:801F}}i", "W".repeat(10)))),
-        too_wide_with("{NUM:801F} showing 3 digits", 211)
-    );
+    // Spaces in the tag change nothing.
+    for number in ["{NUM:801F}", "{NUM: 801F}", "{NUM:80 1F}"] {
+        assert!(by_width(&format!("{}{number}i", "W".repeat(9))).is_ok(), "{number}");
+        assert_eq!(
+            message(by_width(&format!("{}{number}i", "W".repeat(10)))),
+            too_wide_with(&format!("{number} showing 3 digits"), 211)
+        );
+    }
     // A number that ends the name shows its first digit only, so that is all it is held to: twelve
     // wide letters and a digit are 206 dots from 9, the digit at 201; with a thirteenth, at 209.
-    assert!(by_width(&format!("{}{{NUM:801F}}", "W".repeat(12))).is_ok());
-    assert_eq!(message(by_width(&format!("{}{{NUM:801F}}", "W".repeat(13)))), too_wide(209));
+    for number in ["{NUM:801F}", "{NUM: 801F}", "{NUM:80 1F}"] {
+        assert!(by_width(&format!("{}{number}", "W".repeat(12))).is_ok(), "{number}");
+        assert_eq!(message(by_width(&format!("{}{number}", "W".repeat(13)))), too_wide(209));
+    }
 
     // Centred by width, a party member's name is also held to the longest a player can type: six
     // letters, here 14 dots each. Seven wide letters, Cress drawn as "ii" and an i are 124 dots and
