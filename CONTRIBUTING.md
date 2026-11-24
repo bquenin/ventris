@@ -13,10 +13,12 @@ translate them. There are three ways to help, each with a page that goes from no
 - **Improve ventris itself**: report a bug, or fix one, in the engine, the app or the workbench. Use the
   [issue forms](https://github.com/bquenin/ventris/issues/new/choose).
 
-To find others, ask a question or say what you are working on, there is
-[Discussions](https://github.com/bquenin/ventris/discussions): the
+To find others or ask a question, there is [Discussions](https://github.com/bquenin/ventris/discussions): the
 [Translations](https://github.com/bquenin/ventris/discussions/categories/translations) category for packs, the
 [Adapters](https://github.com/bquenin/ventris/discussions/categories/adapters) category for taking a game apart.
+A pack you are starting is claimed in the packs repository instead, with
+[the form for a new pack](https://github.com/bquenin/ventris-packs/issues/new/choose), so that two people do
+not begin the same one.
 
 ## Ground rules
 
