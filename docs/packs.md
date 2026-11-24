@@ -252,9 +252,15 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
 - 122 strings are the name of a place or a shop, which the game shows on entering it, centred in a box
   of one line at the top of the screen. The extracted script says which, in a comment under each. The
   game counts a name's characters to centre it, and puts half of what 16 leaves as spaces in front, 14
-  dots each. Two things leave the box without the name, and the build refuses both, naming the string:
+  dots each, which is right only for its own characters. A build with the variable-width renderer (one
+  that adds characters, renames one, or asks for it with the `renderer` option) centres a name by its
+  width instead: it measures in dots what the line will draw, a party member's name and a number
+  included as the game shows them, and starts the name half of what the window's 224 dots leave from its
+  left edge. A name left in Japanese is centred that way too, so one with an odd number of characters,
+  or with a party member's name in it, sits on the middle where the game has it 7 dots to the left. Two
+  things leave the box without the name, and the build refuses both, naming the string:
   - **More than 16 characters.** A party member's name counts as its letters, as the menus show them,
-    and one more.
+    and one more. This is the game's own limit; the build holds every pack to it.
   - **A last character that would start at dot 208 or further**, centring included. Sixteen of the
     game's own characters, 14 dots each, are already too wide; narrower letters leave more room.
 

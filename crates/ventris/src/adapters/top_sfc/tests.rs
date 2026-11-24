@@ -326,14 +326,16 @@ fn the_adapter_declares_itself_properly() {
 #[test]
 fn the_injected_code_assembles_to_what_the_python_reference_assembles() {
     // Each source with the addresses a build gives it, and the SHA-1 of what the reference makes of
-    // it: every segment's address, three bytes with the lowest first, followed by its code.
+    // it: every segment's address, three bytes with the lowest first, followed by its code. The
+    // renderer has since gained the centring of place names, which the reference never had: its
+    // SHA-1 is of what this source assembles to, so that any change to it is seen.
     type Symbols = [(&'static str, i64)];
     let sources: [(&str, &Symbols, usize, &str); 4] = [
         (
             include_str!("vwf.asm"),
-            &[("CODE", 0x700000), ("WIDTHS", 0x710000), ("FONT_BANK", 0x72)],
-            416,
-            "5585ea4790a9e489c301c7e80e539da6e3c0420d",
+            &[("CODE", 0x700000), ("WIDTHS", 0x710000), ("FONT_BANK", 0x72), ("PLACE_FIELD", 224)],
+            726,
+            "02d44e65b8bba2a646d157a320a13ef54a214d10",
         ),
         (
             include_str!("moved.asm"),
@@ -371,11 +373,16 @@ fn the_injected_code_assembles_to_what_the_python_reference_assembles() {
         assert_eq!(assembly.segments.iter().map(|(_, code)| code.len()).sum::<usize>(), size);
         assert_eq!(found, sha1);
     }
-    // The renderer is one call in the game and the routine it goes to.
+    // The renderer is one call in the game, the game's count of a place name's characters, which it
+    // replaces with a call and the four calls into the engine its centring needs, and the routines
+    // they go to: the renderer's 412 bytes, then the centring.
     let renderer = assemble(sources[0].0, sources[0].1).unwrap();
     let places: Vec<(u32, usize)> = renderer.segments.iter().map(|(address, code)| (*address, code.len())).collect();
-    assert_eq!(places, [(0xC8DDFB, 4), (0x700000, 412)]);
+    assert_eq!(places, [(0xC8DDFB, 4), (0xC8DB51, CENTRING_HOOK), (0x700000, 685)]);
     assert_eq!(renderer.segments[0].1, hex("22 00 00 70"));
+    assert_eq!(renderer.segments[1].1[..7], hex("22 9c 01 70 4c 9f db"));
+    // The code it replaces runs to $C8:DB9E, and the drawing loop it goes on to starts after it.
+    const { assert!(CENTRING_HOOK <= 0xDB9F - 0xDB51) };
 }
 
 #[test]
@@ -585,6 +592,9 @@ fn a_real_script_is_put_back() {
     assert_eq!(refused(&pack_of(&[("01", 0, &"あ".repeat(70000))])), "dialogue block is larger than 64 KiB");
 }
 
+/// How many bytes of the game's count of a place name's characters the renderer writes over.
+const CENTRING_HOOK: usize = 37;
+
 #[test]
 fn a_real_pack_with_new_characters() {
     let Some(rom) = game() else { return };
@@ -644,8 +654,17 @@ fn a_real_pack_with_new_characters() {
     let letter = SPRITE_FONT + own;
     assert_eq!((built_rom[letter + 8], built_rom[letter + GLYPH_SIZE + 8]), (0x0F, 0xC0));
 
-    // Installing the renderer alone changes only its call site, the bank of the sprite text's
-    // font and the checksum in the original 6 MiB.
+    // The game's count that centres the name of a place now calls the renderer's own centring, and
+    // goes on to the loop that draws the line; the four calls after are that routine's way into the
+    // engine's own routines.
+    let centring = snes::snes_to_pc(PLACE_CENTRING.0, MAPPING).unwrap();
+    assert_eq!(rom[centring..centring + 12], PLACE_CENTRING.1);
+    assert_eq!(built_rom[centring..centring + 7], hex("22 9c 01 70 4c 9f db"));
+    let stubs = "20 cc e4 6b ac c4 13 20 63 df c2 20 6b ac c4 13 20 40 e0 c2 20 6b c2 20 20 4d de c2 20 6b";
+    assert_eq!(built_rom[centring + 7..centring + CENTRING_HOOK], hex(stubs));
+
+    // Installing the renderer alone changes only its call site, the centring of place names, the
+    // bank of the sprite text's font and the checksum in the original 6 MiB.
     let renderer = BuildOptions { switches: ["renderer".to_string()].into(), ..Default::default() };
     let (summary, plain) = built(&rom, &Pack::default(), &renderer).unwrap();
     assert_eq!(
@@ -653,7 +672,10 @@ fn a_real_pack_with_new_characters() {
         ["changed:   nothing, the script matches the game", "renderer:  variable-width renderer installed"]
     );
     let fields = checksum_fields(&plain);
-    assert!(plain[..call] == rom[..call] && plain[call + 4..bank_at] == rom[call + 4..bank_at]);
+    let after = centring + CENTRING_HOOK;
+    assert!(plain[..centring] == rom[..centring] && plain[after..call] == rom[after..call]);
+    assert!(plain[call + 4..bank_at] == rom[call + 4..bank_at]);
+    assert!(plain[centring..after] == built_rom[centring..after]);
     assert_eq!(plain[bank_at], 0x7B);
     assert!(plain[bank_at + 1..fields] == rom[bank_at + 1..fields]);
     assert!(plain[fields + 4..rom.len()] == rom[fields + 4..]);
@@ -1418,7 +1440,9 @@ fn a_place_name_is_held_to_its_box() {
         })
     };
     let names = place_names_of(&[("クレス", 5, "Cress"), ("ミント", 4, "Mint")]);
-    let check = |text: &str| place_name(text, &extra, &advance, &names);
+    // As the game's engine centres, by count, and as the routine the renderer brings does, by width.
+    let by_count = |text: &str| place_name(text, &extra, &advance, &names, Centring::ByCount);
+    let by_width = |text: &str| place_name(text, &extra, &advance, &names, Centring::ByWidth);
     let too_many = |count: usize| {
         format!(
             "the game shows this string as the name of a place, on one line of at most 16 characters, and it has \
@@ -1432,30 +1456,63 @@ fn a_place_name_is_held_to_its_box() {
         )
     };
 
-    // Sixteen characters fit, and seventeen do not, however narrow.
-    assert!(check(&"i".repeat(16)).is_ok());
-    assert_eq!(message(check(&"i".repeat(17))), too_many(17));
-    // Sixteen of the game's own characters, 14 dots apart, put the last at dot 210, past the line.
-    assert!(check(&"あ".repeat(15)).is_ok());
-    assert_eq!(message(check(&"あ".repeat(16))), too_wide(210));
-    // Fourteen characters are centred behind one space of 14 dots: the last starts at 206, or at 208.
-    assert!(check(&format!("{}{}i", "あ".repeat(8), "W".repeat(5))).is_ok());
-    assert_eq!(message(check(&format!("{}{}i", "あ".repeat(7), "W".repeat(6)))), too_wide(208));
+    // Where the routine puts the pen: half of what the window's 224 dots leave, or its edge.
+    assert_eq!(
+        (PLACE_FIELD, place_name_pen(64), place_name_pen(83), place_name_pen(224), place_name_pen(240)),
+        (224, 80, 70, 0, 0)
+    );
+
+    // Sixteen characters fit, and seventeen do not, however narrow, whichever way the name is centred.
+    for check in [&by_count as &dyn Fn(&str) -> Result<()>, &by_width] {
+        assert!(check(&"i".repeat(16)).is_ok());
+        assert_eq!(message(check(&"i".repeat(17))), too_many(17));
+    }
+    // Sixteen of the game's own characters, 14 dots apart, put the last at dot 210, past the line,
+    // both behind no space and centred on the 224 dots they fill.
+    assert!(by_count(&"あ".repeat(15)).is_ok());
+    assert_eq!(message(by_count(&"あ".repeat(16))), too_wide(210));
+    assert!(by_width(&"あ".repeat(15)).is_ok());
+    assert_eq!(message(by_width(&"あ".repeat(16))), too_wide(210));
+    // By count, fourteen characters are centred behind one space of 14 dots: the last starts at 206,
+    // or at 208.
+    assert!(by_count(&format!("{}{}i", "あ".repeat(8), "W".repeat(5))).is_ok());
+    assert_eq!(message(by_count(&format!("{}{}i", "あ".repeat(7), "W".repeat(6)))), too_wide(208));
+    // By width, thirteen wide letters are 208 dots, centred from dot 8: the last starts at 200. A
+    // fourteenth fills the window, which leaves the last at 208. A fifteenth is wider than the
+    // window, which starts the name at its edge.
+    assert!(by_width(&"W".repeat(13)).is_ok());
+    assert_eq!(message(by_width(&"W".repeat(14))), too_wide(208));
+    assert_eq!(message(by_width(&"W".repeat(15))), too_wide(224));
+    // What fits behind the game's spaces may not fit centred, and the other way round: sixteen
+    // characters, 208 dots, have no space before them by count and start at dot 8 centred; fourteen,
+    // 210 dots, have one space of 14 by count and start at dot 7 centred.
+    let sixteen = format!("{}{}", "W".repeat(12), "i".repeat(4));
+    assert!(by_count(&sixteen).is_ok());
+    assert_eq!(message(by_width(&sixteen)), too_wide(8 + 204));
+    let fourteen = format!("{}{}", "あ".repeat(7), "W".repeat(7));
+    assert!(by_width(&fourteen).is_ok());
+    assert_eq!(message(by_count(&fourteen)), too_wide(14 + 98 + 96));
 
     // A name counts as the letters of the name in the record and one more: 6 for Cress.
-    assert!(check("{クレス}{クレス}ii").is_ok());
-    assert_eq!(message(check("{クレス}{クレス}{クレス}i")), too_many(19));
-    assert!(check(&format!("{{クレス}}{}", "i".repeat(10))).is_ok());
-    assert_eq!(message(check(&format!("{{クレス}}{}", "i".repeat(11)))), too_many(17));
+    assert!(by_count("{クレス}{クレス}ii").is_ok());
+    assert!(by_width("{クレス}{クレス}ii").is_ok());
+    assert_eq!(message(by_count("{クレス}{クレス}{クレス}i")), too_many(19));
+    assert!(by_count(&format!("{{クレス}}{}", "i".repeat(10))).is_ok());
+    assert_eq!(message(by_count(&format!("{{クレス}}{}", "i".repeat(11)))), too_many(17));
     // The game counts the name in the record and draws the one dialogue shows, which may be longer:
-    // three for the count, and fifteen wide letters on the line, after five spaces.
+    // three for the count, and fifteen wide letters on the line, after five spaces by count, or from
+    // the window's edge by width, since the name is 248 dots.
     let long = place_names_of(&[("クレス", 3, "WWWWWWWWWWWWWWW")]);
-    assert_eq!(message(place_name("{クレス}ii", &extra, &advance, &long)), too_wide(70 + 15 * 16 + 4));
+    let with_long = |text: &str, centring| place_name(text, &extra, &advance, &long, centring);
+    assert_eq!(message(with_long("{クレス}ii", Centring::ByCount)), too_wide(70 + 15 * 16 + 4));
+    assert_eq!(message(with_long("{クレス}ii", Centring::ByWidth)), too_wide(15 * 16 + 4));
     // The same name written by the member's number is the same, and a character of the game's font
     // written as {K:..} is 14 dots like the others.
-    assert_eq!(message(place_name("{NAME:01}ii", &extra, &advance, &long)), too_wide(70 + 15 * 16 + 4));
-    assert!(check(&"{K:0180}".repeat(15)).is_ok());
-    assert_eq!(message(check(&"{K:0180}".repeat(16))), too_wide(210));
+    assert_eq!(message(with_long("{NAME:01}ii", Centring::ByCount)), too_wide(70 + 15 * 16 + 4));
+    assert_eq!(message(with_long("{NAME:01}ii", Centring::ByWidth)), too_wide(15 * 16 + 4));
+    assert!(by_count(&"{K:0180}".repeat(15)).is_ok());
+    assert_eq!(message(by_count(&"{K:0180}".repeat(16))), too_wide(210));
+    assert_eq!(message(by_width(&"{K:0180}".repeat(16))), too_wide(210));
 
     // How the game counts, from the bytes. Mint's number is the name code itself, so the game reads
     // it as another name, of the member numbered by the byte after; for あ there is none, so nothing.
@@ -1466,8 +1523,12 @@ fn a_place_name_is_held_to_its_box() {
     assert_eq!(count("{ミント}{クレス}"), 4 + 4 + 5 + 1);
     // A number is two characters to the count, whatever it shows; on the line it takes a digit's room.
     assert_eq!(count("モーリア坑道地下{NUM:801F}階"), 11);
-    assert!(check(&format!("{}{{NUM:801F}}あ", "あ".repeat(13))).is_ok());
-    assert_eq!(message(check(&format!("{}{{NUM:801F}}あ", "あ".repeat(14)))), too_many(17));
+    assert!(by_count(&format!("{}{{NUM:801F}}あ", "あ".repeat(13))).is_ok());
+    assert_eq!(message(by_count(&format!("{}{{NUM:801F}}あ", "あ".repeat(14)))), too_many(17));
+    // Centred by width, the digit's 14 dots count toward the width: 194 dots start at 15, and the
+    // last letter at 205; 210 dots start at 7, and the last at 213.
+    assert!(by_width(&format!("{}{{NUM:801F}}i", "W".repeat(11))).is_ok());
+    assert_eq!(message(by_width(&format!("{}{{NUM:801F}}i", "W".repeat(12)))), too_wide(213));
 
     // `extract` says so under each of the 122 strings, and under nothing else.
     let note = |section: &str, number: u32| Top.note(section, Some(number));
@@ -1509,13 +1570,14 @@ fn a_real_place_name_is_held_to_its_box() {
 
     // A name longer than the menus hold leaves them the game's names, so the game counts クレス, three,
     // and dialogue draws fifteen letters of 14 dots. The game's own string with it is left alone, as
-    // is every string a pack gives as the game has it; changed, it is held to the line.
+    // is every string a pack gives as the game has it; changed, it is held to the line. A renamed
+    // character brings the renderer, which centres by width: 252 dots start at the window's edge.
     let wide = [("クレス", "ＷＷＷＷＷＷＷＷＷＷＷＷＷＷＷ")];
     assert_eq!(extract(&rom).unwrap().texts["05"][&0], "{クレス}の家");
     plainly_built(&rom, &named(&[("05", 0, "{クレス}の家")], &wide));
     assert_eq!(
         refused(&named(&[("05", 0, "{クレス}のいえ")], &wide)),
         "string 05.000: the game shows this string as the name of a place, centred on one line, and its last \
-         character would start at dot 294, where the line ends at dot 208: use fewer or narrower letters"
+         character would start at dot 238, where the line ends at dot 208: use fewer or narrower letters"
     );
 }

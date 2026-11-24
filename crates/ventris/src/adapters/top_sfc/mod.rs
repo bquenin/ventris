@@ -178,6 +178,8 @@
 //! Text engine routines (bank $C8)
 //!
 //! ```text
+//! $DB51      centres the name of a place by counting its characters (see `PLACE_NAMES`). A build
+//!            that installs the renderer replaces it with a routine that measures dots (vwf.asm).
 //! $E550      fetch character: reads [$D7],Y and returns a 16-bit code in A, or branches away on
 //!            FF FF. A two-byte code becomes page * 128 + (low & $7F). Called from $E506 and $E51C
 //!            only.
@@ -236,6 +238,11 @@ pub const RENDERER_FONT_END: usize = 0x7B0000;
 /// The routine finds a glyph at its number times 32 within one bank, so it reaches 2,048.
 pub const SPRITE_FONT: usize = 0x7B0000;
 pub const SPRITE_FONT_BANK_AT: u32 = 0xC8E9AB;
+/// The start of the game's code that centres the name of a place by counting its characters (see
+/// `PLACE_NAMES`), which the renderer replaces, and its first bytes: REP #$20, STZ $02, LDA $13C4,
+/// PHA, LDY $13C4, LDA [$D7],Y.
+pub const PLACE_CENTRING: (u32, [u8; 12]) =
+    (0xC8DB51, [0xC2, 0x20, 0x64, 0x02, 0xAD, 0xC4, 0x13, 0x48, 0xAC, 0xC4, 0x13, 0xB7]);
 /// The pitch at which the game spaces its own glyphs.
 pub const ORIGINAL_ADVANCE: usize = 14;
 // Menu text: labels, item and skill names. 929 strings back to back, each ending in $FF, in the
@@ -369,9 +376,10 @@ pub const SPRITE_PAGE: usize = 32;
 /// then the string's number; these are the 122 strings that command names, found by reading every
 /// area's events command by command, and the game shows none of them any other way.
 ///
-/// The command's code ($C4:0E96) sets bit 0 of $137D, which has the text engine centre the line
-/// ($C8:DB51 to $C8:DB9C). It counts the string's characters, draws half of what 16 leaves of the
-/// count as the game's spaces in front, 14 dots each, then the string. Two things break the box:
+/// The command's code ($C4:0E96) sets bit 0 of $137D, which has the text engine centre the line. The
+/// game's own engine does it by count ($C8:DB51 to $C8:DB9E): it counts the string's characters,
+/// draws half of what 16 leaves of the count as its own spaces in front, 14 dots each, then the
+/// string. What it counts is set out at `place_name_count`. In the game, two things break the box:
 ///
 /// - more than 16 characters. The engine takes the count from 16 in one byte without a check, so 17
 ///   gives about 127 spaces;
@@ -379,7 +387,11 @@ pub const SPRITE_PAGE: usize = 32;
 ///   ($C8:DC31). The box has one line, so the page never fills: the name is not drawn at all and the
 ///   box shows what was left in it from an earlier message.
 ///
-/// What the engine counts is set out at `place_name_count`.
+/// A build that installs the renderer, whose letters are narrower than 14 dots, replaces that count
+/// with a routine of its own (`centre` in vwf.asm): it measures what the line will draw, in dots, and
+/// puts the pen where the name is centred on the window (`place_name_pen`), with no spaces before it.
+/// That routine does not count characters and needs no limit on them; only the line break at dot 208
+/// still holds. The build still holds a pack to the game's 16 characters (`PLACE_NAME_LENGTH`).
 #[rustfmt::skip]
 pub const PLACE_NAMES: [(usize, u32); 122] = [
     (3, 0), (5, 0), (5, 1), (5, 2), (5, 3), (5, 4), (5, 5), (13, 1), (17, 0), (17, 1), (17, 2), (17, 3), (17, 4),
@@ -394,8 +406,20 @@ pub const PLACE_NAMES: [(usize, u32); 122] = [
     (85, 0), (85, 2), (87, 0), (87, 1), (87, 2), (89, 1), (89, 2), (89, 3), (91, 0), (93, 0), (93, 1), (95, 0),
     (97, 0),
 ];
-/// The most characters a place name may have, as the game counts them.
+/// The most characters a place name may have, as the game counts them: the limit the game's own
+/// engine has, which the build holds a pack to whether or not the routine that centres by width is
+/// installed. That routine does not depend on it.
 pub const PLACE_NAME_LENGTH: usize = 16;
+/// The text window, which a place name is centred on: 28 columns of 8 dots, from dot 16 on the screen.
+pub const PLACE_FIELD: usize = 28 * 8;
+
+/// Where the routine that centres a place name puts the pen for a name `width` dots wide, in dots
+/// from the window's left edge: half of what the window leaves, or the edge itself when nothing is
+/// left. `centre` in vwf.asm does the same with the same `PLACE_FIELD`.
+pub fn place_name_pen(width: usize) -> usize {
+    PLACE_FIELD.saturating_sub(width) / 2
+}
+
 /// The menus draw most of their fixed labels at places that are plain numbers in the game: in
 /// lists of labels handed to the routine at $C2:748B (a byte for the colour, the string's number
 /// and its place, five bytes a label), or as the number an instruction loads before a call to
@@ -1701,7 +1725,8 @@ pub fn build_sprite_font(rom: &[u8], extra: &BTreeMap<char, Glyph>) -> Result<Ve
 }
 
 /// Write the variable-width renderer and its font into the expanded area and hook it in, and give
-/// the routine that draws dialogue as sprites its font.
+/// the routine that draws dialogue as sprites its font. The renderer also takes over centring the
+/// names of places (see `PLACE_NAMES`).
 pub fn install_renderer(rom: Vec<u8>, widths: &[u8], glyph_data: &[u8], sprite_font: &[u8]) -> Result<Vec<u8>> {
     let mut out = expanded(rom)?;
     out[RENDERER_WIDTHS..RENDERER_WIDTHS + widths.len()].copy_from_slice(widths);
@@ -1716,7 +1741,12 @@ pub fn install_renderer(rom: Vec<u8>, widths: &[u8], glyph_data: &[u8], sprite_f
         ("CODE", cpu_address(RENDERER_CODE)?),
         ("WIDTHS", cpu_address(RENDERER_WIDTHS)?),
         ("FONT_BANK", cpu_address(RENDERER_FONT)? >> 16),
+        ("PLACE_FIELD", PLACE_FIELD as i64),
     ];
+    let centring = snes::snes_to_pc(PLACE_CENTRING.0, MAPPING)?;
+    if out.get(centring..centring + PLACE_CENTRING.1.len()) != Some(&PLACE_CENTRING.1[..]) {
+        return Err(Error::Image("the game's code at $C8DB51 is not what centres the name of a place".into()));
+    }
     snes::write_code(&out, &assemble(include_str!("vwf.asm"), &symbols)?.segments, MAPPING)
 }
 
@@ -1818,6 +1848,9 @@ pub struct PlaceNameName<'a> {
 ///
 /// A number, `{NUM:..}`, is four bytes, two characters of two bytes for this count: it counts two,
 /// whatever number it shows.
+///
+/// The game's engine centres by this count. The routine a build installs with the renderer does not
+/// use it; the build counts a name this way to hold it to the game's 16 characters (`PLACE_NAME_LENGTH`).
 pub fn place_name_count(data: &[u8], record: &dyn Fn(u8) -> Option<usize>) -> usize {
     const NAME: u8 = 0x02;
     let body = data.strip_suffix(&END).unwrap_or(data);
@@ -1835,12 +1868,21 @@ pub fn place_name_count(data: &[u8], record: &dyn Fn(u8) -> Option<usize>) -> us
     count
 }
 
+/// How the name of a place is centred in a build: by the game's own engine, which counts characters,
+/// or by the routine the renderer brings, which measures dots (see `PLACE_NAMES`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Centring {
+    ByCount,
+    ByWidth,
+}
+
 /// Hold a place name (see `PLACE_NAMES`) to what its box shows. Fails with `Error::Text` when the
 /// game would count more than 16 characters in it, or when, centred, a character of it would start
 /// past the end of the line.
 ///
 /// `extra` gives the codes of the characters the pack adds, `advance` the width of a character in
-/// dots, and `names` each party member's name as the game counts it and as it draws it.
+/// dots, `names` each party member's name as the game counts it and as it draws it, and `centring`
+/// whether the build leaves the centring to the game or installs the routine that centres by width.
 ///
 /// A number, `{NUM:..}`, takes the room of one of the game's digits, the least it can: what it shows
 /// is not known until the game runs. A character of the game's font with no entry in the table yet,
@@ -1852,6 +1894,7 @@ pub fn place_name(
     extra: &Extra,
     advance: &dyn Fn(char) -> Result<usize>,
     names: &[PlaceNameName],
+    centring: Centring,
 ) -> Result<()> {
     let record = |member: u8| {
         let tag = tag_of(&SPEAKERS, member)?;
@@ -1889,10 +1932,15 @@ pub fn place_name(
         }
         rest = &rest[step..];
     }
-    let spaces = (PLACE_NAME_LENGTH - count) / 2;
-    let before_last: usize = widths.iter().rev().skip(1).sum();
-    let last = ORIGINAL_ADVANCE * spaces + before_last;
-    if !widths.is_empty() && last >= LINE_WIDTH {
+    let Some(last) = widths.last() else { return Ok(()) };
+    let width: usize = widths.iter().sum();
+    // Where the pen is before the name: after the game's spaces, or where the routine puts it.
+    let pen = match centring {
+        Centring::ByCount => ORIGINAL_ADVANCE * ((PLACE_NAME_LENGTH - count) / 2),
+        Centring::ByWidth => place_name_pen(width),
+    };
+    let last = pen + width - last;
+    if last >= LINE_WIDTH {
         return text_error(format!(
             "the game shows this string as the name of a place, centred on one line, and its last character would \
              start at dot {last}, where the line ends at dot {LINE_WIDTH}: use fewer or narrower letters"
@@ -2348,6 +2396,8 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<BuildRes
         advances = glyphs.iter().map(|(char, shape)| (*char, fonts::proportional(shape).1)).collect();
     }
     let advance = |char: char| -> Result<usize> { Ok(advances.get(&char).copied().unwrap_or(ORIGINAL_ADVANCE)) };
+    // The renderer, installed below when there are widths for it, brings its own centring of place names.
+    let centring = if widths.is_empty() { Centring::ByCount } else { Centring::ByWidth };
     // The glyph that draws a character, for those the game's font or the pack's has.
     let glyph_number = |char: char| -> Option<usize> {
         match TABLE.codes.get(&char) {
@@ -2429,7 +2479,7 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<BuildRes
                 Err(other) => return Err(other),
             };
             if PLACE_NAMES.contains(&(index, *number)) && !untouched {
-                match place_name(given, &extra, &advance, &place_names) {
+                match place_name(given, &extra, &advance, &place_names, centring) {
                     Ok(()) => {}
                     Err(Error::Text(message)) => return text_error(format!("string {shown}.{number:03}: {message}")),
                     Err(other) => return Err(other),
