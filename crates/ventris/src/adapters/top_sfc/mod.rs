@@ -1820,8 +1820,10 @@ pub fn place_name_count(data: &[u8], record: &dyn Fn(u8) -> Option<usize>) -> us
 /// dots, and `names` each party member's name as the game counts it and as it draws it.
 ///
 /// A number, `{NUM:..}`, takes the room of one of the game's digits, the least it can: what it shows
-/// is not known until the game runs. Another tag takes no room. A line break is counted as the game
-/// counts it, and takes no room; what the box does with one has not been seen.
+/// is not known until the game runs. A character of the game's font with no entry in the table yet,
+/// `{K:..}`, takes the 14 dots of the game's own characters. Another tag takes no room, `{RAW:..}`
+/// included, which is for bytes the game's own text has and nothing a translator writes. A line break
+/// is counted as the game counts it, and takes no room; what the box does with one has not been seen.
 pub fn place_name(
     text: &str,
     extra: &Extra,
@@ -1846,14 +1848,17 @@ pub fn place_name(
     while let Some(char) = rest.chars().next() {
         let mut step = char.len_utf8();
         if char == '{'
-            && let Some(Token::Tag { raw, name, .. }) = tag_at(rest)
+            && let Some(Token::Tag { raw, name, value }) = tag_at(rest)
         {
             step = raw.len();
-            if let Some(shown) = names.iter().find(|shown| shown.tag == name) {
+            // A name may also be written by the member's number, as {NAME:01}.
+            let member = value.and_then(|value| u8::from_str_radix(&value.replace(' ', ""), 16).ok());
+            let tag = member.and_then(|member| tag_of(&SPEAKERS, member)).filter(|_| name == "NAME").unwrap_or(name);
+            if let Some(shown) = names.iter().find(|shown| shown.tag == tag) {
                 for char in shown.drawn.chars() {
                     widths.push(advance(char)?);
                 }
-            } else if name == "NUM" {
+            } else if name == "NUM" || name == "K" {
                 widths.push(ORIGINAL_ADVANCE);
             }
         } else if char != '\n' {

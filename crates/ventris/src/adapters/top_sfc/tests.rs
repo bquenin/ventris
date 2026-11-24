@@ -1399,6 +1399,11 @@ fn a_place_name_is_held_to_its_box() {
     // three for the count, and fifteen wide letters on the line, after five spaces.
     let long = place_names_of(&[("クレス", 3, "WWWWWWWWWWWWWWW")]);
     assert_eq!(message(place_name("{クレス}ii", &extra, &advance, &long)), too_wide(70 + 15 * 16 + 4));
+    // The same name written by the member's number is the same, and a character of the game's font
+    // written as {K:..} is 14 dots like the others.
+    assert_eq!(message(place_name("{NAME:01}ii", &extra, &advance, &long)), too_wide(70 + 15 * 16 + 4));
+    assert!(check(&"{K:0180}".repeat(15)).is_ok());
+    assert_eq!(message(check(&"{K:0180}".repeat(16))), too_wide(210));
 
     // How the game counts, from the bytes. Mint's number is the name code itself, so the game reads
     // it as another name, of the member numbered by the byte after; for あ there is none, so nothing.
