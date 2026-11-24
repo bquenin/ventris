@@ -77,10 +77,11 @@ translated and have not been reviewed by a human translator yet.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the ground rules and the checks a pull request passes.
 
-Questions, a pack you are starting or would like in your language, and taking a game apart go to
-[Discussions](https://github.com/bquenin/ventris/discussions). Bugs and requests for a game go to
-[Issues](https://github.com/bquenin/ventris/issues), and a wrong line in a translation to the
-[packs repository's issues](https://github.com/bquenin/ventris-packs/issues).
+Questions, a translation you would like in your language or would like help with, and taking a game apart
+go to [Discussions](https://github.com/bquenin/ventris/discussions). Bugs and requests for a game go to
+[Issues](https://github.com/bquenin/ventris/issues). A wrong line in a translation, and a pack you are
+starting, go to the [packs repository's issues](https://github.com/bquenin/ventris-packs/issues), which has
+a form for each.
 
 ## Games
 

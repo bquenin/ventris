@@ -3,6 +3,9 @@ contact_links:
   - name: A line is wrong in a translation
     url: https://github.com/bquenin/ventris-packs/issues/new/choose
     about: A line that reads wrong, means the wrong thing or does not fit on screen belongs in the packs repository, where the translations are kept.
-  - name: A question, an idea, or a pack or a game you are working on
+  - name: A translation you are starting
+    url: https://github.com/bquenin/ventris-packs/issues/new/choose
+    about: Say which game and language you are taking in the packs repository, so that two people do not begin the same pack.
+  - name: A question, an idea, or a game you are working on
     url: https://github.com/bquenin/ventris/discussions
-    about: Questions, ideas, a pack you are starting or would like help with, and taking a game apart are talked over in Discussions.
+    about: Questions, ideas, finding people to share a pack with, and taking a game apart are talked over in Discussions.
