@@ -7,6 +7,12 @@ writing that down as code. If you can read assembly, or are willing to learn on 
 If you would like a game supported and are not going to write the adapter yourself,
 [ask for it](#asking-for-a-game) instead.
 
+Questions and findings along the way go in the
+[Adapters](https://github.com/bquenin/ventris/discussions/categories/adapters) category of Discussions, where
+two posts tell how the existing adapters were made:
+[Tales of Phantasia](https://github.com/bquenin/ventris/discussions/2) and
+[Tales of Destiny 2](https://github.com/bquenin/ventris/discussions/3).
+
 ## What an adapter is
 
 An **adapter** is the code for one game: one Rust module, a folder of its own under

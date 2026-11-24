@@ -77,6 +77,11 @@ translated and have not been reviewed by a human translator yet.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the ground rules and the checks a pull request passes.
 
+Questions, a pack you are starting or would like in your language, and taking a game apart go to
+[Discussions](https://github.com/bquenin/ventris/discussions). Bugs and requests for a game go to
+[Issues](https://github.com/bquenin/ventris/issues), and a wrong line in a translation to the
+[packs repository's issues](https://github.com/bquenin/ventris-packs/issues).
+
 ## Games
 
 It is early days: two games so far, one on the Super Famicom and one on the PlayStation 2.

@@ -13,6 +13,11 @@ translate them. There are three ways to help, each with a page that goes from no
 - **Improve ventris itself**: report a bug, or fix one, in the engine, the app or the workbench. Use the
   [issue forms](https://github.com/bquenin/ventris/issues/new/choose).
 
+To find others, ask a question or say what you are working on, there is
+[Discussions](https://github.com/bquenin/ventris/discussions): the
+[Translations](https://github.com/bquenin/ventris/discussions/categories/translations) category for packs, the
+[Adapters](https://github.com/bquenin/ventris/discussions/categories/adapters) category for taking a game apart.
+
 ## Ground rules
 
 - **No game files, ever.** No image, no extracted script, no font sheet, no saved state, no patch made from
