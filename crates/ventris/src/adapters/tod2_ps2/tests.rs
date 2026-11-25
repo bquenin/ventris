@@ -1335,6 +1335,29 @@ fn glyphs_go_into_the_half_width_font_small_or_reduced() {
 }
 
 #[test]
+fn a_reduced_capital_keeps_its_accent_apart_from_the_letter() {
+    // The built-in font draws a capital 96 by 128 pixels, and the build reduces it to a half-width
+    // cell of 12 by 16. A pixel of the cell at least half ink comes out at level 10 or brighter; the
+    // dimmer levels are the smoothing of an edge and the dark line around a letter. Counted at that
+    // level, an accented capital is two blocks of rows, the accent and the letter, with a row
+    // between them that has no ink. E, which has no accent, is one block.
+    let capitals: Vec<char> = "EÉÈÊËÀÔÜ".chars().collect();
+    let drawn = fonts::new_bitmaps(&Font::built_ins(FONTS), &capitals, false).unwrap();
+    let blocks = |char: &char| {
+        let mut texture = vec![0; HALF_FONT_PIXELS + HALF_ROW_BYTES * HALF_HEIGHT_CELL];
+        draw_half_glyph(&mut texture, 0, &drawn[char]).unwrap();
+        let inked: Vec<bool> = (0..HALF_HEIGHT_CELL)
+            .map(|y| {
+                let row = &texture[HALF_FONT_PIXELS + y * HALF_ROW_BYTES..][..HALF_WIDTH_CELL / 2];
+                row.iter().any(|byte| byte & 0x0F >= 10 || byte >> 4 >= 10)
+            })
+            .collect();
+        inked.iter().zip(std::iter::once(&false).chain(&inked)).filter(|(now, before)| **now && !**before).count()
+    };
+    assert_eq!(capitals.iter().map(blocks).collect::<Vec<usize>>(), [1, 2, 2, 2, 2, 2, 2, 2]);
+}
+
+#[test]
 fn what_the_game_draws_as_something_else_needs_a_glyph_of_its_own() {
     // A list of glyphs: the wide space, a full-width capital Z and digit 0, a closing double
     // quote, a minus sign, an opening corner bracket.

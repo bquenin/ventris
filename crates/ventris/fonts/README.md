@@ -24,7 +24,9 @@ of Destiny 2's half-width font:
 uv run --with pillow python tools/fonts/outline_to_bdf.py DejaVuSansCondensed-Bold.ttf -o dejavu-condensed-bold.bdf
 ```
 
-Each letter is drawn eight times the size of the game's cell, and a build reduces it to the cell.
+Each letter is drawn eight times the size of the game's cell, and a build reduces it to the cell. A letter
+that rises above the cell, such as a capital with an accent (`É`, `À`, `Ô`), is drawn shorter than the
+others so that its accent stays in the cell.
 
 ## Adding one
 

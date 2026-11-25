@@ -784,6 +784,14 @@ mod tests {
         let bitmaps = load_bdf(&dejavu, &characters("Aéж一")).unwrap();
         assert_eq!(bitmaps.keys().copied().collect::<Vec<char>>(), ['A', 'é', 'ж']);
         assert_eq!((bitmaps[&'A'].width, bitmaps[&'A'].rows.len()), (96, 128));
+        // A capital with an accent is drawn shorter than the others, so that the accent fits in the cell
+        // above it: its inked rows are the accent, a gap, then the letter.
+        let inked_runs = |bitmap: &Bitmap| {
+            let inked: Vec<bool> = bitmap.rows.iter().map(|row| row.iter().any(|byte| *byte != 0)).collect();
+            inked.iter().zip(std::iter::once(&false).chain(&inked)).filter(|(now, before)| **now && !**before).count()
+        };
+        let capitals = load_bdf(&dejavu, &characters("EÉÀÔ")).unwrap();
+        assert_eq!(capitals.values().map(inked_runs).collect::<Vec<usize>>(), [1, 2, 2, 2]);
         // What the first lacks comes from the next, as with files.
         let both = Font::built_ins(&["dejavu-condensed-bold", "no-such-font", "unifont"]);
         assert_eq!(both, [dejavu.clone(), unifont.clone()]);
