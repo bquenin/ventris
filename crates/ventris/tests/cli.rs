@@ -446,7 +446,7 @@ fn a_disc_game_is_extracted_and_its_script_put_back() {
             "dialogue:  39929 strings in 461 sections",
             "skits:     3022 strings in 609 sections",
             "menus:     716 strings in 22 sections",
-            "lists:     3258 strings",
+            "lists:     3259 strings",
             "enemies:   933 strings in 550 sections",
             "minigames: 5732 strings in 96 sections",
             "unmapped:  0 characters using 0 codes that have no table entry yet",
@@ -534,7 +534,7 @@ fn the_adapter_of_a_disc_game_keeps_the_contract() {
         run.out.lines().collect::<Vec<_>>(),
         [
             format!("game:      {DISC_GAME}").as_str(),
-            "extract:   39929 strings of dialogue, 3022 strings of skits, 716 strings of menus, 3258 strings of \
+            "extract:   39929 strings of dialogue, 3022 strings of skits, 716 strings of menus, 3259 strings of \
              lists, 933 strings of enemies, 5732 strings of minigames; they encode back to the game's bytes",
             "unchanged: an empty pack and the whole script both rebuild the image byte for byte",
             "dialogue:  06307.004 changed to a longer one; a string that does not exist is refused",

@@ -126,11 +126,22 @@
 //!
 //! Three larger modules hold text in the same form, and are read the same way: the quiz (member
 //! 6167), battles (8055: the labels of the results screen, and the messages that explain a newly
-//! learned skill) and the field (8996: the names of places). They are loaded at $2AEA80 and have
-//! no compressed copy. The battle module's text is written with all that the program's own is.
+//! learned skill) and the field (8996: the names of places). They are loaded at $2AEA80. The
+//! battle module's text is written with all that the program's own is, but for the code $0A.
 //! Their strings stay where they are, each with its room and no more: nothing shows what follows
 //! these modules in memory, and the fan translation, which left them alone, does not show which
 //! of their words are pointers.
+//!
+//! The game loads the quiz from its member, but not the other two. It loads them from member 17,
+//! a pack of three compressed blocks that the program keeps whole in memory from the start and
+//! expands one of when it needs that module: entry 0 is member 8055 byte for byte, entry 1 a module
+//! with no text, and entry 2 member 8996. Members 8055 and 8996 are copies the game does not use.
+//! Strings are still read from them, so that their names stay as they were, and a build writes
+//! them; where it changes either, it also compresses that module again into its entry of member 17
+//! and writes member 17 out again around it (see `rebuild_compressed_modules`). Builds made before
+//! this was known wrote members 8055 and 8996 alone, so none of the battle's and the field's text
+//! that a pack changed reached the screen; the same packs now build images that show it. Member 17
+//! cannot grow much: see `COMPRESSED_MODULES_LIMIT`.
 //!
 //! Not covered: the name-entry screen (member 6810), whose letters and labels are in a grid that
 //! nothing points at.
@@ -169,8 +180,12 @@
 //! program's tables hold a 32-bit word for each, its address, and the file's header says that
 //! offset $1000 of the file is loaded at $100000. So a string of the program is what one of its
 //! words points at, on a multiple of 8, that reads as text. It is written as dialogue is, with the
-//! half-width dot dialogue uses for an ellipsis, and four of dialogue's codes. It is one section,
-//! `program`, its strings named by their offset in the file.
+//! half-width dot dialogue uses for an ellipsis, and five of dialogue's codes. It is one section,
+//! `program`, its strings named by their offset in the file. The fifth code, $0A, which fills in a
+//! name, was added after the first release: it lets one more string be found, the prompt to leave
+//! a town, which fills in the town's name (`program.1109536`). The game writes that name's address
+//! at a fixed place in the string, so a build refuses a new one whose $0A is elsewhere (see
+//! `EXIT_PROMPT`).
 //!
 //! Thirty-five more strings no table points at: the code builds the address of each with two
 //! instructions, one giving a register the high half and one adding the low half. Most are a word
@@ -186,7 +201,7 @@
 //! of its address are given the new low half; the high half is left alone, so such a string stays
 //! within the 65,536 bytes that half reaches. What a pack leaves alone is not touched.
 //!
-//! A string moves only if everything that refers to it is known, and for 18 of the 3,258 that is
+//! A string moves only if everything that refers to it is known, and for 18 of the 3,259 that is
 //! not sure enough: see `program_reach`. Those stay where they are, on the same terms as a menu's
 //! string. One of them the code copies eleven bytes of, so it has the ten of the game's own and no
 //! more.
@@ -396,10 +411,25 @@ const MENU_TWIN: usize = 19;
 const MENU_BASE: u32 = 0x29BB00;
 /// Three larger modules that hold text as the menus' do: the quiz, with its prompts; battles,
 /// with the labels of the results screen and the messages that explain a newly learned skill; and
-/// the field, with the names of places. They have no compressed copy.
+/// the field, with the names of places. The game loads the battle's and the field's from their
+/// compressed copies in another member (see `COMPRESSED_MODULES`), and the quiz from its own.
 const QUIZ_MODULE: usize = 6167;
 const BATTLE_MODULE: usize = 8055;
 const FIELD_MODULE: usize = 8996;
+/// The member the game loads the battle's and the field's modules from: a pack of three compressed
+/// blocks, made of how many entries it has, the offset of each, then the entries. The program reads
+/// it whole into memory at $43C600 and, when a battle or the field starts, expands the entry it
+/// needs to where a large module is loaded (`LARGE_MODULE_BASE`).
+const COMPRESSED_MODULES: usize = 17;
+/// Which of its entries is which module, by entry and member. Entry 1 is a module that holds no text.
+const COMPRESSED_ENTRIES: [(usize, usize); 2] = [(0, BATTLE_MODULE), (2, FIELD_MODULE)];
+/// Its entries start on a multiple of this, with zero bytes before them where it takes some, and it
+/// ends on one.
+const COMPRESSED_ALIGNMENT: usize = 4;
+/// The most bytes it may have: the program keeps it in memory from $43C600, and other data starts at
+/// $4A8100, which leaves 148 bytes past the game's own. The engine compresses better than the game
+/// did, so a module made again with a translation in it can be a little longer and still fit.
+const COMPRESSED_MODULES_LIMIT: usize = 0x4A_8100 - 0x43_C600;
 /// Where the game loads any of those three.
 const LARGE_MODULE_BASE: u32 = 0x2AEA80;
 /// The instruction a function returns with, `jr $ra`. A module is its code and then its data, so
@@ -474,8 +504,22 @@ const PROGRAM_DATA: usize = 0xFC000;
 /// file's header puts offset $1000 at address $100000.
 const PROGRAM_BASE: u32 = 0xFF000;
 /// The codes of the program's text, each followed by a 32-bit number: dialogue's own, of which
-/// these occur. $07 prints the name of a party member, and $09 draws a button.
-const PROGRAM_CODES: [u8; 4] = [0x04, 0x05, 0x07, 0x09];
+/// these occur. $07 prints the name of a party member, $09 draws a button, and $0A fills in the name
+/// of a thing: one string has it, the prompt to leave a town (see `EXIT_PROMPT`).
+const PROGRAM_CODES: [u8; 5] = [0x04, 0x05, 0x07, 0x09, 0x0A];
+/// The prompt to leave a town, `program.1109536`: in the game's own, a button, a space, then $0A,
+/// whose number the town's name goes in, and "を出る" ("leave"). The game does not look for the code:
+/// before it shows the prompt, the code at $10E714 takes the string's address from the program's
+/// table (the word at $C7100 of its file) and writes the address of the town's name over the four
+/// bytes from the string's eighth, where the game's own has the $0A's number. So a new string must
+/// have its $0A at the same place, `EXIT_PROMPT_CODE` bytes from its start, or the address goes over
+/// whatever is there (seen on screen: "Quitter" before the code came out as "Qu", a line break and
+/// "er", and no name).
+const EXIT_PROMPT: u32 = 0x10_EE20;
+const EXIT_PROMPT_CODE: usize = 6;
+/// The codes of the battle module's text: the program's, but for $0A, which it does not have. Its
+/// strings were found with these, and are not to change.
+const BATTLE_CODES: [u8; 4] = [0x04, 0x05, 0x07, 0x09];
 /// The addresses the console's memory has that a program or its data can be at: a word in this
 /// range is taken for an address and not for text, though its bytes may read as a character.
 const ADDRESSES: Range<u32> = 0x0010_0000..0x0200_0000;
@@ -973,6 +1017,59 @@ pub fn rename_plates(member: &[u8], names: &BTreeMap<u8, Vec<u8>>) -> Result<Vec
     Ok(rebuilt)
 }
 
+/// The entries of the member that holds the compressed modules (see `COMPRESSED_MODULES`), each a
+/// compressed block, without the zero bytes that follow it. The member starts with how many entries
+/// it has and then the offset of each; an entry's block says how long it is. `None` if `member` is
+/// not laid out so.
+fn compressed_entries(member: &[u8]) -> Option<Vec<&[u8]>> {
+    let count = number(member, 0)? as usize;
+    let entry = |entry: usize| {
+        let at = number(member, 4 + 4 * entry)? as usize;
+        let (_, payload, _) = lzss_ring::read_header(member, at).ok()?;
+        member.get(at..at.checked_add(lzss_ring::HEADER_SIZE + payload)?)
+    };
+    (0..count).map(entry).collect()
+}
+
+/// The member that holds the compressed modules, with some of them changed: `modules` gives the new
+/// contents of a module by its entry. Each is compressed again the way its entry was, and the member
+/// is written out again around it, each entry starting on a multiple of 4; the entries not given keep
+/// their bytes. Refused if the member would pass the memory the game keeps it in.
+pub fn rebuild_compressed_modules(member: &[u8], modules: &BTreeMap<usize, Vec<u8>>) -> Result<Vec<u8>> {
+    let broken = || {
+        Error::Text(format!(
+            "member {COMPRESSED_MODULES} of {ARCHIVE} is not laid out as the compressed battle and field modules are"
+        ))
+    };
+    let mut entries: Vec<Vec<u8>> =
+        compressed_entries(member).ok_or_else(broken)?.into_iter().map(<[u8]>::to_vec).collect();
+    for (entry, module) in modules {
+        let block = entries.get_mut(*entry).ok_or_else(broken)?;
+        let (mode, _, _) = lzss_ring::read_header(block, 0)?;
+        *block = lzss_ring::compress_block(module, mode)?;
+    }
+    let mut rebuilt = (entries.len() as u32).to_le_bytes().to_vec();
+    let mut position = (4 + 4 * entries.len()).next_multiple_of(COMPRESSED_ALIGNMENT);
+    for entry in &entries {
+        rebuilt.extend((position as u32).to_le_bytes());
+        position = (position + entry.len()).next_multiple_of(COMPRESSED_ALIGNMENT);
+    }
+    for entry in &entries {
+        rebuilt.resize(rebuilt.len().next_multiple_of(COMPRESSED_ALIGNMENT), 0);
+        rebuilt.extend_from_slice(entry);
+    }
+    rebuilt.resize(rebuilt.len().next_multiple_of(COMPRESSED_ALIGNMENT), 0);
+    if rebuilt.len() > COMPRESSED_MODULES_LIMIT {
+        return text_error(format!(
+            "the battle's and the field's modules, compressed again with the strings the pack changes in 08055 and \
+             08996, take {} bytes, and the game keeps them in memory where they have room for \
+             {COMPRESSED_MODULES_LIMIT}, since other data follows them there; shorten some of those strings",
+            rebuilt.len()
+        ));
+    }
+    Ok(rebuilt)
+}
+
 /// The script of a skit, if member `index` of the archive is one: its header, its code, then its
 /// text. A skit is a compressed pack that holds its pictures as well, so only as much of it is
 /// read and expanded as it takes to reach the end of the script.
@@ -1109,7 +1206,7 @@ fn text_length(
 /// and tables that something points at; neither passes for text.
 fn menu_text_length(module: &[u8], offset: usize, chars: &Characters, about: &Module) -> Option<usize> {
     if about.wide {
-        text_length(module, offset, chars, &PROGRAM_CODES, true, about.shift_jis)
+        text_length(module, offset, chars, &BATTLE_CODES, true, about.shift_jis)
     } else {
         text_length(module, offset, chars, &MENU_CODES, false, about.shift_jis)
     }
@@ -1576,6 +1673,21 @@ fn is_lead(byte: u8) -> bool {
 
 fn is_trail(byte: u8) -> bool {
     (FIRST_TRAIL..=LAST_TRAIL).contains(&byte) && !SKIPPED_TRAILS.contains(&byte)
+}
+
+/// Whether the program's text `data` has a code `code` that starts at byte `at`, read from its start
+/// as the program's text is: a code with its 32-bit number, a two-byte character, or a single byte.
+fn has_code_at(data: &[u8], at: usize, code: u8) -> bool {
+    let mut position = 0;
+    while position < at {
+        let Some(&byte) = data.get(position) else { return false };
+        position += match data.get(position + 1) {
+            _ if PROGRAM_CODES.contains(&byte) => 1 + NUMBER_SIZE,
+            Some(trail) if is_lead(byte) && is_trail(*trail) => 2,
+            _ => 1,
+        };
+    }
+    position == at && data.get(at) == Some(&code) && data.len() >= at + 1 + NUMBER_SIZE
 }
 
 /// The glyph number of a two-byte code, or None for two bytes that are not one.
@@ -3353,6 +3465,14 @@ pub fn build_as(
             ));
             continue;
         }
+        if section == PROGRAM_SECTION && *offset == EXIT_PROMPT && !has_code_at(&data, EXIT_PROMPT_CODE, 0x0A) {
+            name_refusals.push(format!(
+                "string {name} is the prompt to leave a town, and the game writes the town's name into the number \
+                 of a {{0A}} at the string's seventh byte, where the game's own has it: start it as the game's own \
+                 does, with {{09:35 00 00 00}} {{0A:00 00 00 00}}, and put the words after the name"
+            ));
+            continue;
+        }
         if is_enemy(section) {
             // An enemy's name is in a field of its record, a zero byte ending it.
             if data.contains(&END) {
@@ -3599,6 +3719,9 @@ pub fn build_as(
         members.insert(PLATE_MEMBER, rename_plates(&member, &plates)?);
         result.enemy_plates = plates.len();
     }
+    // The battle's and the field's modules that changed, by their entry in the member the game loads
+    // them from.
+    let mut compressed: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
     for (index, module) in changed_modules {
         if let Some(twin) = module_of(index).and_then(|about| about.twin).map(|after| index + after) {
             let (offset, _) = member_span(disc, twin)?;
@@ -3606,7 +3729,20 @@ pub fn build_as(
             let (mode, _, _) = lzss_ring::read_header(&header, 0)?;
             members.insert(twin, lzss_ring::compress_block(&module, mode)?);
         }
+        // Only a module whose bytes changed is compressed again: the engine's compressor does not
+        // give the game's bytes, and a pack that leaves the module as it was must rebuild them.
+        let entry = COMPRESSED_ENTRIES.iter().find(|(_, member)| *member == index).map(|(entry, _)| *entry);
+        if let Some(entry) = entry
+            && module != modules[&index]
+        {
+            compressed.insert(entry, module.clone());
+        }
         members.insert(index, module);
+    }
+    if !compressed.is_empty() {
+        let (offset, size) = member_span(disc, COMPRESSED_MODULES)?;
+        let member = disc.read(ARCHIVE, offset, size.max(0) as u64)?;
+        members.insert(COMPRESSED_MODULES, rebuild_compressed_modules(&member, &compressed)?);
     }
 
     let old = table(disc)?;
