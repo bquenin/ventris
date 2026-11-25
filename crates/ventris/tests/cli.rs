@@ -130,7 +130,8 @@ fn the_games_command_lists_every_adapter() {
         \x20 image      3b2be72b751607a7a2a56d62feec71584b4b8c72  Japan, version 1.01\n\
         \x20 dialogue   extract; insert, longer strings; new characters; lines fitted to the screen\n\
         \x20            limits: the text of one script cannot pass 65,535 bytes, and a string that nothing in its \
-        script's code refers to cannot take more bytes than the game's own\n\
+        script's code refers to cannot take more bytes than the game's own; the strings of program-script share the \
+        588 bytes its text has, strings that are the same kept once\n\
         \x20 skits      extract; insert, longer strings; new characters\n\
         \x20            limits: a line is shown on one row, about 54 narrow letters or 27 wide ones, and a longer \
         one scrolls sideways while it is typed; the text of one skit cannot pass 65,535 bytes, and a string that \
@@ -443,7 +444,7 @@ fn a_disc_game_is_extracted_and_its_script_put_back() {
         lines[..8],
         [
             format!("game:      {DISC_GAME}").as_str(),
-            "dialogue:  39929 strings in 461 sections",
+            "dialogue:  39946 strings in 462 sections",
             "skits:     3022 strings in 609 sections",
             "menus:     716 strings in 22 sections",
             "lists:     3259 strings",
@@ -452,7 +453,7 @@ fn a_disc_game_is_extracted_and_its_script_put_back() {
             "unmapped:  0 characters using 0 codes that have no table entry yet",
         ]
     );
-    assert!(lines[8].starts_with("wrote 1739 files to "));
+    assert!(lines[8].starts_with("wrote 1740 files to "));
     assert_eq!(read_script(&ja).unwrap()["06307"][&4], "はやく、はやく！");
     assert!(!fs::read(ja.join("06307.txt")).unwrap().contains(&b'\r'));
 
@@ -534,7 +535,7 @@ fn the_adapter_of_a_disc_game_keeps_the_contract() {
         run.out.lines().collect::<Vec<_>>(),
         [
             format!("game:      {DISC_GAME}").as_str(),
-            "extract:   39929 strings of dialogue, 3022 strings of skits, 716 strings of menus, 3259 strings of \
+            "extract:   39946 strings of dialogue, 3022 strings of skits, 716 strings of menus, 3259 strings of \
              lists, 933 strings of enemies, 5732 strings of minigames; they encode back to the game's bytes",
             "unchanged: an empty pack and the whole script both rebuild the image byte for byte",
             "dialogue:  06307.004 changed to a longer one; a string that does not exist is refused",
