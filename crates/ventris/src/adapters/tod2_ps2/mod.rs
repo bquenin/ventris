@@ -216,6 +216,23 @@
 //! another in the room its text has, the same text once, and refuses what does not fit (see
 //! `rebuild_program_script`).
 //!
+//! The world map has a story script of its own: the names of places it shows in large letters as
+//! the party comes near them, the text of its signposts, an inn's and a chest's messages, and the
+//! lines of a few scenes played on the map. There are five world maps, members 9028 to 9032, one for
+//! each time the story goes to (see `WORLD_MAPS`). Each is a pack that starts with how many entries
+//! it has and the size of each, the entries following one another with nothing between them, and
+//! its entry 19 is the script, stored as it is. On the world map the program reads the whole member
+//! into a block it set aside (see `WORLD_MAP_ROOM`), works out where each entry is from the sizes,
+//! and copies the script into a block of the entry's size, from which the game reads it. So the
+//! script may grow as a story script does, and the member with it: a build writes the script back
+//! as it writes a story script's (see `rebuild_text`), with the entries after it starting later and
+//! its size in the pack's table (see `rebuild_world_map`). They are sections `09028` to `09032`,
+//! part of the dialogue, and were found after the first release: until then none of their strings
+//! was extracted, so the names of places over the map stayed as the game has them. On screen, the
+//! name over the map is drawn in the half-width font, enlarged, so it has what dialogue's narrow
+//! letters have, the cells a build adds included; it starts at the same place whatever its length.
+//! A signpost's text is shown in a bubble whose name tag is a string of the same script, `notice`.
+//!
 //! The text is strings back to back, each ending in a zero byte. The code refers to a string with
 //! the byte $F8 followed by the string's 16-bit offset in the text. Not every string is referred to
 //! that way, so strings are found by reading the text from its start, not by following the code.
@@ -363,6 +380,23 @@ const BUTTON_CODE: &str = "09";
 /// hold at most 30 narrow letters, and four of them fit whatever they hold, so a string goes
 /// narrower only where it fills in names or numbers, or has a word too long to break.
 const NARROWEST_COLUMNS: usize = 24;
+
+// --- the world maps
+/// The members that are the world map, one for each time the story goes to. By the labels their
+/// scripts hold for those who made the game: the present (9028, where a new game starts), the future
+/// (9029), the present as it was changed (9030), the war of the past (9031) and the present again at
+/// the end (9032). The program loads member 9028 + n, n being which of them (the function at
+/// $151F58 in memory).
+const WORLD_MAPS: RangeInclusive<usize> = 9028..=9032;
+/// Which entry of a world map's pack is its script. The field's module asks for a block of memory of
+/// the size the pack's table gives this entry, and copies the entry there (the code at $2B5DDC, with
+/// the field's module loaded).
+const WORLD_MAP_SCRIPT: usize = 19;
+/// The most bytes a world map's member may have: the program sets aside a block of this many bytes
+/// when it starts (the code at $151E84) and reads the member into it whole. The largest of the
+/// game's own has 1,326,615, and the text of a script cannot pass 65,535 bytes (see `rebuild_text`),
+/// so a pack's strings do not reach this; it is checked all the same.
+const WORLD_MAP_ROOM: usize = 0x18_0000;
 
 // --- the scripts of the games within the game
 /// The members among which those scripts are.
@@ -768,6 +802,45 @@ fn pack_entries(pack: &[u8]) -> Option<Vec<(usize, usize)>> {
     let count = number(pack, 0)? as usize;
     let entry = |entry: usize| Some((number(pack, 4 + 8 * entry)? as usize, number(pack, 8 + 8 * entry)? as usize));
     (0..count).map(entry).collect()
+}
+
+/// Where each entry of a world map's pack is. The pack starts with how many entries it has, then the
+/// size of each; the entries follow one another with nothing between them, to the end of the pack.
+/// `None` if `pack` is not laid out so.
+fn world_map_entries(pack: &[u8]) -> Option<Vec<Range<usize>>> {
+    let count = number(pack, 0)? as usize;
+    let mut position = count.checked_mul(4)?.checked_add(4)?;
+    let mut entries = Vec::new();
+    for entry in 0..count {
+        let end = position.checked_add(number(pack, 4 + 4 * entry)? as usize)?;
+        entries.push(position..end);
+        position = end;
+    }
+    (position == pack.len()).then_some(entries)
+}
+
+/// The script of a world map's pack: its entry `WORLD_MAP_SCRIPT`, if that is a script.
+fn world_map_script(pack: &[u8]) -> Option<&[u8]> {
+    let script = &pack[world_map_entries(pack)?.get(WORLD_MAP_SCRIPT)?.clone()];
+    let text_start = number(script, 8)? as usize;
+    (script.starts_with(SCRIPT_MAGIC) && text_start <= script.len()).then_some(script)
+}
+
+/// The scripts of the world maps, by the number of their member in the archive, read once for an
+/// image: each its header, its code and its text.
+pub fn world_map_scripts(disc: &Disc) -> Result<Arc<BTreeMap<usize, Vec<u8>>>> {
+    disc.keep("tod2-ps2: the world maps", || {
+        let mut found = BTreeMap::new();
+        for index in WORLD_MAPS {
+            let (offset, size) = member_span(disc, index)?;
+            let pack = disc.read(ARCHIVE, offset, size.max(0) as u64)?;
+            let script = world_map_script(&pack).ok_or_else(|| {
+                Error::Text(format!("member {index} of {ARCHIVE} does not hold a world map's script where expected"))
+            })?;
+            found.insert(index, script.to_vec());
+        }
+        Ok(found)
+    })
 }
 
 /// A pack of the entries given: the table, then each entry starting on a multiple of 16, with zero
@@ -2189,6 +2262,9 @@ fn strings(disc: &Disc) -> Result<BTreeMap<String, Vec<Vec<u8>>>> {
     for (index, script) in skit_scripts(disc)?.iter() {
         found.insert(section_name(*index), split(text_of(script)));
     }
+    for (index, script) in world_map_scripts(disc)?.iter() {
+        found.insert(section_name(*index), split(text_of(script)));
+    }
     found.insert(PROGRAM_SCRIPT_SECTION.to_string(), split(text_of(program_script(&program_file(disc)?)?)));
     Ok(found)
 }
@@ -2596,6 +2672,34 @@ pub fn rebuild_script(member: &[u8], replacements: &BTreeMap<u32, Vec<u8>>, name
     sizes[count - 1] = u32::try_from(last.len()).map_err(|_| broken())?;
     let sizes: Vec<u8> = sizes.iter().flat_map(|size| size.to_le_bytes()).collect();
     Ok(([&member[..16], &sizes, &member[entries_start..last_start], &last].concat(), moved))
+}
+
+/// A world map's member with some of its script's strings replaced, and how many of them had to
+/// move.
+///
+/// The script is written back as a story script is (see `rebuild_text`), so it may grow. The entries
+/// after it start later, and the pack's table gives the script its new size; the game works out where
+/// each entry is from the sizes. Refused if the member would pass `WORLD_MAP_ROOM`.
+pub fn rebuild_world_map(member: &[u8], replacements: &BTreeMap<u32, Vec<u8>>, name: &str) -> Result<(Vec<u8>, usize)> {
+    let broken = || Error::Text(format!("world map {name} is not laid out as a world map is"));
+    let place = world_map_entries(member).and_then(|entries| entries.get(WORLD_MAP_SCRIPT).cloned());
+    let (Some(place), Some(script)) = (place, world_map_script(member)) else { return Err(broken()) };
+    let (script, moved) = rebuild_text(script.to_vec(), replacements, name)?;
+    let size = u32::try_from(script.len()).map_err(|_| broken())?;
+    let mut rebuilt = member[..place.start].to_vec();
+    let table = 4 + 4 * WORLD_MAP_SCRIPT;
+    rebuilt[table..table + 4].copy_from_slice(&size.to_le_bytes());
+    rebuilt.extend(script);
+    rebuilt.extend_from_slice(&member[place.end..]);
+    if rebuilt.len() > WORLD_MAP_ROOM {
+        return text_error(format!(
+            "world map {name} would take {} bytes with the pack's strings, and the game reads it into a block of \
+             {WORLD_MAP_ROOM}: shorten some of its strings (a wide character takes two bytes and a narrow one takes \
+             one)",
+            rebuilt.len()
+        ));
+    }
+    Ok((rebuilt, moved))
 }
 
 /// A skit member with some of its strings replaced, and how many of them had to move.
@@ -3322,7 +3426,9 @@ pub fn build_as(
     let skit_pace = switches.skit_pace;
     let mut chars = (*characters(disc)?).clone();
     let skits = skit_scripts(disc)?;
-    let members_with_text = script_members(disc)?.into_iter().chain(skits.keys().copied());
+    let world_maps = world_map_scripts(disc)?;
+    let members_with_text =
+        script_members(disc)?.into_iter().chain(skits.keys().copied()).chain(world_maps.keys().copied());
     let sections: BTreeMap<String, usize> = members_with_text.map(|index| (section_name(index), index)).collect();
     let ascii_table = disc.read(EXECUTABLE, ASCII_TABLE, ASCII_TABLE_SIZE)?;
     if ascii_table.len() as u64 != ASCII_TABLE_SIZE {
@@ -3364,7 +3470,10 @@ pub fn build_as(
             Some(index) => match skits.get(index) {
                 Some(script) => text_of(script).to_vec(),
                 None => {
-                    let script = read_script_data(disc, *index)?;
+                    let script = match world_maps.get(index) {
+                        Some(script) => script.clone(),
+                        None => read_script_data(disc, *index)?,
+                    };
                     choices.insert(section, choice_strings(&script)?);
                     text_of(&script).to_vec()
                 }
@@ -3528,7 +3637,10 @@ pub fn build_as(
             result.skit_relocated += moved;
             result.skits += 1;
         } else {
-            let (member, moved) = rebuild_script(&member, strings, &name)?;
+            let (member, moved) = match world_maps.contains_key(index) {
+                true => rebuild_world_map(&member, strings, &name)?,
+                false => rebuild_script(&member, strings, &name)?,
+            };
             members.insert(*index, member);
             result.strings += strings.len();
             result.relocated += moved;
