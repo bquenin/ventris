@@ -1398,6 +1398,7 @@ fn the_adapter_declares_itself_properly() {
         ["dialogue", "menus", "menus", "dialogue"]
     );
     assert_eq!((kind("program"), kind("programs")), (Some("lists"), None));
+    assert_eq!((kind("program-script"), kind("program-scripts")), (Some("dialogue"), None));
     assert_eq!(
         [kind("08177"), kind("08178"), kind("08727"), kind("08728")].map(Option::unwrap),
         ["dialogue", "enemies", "enemies", "dialogue"]
@@ -1645,6 +1646,67 @@ fn the_exit_prompt_s_code_is_found_where_the_game_writes_the_name() {
     assert!(!code("{0A:00 00 00 00}"));
 }
 
+/// A script like the one the program holds itself: a statement of six bytes naming each string from
+/// the second on, then the strings, with no room after them.
+fn program_script_like(strings: &[&[u8]]) -> Vec<u8> {
+    let mut code = Vec::new();
+    let mut offset = 0;
+    for (number, string) in strings.iter().enumerate() {
+        if number > 0 {
+            code.extend([&[0xF8], &(offset as u16).to_le_bytes()[..], &[0xE0, 0x02, 0xC0]].concat());
+        }
+        offset += string.len() + 1;
+    }
+    code.push(0xF0);
+    let text: Vec<u8> = strings.iter().flat_map(|string| [string, [0].as_slice()].concat()).collect();
+    let starts = [12u32, 12 + code.len() as u32].map(u32::to_le_bytes).concat();
+    [b"SCED".as_slice(), &starts, &code, &text].concat()
+}
+
+/// What statement `n` of such a script names, read as the program reads it (see `PROGRAM_SCRIPT`).
+fn named_by(script: &[u8], n: usize) -> Vec<u8> {
+    let (code_start, text_start) = (number(script, 4).unwrap() as usize, number(script, 8).unwrap() as usize);
+    let statement = &script[code_start + 6 * n..code_start + 6 * n + 3];
+    assert_eq!(statement[0], 0xF8);
+    let at = text_start + usize::from(u16::from_le_bytes([statement[1], statement[2]]));
+    split_strings(&script[at..])[0].to_vec()
+}
+
+#[test]
+fn the_program_s_own_script_shares_the_room_of_its_text() {
+    // An empty string nothing names, then four that are named, the last three the same.
+    let original = program_script_like(&[b"", b"ab", b"cd", b"cd", b"cd"]);
+    let text_start = 12 + 4 * 6 + 1;
+    assert_eq!(original.len(), text_start + 13);
+    // The first grows by four bytes. It keeps its place; the others follow it, and the two that are
+    // the same as the one before them are not written again, so that all of them fit.
+    let (rebuilt, moved) = rebuild_program_script(&original, &BTreeMap::from([(1, b"abcdef".to_vec())])).unwrap();
+    assert_eq!(moved, 0);
+    assert_eq!(rebuilt.len(), original.len());
+    assert_eq!(rebuilt[text_start..], *b"\0abcdef\0cd\0\0\0");
+    assert_eq!((0..4).map(|n| named_by(&rebuilt, n)).collect::<Vec<_>>(), [&b"abcdef"[..], b"cd", b"cd", b"cd"]);
+    // Two changed strings with the same text are kept once as well; one of them is now somewhere else.
+    let same = BTreeMap::from([(2, b"x".to_vec()), (3, b"x".to_vec())]);
+    let (rebuilt, moved) = rebuild_program_script(&original, &same).unwrap();
+    assert_eq!(moved, 1);
+    assert_eq!(rebuilt[text_start..], *b"\0ab\0x\0cd\0\0\0\0\0");
+    assert_eq!((0..4).map(|n| named_by(&rebuilt, n)).collect::<Vec<_>>(), [&b"ab"[..], b"x", b"x", b"cd"]);
+    // Only the offsets in the statements changed: the third names the second's copy, and the fourth
+    // has moved up.
+    let mut statements = original[..text_start].to_vec();
+    (statements[25], statements[31]) = (4, 6);
+    assert_eq!(rebuilt[..text_start], statements);
+    // Strings that do not fit the text's room are refused, with how many bytes they take.
+    assert_eq!(
+        message(rebuild_program_script(&original, &BTreeMap::from([(1, b"abcdefghijklm".to_vec())]))),
+        "the strings of program-script (the messages of treasure chests, the caption after a lost battle and the \
+         message of a title earned, which the program holds itself) share the 13 bytes of its text, since what \
+         follows it in the program is in use, and with the pack's they take 18: shorten some of them (a wide \
+         character takes two bytes and a narrow one takes one, and strings that are the same are kept once)"
+    );
+    assert!(rebuild_program_script(&original[..10], &BTreeMap::new()).is_err());
+}
+
 #[test]
 fn the_compressed_modules_are_written_out_again_around_a_changed_entry() {
     // Three blocks, the first two stored as they are, the second followed by three unused bytes.
@@ -1762,6 +1824,54 @@ fn the_program_s_lists() {
     let font_size = lzss_ring::HEADER_SIZE + lzss_ring::read_header(&program, HALF_FONT as usize).unwrap().1;
     let font = ASCII_TABLE as usize..HALF_FONT as usize + font_size; // the tables of the half-width font, and it
     assert!(pointers().all(|at| !font.contains(at)));
+}
+
+#[test]
+fn the_program_s_own_script() {
+    let Some(disc) = game() else { return };
+    let chars = characters(&disc).unwrap();
+    let program = program_file(&disc).unwrap();
+    let script = program_script(&program).unwrap();
+    assert_eq!((script.len(), number(script, 4), number(script, 8)), (713, Some(0x1C), Some(0x7D)));
+    let strings = split_strings(text_of(script));
+    assert_eq!(strings.len(), 17);
+    let text = |number: usize| decode(strings[number], &chars);
+    assert_eq!(text(3), "からっぽだ････");
+    assert!((4..=8).all(|number| strings[number] == strings[3])); // six kinds of chest, one message
+    assert_eq!(text(13), "その後、{15:30 1C}の行方を知る者は\n誰もいなかった････{02}");
+    assert_eq!(text(14), "その後、{15:30 1C}たちの行方を知る者は\n誰もいなかった････{02}");
+    // The one list to choose from: a question of two lines, then two choices after $03.
+    assert_eq!(PROGRAM_SCRIPT_LISTS, [12]);
+    assert_eq!(text(12).split('\n').count(), 4);
+    assert!(text(12).split('\n').nth(2).unwrap().starts_with("{03:00 00 00 00}"));
+    // Each statement names the string after the one the statement before it names: the empty first
+    // string is named by none.
+    for n in 0..16 {
+        assert!(named_by(script, n) == strings[n + 1], "statement {n}");
+    }
+    let code = &script[0x1C..0x7D];
+    assert_eq!(string_references(code).unwrap().values().map(Vec::len).sum::<usize>(), 16);
+    // The program gives the script's address to the function that reads it in four places, each a
+    // lui and an addiu, and in no other way; the function is called from those four places alone.
+    let word = |at: usize| number(&program, at).unwrap();
+    let address = PROGRAM_SCRIPT as u32 + PROGRAM_BASE;
+    for (high, low) in [(0x1E00C, 0x1E014), (0x24294, 0x242A0), (0x244E0, 0x244EC), (0x24960, 0x24968)] {
+        assert_eq!((word(high), word(low)), (0x3C04_001D, 0x2484_EA40), "at {low:#X}");
+    }
+    assert_eq!((0x1D_u32 << 16).wrapping_add(0xEA40_u16 as i16 as u32), address);
+    let code_words: Vec<u32> = PROGRAM_CODE.step_by(4).map(word).collect();
+    assert_eq!(code_words.iter().filter(|word| **word & 0xFFFF == 0xEA40 && **word >> 26 == ADDIU).count(), 4);
+    assert_eq!(code_words.iter().filter(|word| **word == 0x0C04_8500).count(), 4); // jal $121400
+    assert!(!code_words.contains(&address));
+    // The byte after it is a variable the program writes: lui s1, $1D, then sb v0, -$12F7(s1).
+    assert_eq!((word(0x21BD4), word(0x21BDC)), (0x3C11_001D, 0xA222_ED09));
+    assert_eq!((0x1D_u32 << 16).wrapping_add(0xED09_u16 as i16 as u32), PROGRAM_SCRIPT_END as u32 + PROGRAM_BASE);
+    // None of its words is taken for a pointer at the program's text, which a list string that moves
+    // would have written over.
+    for at in (PROGRAM_SCRIPT..PROGRAM_SCRIPT_END - 3).step_by(4) {
+        let offset = word(at).wrapping_sub(PROGRAM_BASE) as usize;
+        assert!(!(PROGRAM_DATA..program.len()).contains(&offset), "at {at:#X}");
+    }
 }
 
 #[test]
@@ -1907,7 +2017,17 @@ fn extract_and_verify() {
     let Some(disc) = game() else { return };
     let mut texts = extract(&disc).unwrap();
     let strings = texts.values().map(BTreeMap::len).sum::<usize>();
-    assert_eq!((texts.len(), strings), (461 + 609 + 22 + 1 + 550 + 96, 39929 + 3022 + 716 + 3259 + 933 + 5732));
+    // The story scripts and the script the program holds itself, the skits, the menus, the program's
+    // lists, the enemies and the games within the game.
+    assert_eq!(
+        (texts.len(), strings),
+        (461 + 1 + 609 + 22 + 1 + 550 + 96, 39929 + 17 + 3022 + 716 + 3259 + 933 + 5732)
+    );
+    assert_eq!(
+        texts["program-script"][&13],
+        "その後、{15:30 1C}の行方を知る者は
+誰もいなかった････{02}"
+    );
     assert_eq!(texts["program"][&1094168], "アップルグミ");
     assert_eq!(texts["06816"][&4136], "ゲーム開始");
     assert_eq!(texts["00060"].len(), 2);
@@ -2344,6 +2464,74 @@ fn build_changes_the_program_s_text_where_it_is() {
         message(build(&disc, &script_of(&[("program", 1094169, "X")]), &out, &[])),
         "string program.1094169 does not exist"
     );
+    assert!(!out.exists(), "a refused build left a file behind");
+}
+
+#[test]
+fn build_writes_the_program_s_own_script_where_it_is() {
+    let Some(disc) = game() else { return };
+    let folder = tempfile::tempdir().unwrap();
+    let out = folder.path().join("built.iso");
+    let size = disc.size(EXECUTABLE).unwrap();
+    let old = disc.read(EXECUTABLE, 0, size).unwrap();
+    let script = program_script(&old).unwrap().to_vec();
+    // The caption after a lost battle, longer than the game's: it fits, since the five copies of the
+    // message of an empty chest are not written again, and it moves up by their room.
+    let caption = "AFTERWARDS, NO ONE KNEW\nWHAT BECAME OF {15:30 1C}...{02}";
+    let result = build(&disc, &script_of(&[("program-script", 13, caption)]), &out, &[]).unwrap();
+    assert_eq!(result.summary(), ["dialogue:  1 strings changed in 1 scripts, 1 of them moved"]);
+    {
+        let built = Disc::open(&out).unwrap();
+        let new = built.read(EXECUTABLE, 0, size).unwrap();
+        let chars = characters(&built).unwrap();
+        let rebuilt = program_script(&new).unwrap();
+        for n in 0..16 {
+            let wanted = match n {
+                12 => encode(caption, &chars).unwrap(),
+                _ => named_by(&script, n),
+            };
+            assert!(named_by(rebuilt, n) == wanted, "statement {n}");
+        }
+        assert_eq!(decode(&named_by(rebuilt, 12), &chars), caption);
+        // Nothing else of the program changed, the byte after the script included.
+        let ours = |at: usize| (PROGRAM_SCRIPT..PROGRAM_SCRIPT_END).contains(&at);
+        assert!(old.len() == new.len() && (0..old.len()).all(|at| ours(at) || old[at] == new[at]));
+    }
+    fs_remove(&out);
+    // A line too wide for the box is broken, as dialogue's are.
+    let long = "AFTERWARDS, NOT ONE SOUL IN THE WHOLE WIDE WORLD KNEW WHAT BECAME OF {15:30 1C}...{02}";
+    build(&disc, &script_of(&[("program-script", 13, long)]), &out, &[]).unwrap();
+    {
+        let built = Disc::open(&out).unwrap();
+        let new = built.read(EXECUTABLE, 0, size).unwrap();
+        let shown = decode(&named_by(program_script(&new).unwrap(), 12), &characters(&built).unwrap());
+        assert_eq!(shown, "AFTERWARDS, NOT ONE SOUL IN THE WHOLE\nWIDE WORLD KNEW WHAT BECAME OF {15:30 1C}...{02}");
+    }
+    fs_remove(&out);
+    // The pack's text for a string that is the game's own changes nothing.
+    let own = extract(&disc).unwrap()["program-script"][&13].clone();
+    build(&disc, &script_of(&[("program-script", 13, &own)]), &out, &[]).unwrap();
+    {
+        let built = Disc::open(&out).unwrap();
+        assert!(built.read(EXECUTABLE, 0, size).unwrap() == old);
+    }
+    fs_remove(&out);
+    // The list to choose from is left as written, and refused with a line more than the game's own.
+    let list = "{0B:01 00 00 00}{14:30 1C}{0B:00 00 00 00} LENSES,\nTOO MANY TO CARRY\nALL OF THEM\n{03:00 00 00 00} \
+                TAKE {0B:01 00 00 00}{14:30 18}{0B:00 00 00 00}\n PUT THEM BACK";
+    assert_eq!(
+        message(build(&disc, &script_of(&[("program-script", 12, list)]), &out, &[])),
+        "string program-script.012: this is a list to choose from, one choice to a line, and it has 5 lines where \
+         the game's own has 4: write each choice on a line of its own, and the question before them, if there is \
+         one, on no more lines than the game's own"
+    );
+    // Strings that take more than the script's text has room for are refused.
+    let chests: Vec<String> = (3..=8).map(|number| format!("THIS CHEST, NUMBER {number}, IS EMPTY")).collect();
+    let pack: Vec<(&str, u32, &str)> =
+        chests.iter().zip(3..).map(|(text, number)| ("program-script", number, text.as_str())).collect();
+    let refused = message(build(&disc, &script_of(&pack), &out, &[]));
+    assert!(refused.starts_with("the strings of program-script ("), "{refused}");
+    assert!(refused.contains("share the 588 bytes of its text"), "{refused}");
     assert!(!out.exists(), "a refused build left a file behind");
 }
 

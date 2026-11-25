@@ -206,6 +206,16 @@
 //! string. One of them the code copies eleven bytes of, so it has the ten of the game's own and no
 //! more.
 //!
+//! The program also holds a story script of its own among its data, at $CFA40 of its file: the
+//! messages of treasure chests, the caption over the world map after a battle is lost, and the
+//! message that a title was earned. Its code names each string with $F8 as a story script's does,
+//! and the program shows message `n` by reading the `n`th statement of the code (see
+//! `PROGRAM_SCRIPT`). It is section `program-script`, part of the dialogue, and was found after the
+//! first release: until then none of its 16 messages was extracted, so no pack could change them.
+//! What follows it in memory is in use, so it cannot grow: a build writes its strings back one after
+//! another in the room its text has, the same text once, and refuses what does not fit (see
+//! `rebuild_program_script`).
+//!
 //! The text is strings back to back, each ending in a zero byte. The code refers to a string with
 //! the byte $F8 followed by the string's 16-bit offset in the text. Not every string is referred to
 //! that way, so strings are found by reading the text from its start, not by following the code.
@@ -520,6 +530,24 @@ const EXIT_PROMPT_CODE: usize = 6;
 /// The codes of the battle module's text: the program's, but for $0A, which it does not have. Its
 /// strings were found with these, and are not to change.
 const BATTLE_CODES: [u8; 4] = [0x04, 0x05, 0x07, 0x09];
+/// The name in a pack of the script the program holds itself (see `PROGRAM_SCRIPT`). Its strings are
+/// numbered as a story script's are, from 0 in the order of its text.
+const PROGRAM_SCRIPT_SECTION: &str = "program-script";
+/// A story script, `SCED`, that the program holds among its own data, at this offset of its file: the
+/// messages of a treasure chest (an item, money or lenses found, a chest that is empty, a bag that is
+/// full), the caption over the world map after a battle is lost, and the message that a title was
+/// earned. Its code is a list of 16 statements of six bytes, each naming one string; to show message
+/// `n`, the program's function at $121400 takes the script's address, reads statement `n` and shows
+/// the string it names. Four places in the code give that function this address, and nothing else
+/// refers to the script or to a string of it.
+const PROGRAM_SCRIPT: usize = 0xCF_A40;
+/// Where the script ends in the program's file: the byte after its last string's zero byte is a
+/// variable the program writes as it runs (at $1CED09 in memory), so the script cannot grow.
+const PROGRAM_SCRIPT_END: usize = 0xCF_D09;
+/// The string of that script that is a list to choose from: lenses found that do not all fit, then
+/// how many to take and leave, or to put them back in the chest. The program asks for the choice
+/// itself, so nothing in the script's code shows it is a list.
+const PROGRAM_SCRIPT_LISTS: [u32; 1] = [12];
 /// The addresses the console's memory has that a program or its data can be at: a word in this
 /// range is taken for an address and not for text, though its bytes may read as a character.
 const ADDRESSES: Range<u32> = 0x0010_0000..0x0200_0000;
@@ -1282,6 +1310,77 @@ fn program_text_length(program: &[u8], offset: usize, chars: &Characters) -> Opt
 /// zero byte that ends it: what a word of the program points at and reads as text.
 pub fn program_strings(program: &[u8], chars: &Characters) -> BTreeMap<u32, Vec<u8>> {
     strings_among(program, &program_targets(program), |offset| program_text_length(program, offset, chars))
+}
+
+/// The script the program holds itself (see `PROGRAM_SCRIPT`): its header, its code and its text, up
+/// to where it ends. Refused if the program has no script there.
+fn program_script(program: &[u8]) -> Result<&[u8]> {
+    let script = program.get(PROGRAM_SCRIPT..PROGRAM_SCRIPT_END).filter(|script| {
+        script.starts_with(SCRIPT_MAGIC) && number(script, 8).is_some_and(|start| start as usize <= script.len())
+    });
+    script.ok_or_else(|| Error::Text(format!("{EXECUTABLE} does not hold a script at {PROGRAM_SCRIPT:#X}")))
+}
+
+/// The script the program holds itself, with some of its strings replaced, and how many of those are
+/// at another offset now. `replacements` gives the new bytes of each string by its number.
+///
+/// The script cannot grow, so its strings share the room of its text: they are written back one
+/// after another in their order, each with its zero byte, and each statement of the code that names
+/// one is given its new offset. A string that something names and that has the same bytes as one
+/// written before it is not written again: what names it is given the first one's offset. The game
+/// has the same message for six kinds of empty chest, which leaves the room of five of them to the
+/// rest. Zero bytes fill what is left up to the end. Refused, with what to do, if the strings do not
+/// fit.
+pub fn rebuild_program_script(script: &[u8], replacements: &BTreeMap<u32, Vec<u8>>) -> Result<(Vec<u8>, usize)> {
+    let broken =
+        || Error::Text(format!("the script at {PROGRAM_SCRIPT:#X} of {EXECUTABLE} is not laid out as a script is"));
+    let code_start = number(script, 4).ok_or_else(broken)? as usize;
+    let text_start = number(script, 8).ok_or_else(broken)? as usize;
+    if code_start > text_start || text_start > script.len() {
+        return Err(broken());
+    }
+    let references = string_references(&script[code_start..text_start])?;
+    let mut text = Vec::new();
+    let mut offsets: HashMap<usize, usize> = HashMap::new(); // a string's offset in the game's text, and its new one
+    let mut written: HashMap<&[u8], usize> = HashMap::new(); // the bytes of each string written, and where
+    let (mut old_offset, mut moved) = (0, 0);
+    for (number, old) in split_strings(&script[text_start..]).into_iter().enumerate() {
+        let new = replacements.get(&(number as u32));
+        let data = new.map_or(old, Vec::as_slice);
+        let offset = match written.get(data) {
+            Some(offset) if references.contains_key(&old_offset) => *offset,
+            _ => {
+                written.entry(data).or_insert(text.len());
+                text.extend_from_slice(data);
+                text.push(END);
+                text.len() - data.len() - 1
+            }
+        };
+        moved += usize::from(new.is_some() && offset != old_offset);
+        offsets.insert(old_offset, offset);
+        old_offset += old.len() + 1;
+    }
+    let room = script.len() - text_start;
+    if text.len() > room {
+        return text_error(format!(
+            "the strings of {PROGRAM_SCRIPT_SECTION} (the messages of treasure chests, the caption after a lost \
+             battle and the message of a title earned, which the program holds itself) share the {room} bytes of \
+             its text, since what follows it in the program is in use, and with the pack's they take {}: shorten \
+             some of them (a wide character takes two bytes and a narrow one takes one, and strings that are the \
+             same are kept once)",
+            text.len()
+        ));
+    }
+    let mut rebuilt = script[..text_start].to_vec();
+    for (old, places) in &references {
+        let offset = offsets.get(old).and_then(|offset| u16::try_from(*offset).ok()).ok_or_else(broken)?;
+        for place in places {
+            rebuilt[code_start + place..code_start + place + 2].copy_from_slice(&offset.to_le_bytes());
+        }
+    }
+    rebuilt.extend(text);
+    rebuilt.resize(script.len(), 0);
+    Ok((rebuilt, moved))
 }
 
 /// How many bytes the string at `offset` of a module may take, the game's own taking `length`:
@@ -2079,7 +2178,8 @@ pub fn encode(text: &str, chars: &Characters) -> Result<Vec<u8>> {
 
 // --- the whole script
 
-/// Every string of every story script and every skit, by section, as the game stores them.
+/// Every string of every story script and every skit, and of the script the program holds itself,
+/// by section, as the game stores them.
 fn strings(disc: &Disc) -> Result<BTreeMap<String, Vec<Vec<u8>>>> {
     let split = |text: &[u8]| split_strings(text).into_iter().map(<[u8]>::to_vec).collect();
     let mut found = BTreeMap::new();
@@ -2089,6 +2189,7 @@ fn strings(disc: &Disc) -> Result<BTreeMap<String, Vec<Vec<u8>>>> {
     for (index, script) in skit_scripts(disc)?.iter() {
         found.insert(section_name(*index), split(text_of(script)));
     }
+    found.insert(PROGRAM_SCRIPT_SECTION.to_string(), split(text_of(program_script(&program_file(disc)?)?)));
     Ok(found)
 }
 
@@ -3259,17 +3360,22 @@ pub fn build_as(
     let mut originals: HashMap<&str, Vec<String>> = HashMap::new();
     let mut choices: HashMap<&str, BTreeSet<u32>> = HashMap::new();
     for section in texts.keys() {
-        if let Some(index) = sections.get(section) {
-            let text = match skits.get(index) {
+        let text = match sections.get(section) {
+            Some(index) => match skits.get(index) {
                 Some(script) => text_of(script).to_vec(),
                 None => {
                     let script = read_script_data(disc, *index)?;
                     choices.insert(section, choice_strings(&script)?);
                     text_of(&script).to_vec()
                 }
-            };
-            originals.insert(section, split_strings(&text).iter().map(|data| decode(data, &chars)).collect());
-        }
+            },
+            None if section == PROGRAM_SCRIPT_SECTION => {
+                choices.insert(section, PROGRAM_SCRIPT_LISTS.into());
+                text_of(program_script(&program)?).to_vec()
+            }
+            None => continue,
+        };
+        originals.insert(section, split_strings(&text).iter().map(|data| decode(data, &chars)).collect());
     }
     let changes = script::changes(texts, |section| originals.get(section).cloned())?;
 
@@ -3369,6 +3475,8 @@ pub fn build_as(
     let names = party_name_columns(&program, &pack_program, &chars);
 
     let mut replacements: BTreeMap<usize, BTreeMap<u32, Vec<u8>>> = BTreeMap::new();
+    // The same for the script the program holds itself, which is no member of the archive.
+    let mut program_script_strings: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
     // With `skit_pace`, the text of each changed line of a skit and the game's own, to time it by.
     let mut skit_texts: BTreeMap<usize, BTreeMap<u32, (String, String)>> = BTreeMap::new();
     for (section, number, text) in &changes {
@@ -3391,7 +3499,10 @@ pub fn build_as(
             (true, false) => wrap_dialogue(text, &chars, &names).map_err(named)?,
         };
         let data = encode(&fitted, &chars).map_err(named)?;
-        replacements.entry(sections[section]).or_default().insert(*number, data);
+        match sections.get(section) {
+            Some(index) => replacements.entry(*index).or_default().insert(*number, data),
+            None => program_script_strings.insert(*number, data),
+        };
     }
 
     let mut result = BuildResult::default();
@@ -3422,6 +3533,20 @@ pub fn build_as(
             result.strings += strings.len();
             result.relocated += moved;
             result.scripts += 1;
+        }
+    }
+    // The script the program holds itself goes back where it is, in the program's file.
+    let mut program_script_refusal = None;
+    if !program_script_strings.is_empty() {
+        match rebuild_program_script(program_script(&program)?, &program_script_strings) {
+            Ok((script, moved)) => {
+                patches.push((EXECUTABLE, PROGRAM_SCRIPT as u64, script));
+                result.strings += program_script_strings.len();
+                result.relocated += moved;
+                result.scripts += 1;
+            }
+            Err(Error::Text(message)) => program_script_refusal = Some(message),
+            Err(other) => return Err(other),
         }
     }
 
@@ -3674,6 +3799,7 @@ pub fn build_as(
     let refusals: Vec<String> = skit_refusal(&skit_refused)
         .into_iter()
         .chain(name_refusals)
+        .chain(program_script_refusal)
         .chain(refusal_of(&too_long))
         .chain(no_place)
         .chain(menu_refusals)
@@ -3803,6 +3929,7 @@ fn is_game(section: &str) -> bool {
     member_of(section).is_some_and(|member| GAME_MEMBERS.contains(&member))
 }
 
+/// The story scripts, each a member of the archive, and the script the program holds itself.
 fn is_dialogue(section: &str) -> bool {
     let other = |member: usize| {
         SKIT_MEMBERS.contains(&member)
@@ -3810,7 +3937,7 @@ fn is_dialogue(section: &str) -> bool {
             || GAME_MEMBERS.contains(&member)
             || module_of(member).is_some()
     };
-    member_of(section).is_some_and(|member| !other(member))
+    section == PROGRAM_SCRIPT_SECTION || member_of(section).is_some_and(|member| !other(member))
 }
 
 /// The program's own text is one section.
@@ -3830,7 +3957,8 @@ fn sections_of_menus(section: &str) -> Result<(usize, Module)> {
 }
 
 const SCRIPT_LIMITS: &str = "the text of one script cannot pass 65,535 bytes, and a string that nothing in its \
-                             script's code refers to cannot take more bytes than the game's own";
+                             script's code refers to cannot take more bytes than the game's own; the strings of \
+                             program-script share the 588 bytes its text has, strings that are the same kept once";
 
 const SKIT_LIMITS: &str = "a line is shown on one row, about 54 narrow letters or 27 wide ones, and a longer one \
                            scrolls sideways while it is typed; the text of one skit cannot pass 65,535 bytes, and a \
