@@ -1594,6 +1594,65 @@ fn the_menus() {
     let skills = menu_strings(&modules[&6798], &MENU, &chars);
     assert_eq!(decode(&skills[&22856], &chars), "術・技");
     assert_eq!(decode(&skills[&23272], &chars), "{09:35 00 00 00}使用\n{09:36 00 00 00}戻る\n{09:37 00 00 00}説明切替");
+
+    // The battle's and the field's modules are byte for byte the entries of member 17 that the game
+    // loads them from, so their strings are read from members 8055 and 8996 under the same names.
+    let (offset, size) = member_span(&disc, COMPRESSED_MODULES).unwrap();
+    let member = disc.read(ARCHIVE, offset, size as u64).unwrap();
+    let entries = compressed_entries(&member).unwrap();
+    assert_eq!(entries.iter().map(|entry| entry.len()).collect::<Vec<_>>(), [210_340, 128_221, 102_358]);
+    for (entry, index) in COMPRESSED_ENTRIES {
+        assert!(lzss_ring::decompress_block(entries[entry], 0).unwrap() == modules[&index], "entry {entry}");
+    }
+    // The member is laid out as it is written out again, and fits the memory it is kept in.
+    assert!(rebuild_compressed_modules(&member, &BTreeMap::new()).unwrap() == member);
+    assert_eq!((member.len(), COMPRESSED_MODULES_LIMIT), (440_940, 441_088));
+}
+
+#[test]
+fn the_exit_prompt_s_code_is_found_where_the_game_writes_the_name() {
+    let code = |text: &str| has_code_at(&encoded(text).unwrap(), EXIT_PROMPT_CODE, 0x0A);
+    assert!(code("{09:35 00 00 00} {0A:00 00 00 00}あい"));
+    assert!(code("ababab{0A:00 00 00 00}")); // six single bytes before it do as well
+    assert!(code("あいあ{0A:00 00 00 00}"));
+    assert!(!code("{09:35 00 00 00} Q{0A:00 00 00 00}"));
+    assert!(!code("{09:35 00 00 00}{0A:00 00 00 00}"));
+    assert!(!code("{09:35 00 00 00} ")); // too short for the code and its number
+    assert!(!code("{09:0A 00 00 00} a")); // a $0A inside another code's number is none
+    assert!(!code("{0A:00 00 00 00}"));
+}
+
+#[test]
+fn the_compressed_modules_are_written_out_again_around_a_changed_entry() {
+    // Three blocks, the first two stored as they are, the second followed by three unused bytes.
+    let block = |data: &[u8], mode: u8| lzss_ring::compress_block(data, mode).unwrap();
+    let (first, second, third) =
+        (block(b"battle", lzss_ring::MODE_STORED), block(b"no", lzss_ring::MODE_STORED), block(b"field!", 3));
+    let mut member = [3u32, 16, 16 + 16, 16 + 16 + 12].iter().flat_map(|word| word.to_le_bytes()).collect::<Vec<_>>();
+    for entry in [&first, &second, &third] {
+        member.resize(member.len().next_multiple_of(4), 0);
+        member.extend_from_slice(entry);
+    }
+    member.resize(member.len().next_multiple_of(4), 0);
+    assert_eq!(compressed_entries(&member).unwrap(), [&first[..], &second[..], &third[..]]);
+    assert_eq!(rebuild_compressed_modules(&member, &BTreeMap::new()).unwrap(), member);
+    // The first grows by four bytes: it is stored again as it was, and the others keep their bytes
+    // and move.
+    let rebuilt = rebuild_compressed_modules(&member, &BTreeMap::from([(0, b"battle!!!!".to_vec())])).unwrap();
+    let entries = compressed_entries(&rebuilt).unwrap();
+    assert_eq!(rebuilt[..16], [3u32, 16, 36, 48].iter().flat_map(|word| word.to_le_bytes()).collect::<Vec<_>>());
+    assert_eq!(entries[0], block(b"battle!!!!", lzss_ring::MODE_STORED));
+    assert_eq!((entries[1], entries[2]), (&second[..], &third[..]));
+    assert_eq!(rebuilt.len(), (48 + third.len()).next_multiple_of(4));
+    // A member longer than the memory the game keeps it in is refused.
+    let large = BTreeMap::from([(1, vec![0x55; COMPRESSED_MODULES_LIMIT])]);
+    assert_eq!(
+        message(rebuild_compressed_modules(&member, &large)),
+        "the battle's and the field's modules, compressed again with the strings the pack changes in 08055 and \
+         08996, take 441148 bytes, and the game keeps them in memory where they have room for 441088, since \
+         other data follows them there; shorten some of those strings"
+    );
+    assert!(rebuild_compressed_modules(&[1, 0, 0, 0, 9, 0, 0, 0], &BTreeMap::new()).is_err());
 }
 
 #[test]
@@ -1603,12 +1662,22 @@ fn the_program_s_lists() {
     let program = program_file(&disc).unwrap();
     let targets = program_targets(&program);
     let strings = program_strings(&program, &chars);
-    assert_eq!(strings.len(), 3258);
+    assert_eq!(strings.len(), 3259);
     let text = |offset: u32| decode(&strings[&offset], &chars);
     assert_eq!((text(1094112).as_str(), text(1094168).as_str()), ("オレンジグミ", "アップルグミ"));
     assert_eq!(text(1094128), "ゼリー状薬品\n最大ＨＰの３０％回復");
     assert_eq!(text(1255904), "ガルド"); // a label of the main menu
     assert_eq!((text(1044520).as_str(), text(1048184).as_str()), ("フレイムドライブ", "蒼破刃")); // two skills
+    // The prompt to leave a town, which fills in the town's name with $0A, beside its way back.
+    assert_eq!(text(1109536), "{09:35 00 00 00} {0A:00 00 00 00}を出る");
+    assert_eq!(text(1109560), "{09:36 00 00 00} もどる");
+    // Without $0A the program's strings are those it had before: that one is the only one $0A adds.
+    let without: BTreeMap<u32, Vec<u8>> = strings_among(&program, &targets, |offset| {
+        text_length(&program, offset, &chars, &[0x04, 0x05, 0x07, 0x09], true, false)
+    });
+    let mut with = strings.clone();
+    with.remove(&1109536);
+    assert_eq!(without, with);
     for (offset, data) in &strings {
         // Each ends in a zero byte, and what is counted as its room is zero and its own.
         let (at, room) = (*offset as usize, menu_room(&program, *offset as usize, data.len(), &targets));
@@ -1629,7 +1698,7 @@ fn the_program_s_lists() {
     let count = |of: fn(&Reached) -> usize| movable.values().map(of).sum::<usize>();
     assert_eq!(
         (movable.len(), count(|reached| reached.words.len()), count(|reached| reached.code.len())),
-        (3240, 3419, 56)
+        (3241, 3420, 56)
     );
     // The code builds the address of forty of them. Five are labels of the main menu that a
     // table points at as well, and the others are known to the code alone.
@@ -1815,7 +1884,7 @@ fn extract_and_verify() {
     let Some(disc) = game() else { return };
     let mut texts = extract(&disc).unwrap();
     let strings = texts.values().map(BTreeMap::len).sum::<usize>();
-    assert_eq!((texts.len(), strings), (461 + 609 + 22 + 1 + 550 + 96, 39929 + 3022 + 716 + 3258 + 933 + 5732));
+    assert_eq!((texts.len(), strings), (461 + 609 + 22 + 1 + 550 + 96, 39929 + 3022 + 716 + 3259 + 933 + 5732));
     assert_eq!(texts["program"][&1094168], "アップルグミ");
     assert_eq!(texts["06816"][&4136], "ゲーム開始");
     assert_eq!(texts["00060"].len(), 2);
@@ -2050,6 +2119,63 @@ fn build_changes_a_menu_s_text_where_it_is() {
     assert!(!out.exists(), "a refused build left a file behind");
 }
 
+/// Member 17 of an image, as it is stored, and its entries expanded.
+fn compressed_modules(disc: &Disc) -> (Vec<u8>, Vec<Vec<u8>>) {
+    let (offset, size) = member_span(disc, COMPRESSED_MODULES).unwrap();
+    let member = disc.read(ARCHIVE, offset, size as u64).unwrap();
+    let entries = compressed_entries(&member).unwrap().iter().map(|entry| entry.to_vec()).collect();
+    (member, entries)
+}
+
+#[test]
+fn build_writes_the_battle_s_and_the_field_s_text_where_the_game_loads_it() {
+    let Some(disc) = game() else { return };
+    let folder = tempfile::tempdir().unwrap();
+    let out = folder.path().join("built.iso");
+    let (member, entries) = compressed_modules(&disc);
+    // The banner of a battle that was fled: the battle's module changes, in member 8055 and in
+    // entry 0 of member 17, which is compressed again; the other two entries keep their bytes.
+    let pack = script_of(&[("08055", 340160, "RAN AWAY...")]);
+    let result = build(&disc, &pack, &out, &[]).unwrap();
+    assert_eq!(result.summary()[1], "menus:     1 strings changed in 1 menus, 0 of them moved");
+    {
+        let built = Disc::open(&out).unwrap();
+        let (old, new) = (read_member(&disc, BATTLE_MODULE).unwrap(), read_member(&built, BATTLE_MODULE).unwrap());
+        assert_eq!(new[340160..340176], *b"RAN AWAY...\0\0\0\0\0");
+        assert!(
+            old.len() == new.len() && (0..old.len()).all(|at| (340160..340176).contains(&at) || old[at] == new[at])
+        );
+        let (_, built_entries) = compressed_modules(&built);
+        assert!(lzss_ring::decompress_block(&built_entries[0], 0).unwrap() == new);
+        assert_eq!(lzss_ring::read_header(&built_entries[0], 0).unwrap().0, lzss_ring::MODE_LZSS_RLE);
+        assert!(built_entries[1] == entries[1] && built_entries[2] == entries[2]);
+        // The field's module is as it was.
+        assert!(read_member(&built, FIELD_MODULE).unwrap() == read_member(&disc, FIELD_MODULE).unwrap());
+    }
+    fs_remove(&out);
+    // A place name of the field's module: entry 2 is compressed again, and entry 0 keeps its bytes.
+    build(&disc, &script_of(&[("08996", 180672, "FOG")]), &out, &[]).unwrap();
+    {
+        let built = Disc::open(&out).unwrap();
+        let new = read_member(&built, FIELD_MODULE).unwrap();
+        assert_eq!(new[180672..180676], *b"FOG\0");
+        let (_, built_entries) = compressed_modules(&built);
+        assert!(lzss_ring::decompress_block(&built_entries[2], 0).unwrap() == new);
+        assert!(built_entries[0] == entries[0] && built_entries[1] == entries[1]);
+    }
+    fs_remove(&out);
+    // A pack that changes neither module, or gives one of their strings the text it had, leaves member
+    // 17 as the game has it: it is not compressed again.
+    let same = extract(&disc).unwrap()["08055"][&340128].clone();
+    assert_eq!(same, "作戦");
+    let pack = script_of(&[("06816", 4224, "CHAIN"), ("08055", 340128, &same)]);
+    build(&disc, &pack, &out, &[]).unwrap();
+    {
+        let built = Disc::open(&out).unwrap();
+        assert!(compressed_modules(&built).0 == member);
+    }
+}
+
 #[test]
 fn build_lets_a_menu_s_strings_grow_past_its_module_s_end() {
     let Some(disc) = game() else { return };
@@ -2156,6 +2282,33 @@ fn build_changes_the_program_s_text_where_it_is() {
         assert!(old.len() == new.len() && (0..old.len()).all(same));
     }
     fs_remove(&out);
+    // The prompt to leave a town, with the town's name the game fills in, which $0A lets be found. It
+    // fits its room, so it stays where it was and the word of the table that points at it is the same.
+    let pack = script_of(&[("program", 1109536, "{09:35 00 00 00} {0A:00 00 00 00} QUITTER")]);
+    build(&disc, &pack, &out, &[]).unwrap();
+    {
+        let built = Disc::open(&out).unwrap();
+        let size = disc.size(EXECUTABLE).unwrap();
+        let (old, new) = (disc.read(EXECUTABLE, 0, size).unwrap(), built.read(EXECUTABLE, 0, size).unwrap());
+        let wanted = [&hex("09 35 00 00 00 20 0A 00 00 00 00")[..], b" QUITTER\0"].concat();
+        let chars = characters(&built).unwrap();
+        assert_eq!(number(&new, 0xC7100), Some(0x10EE20 + PROGRAM_BASE));
+        assert_eq!(new[0x10EE20..0x10EE20 + wanted.len()], wanted);
+        assert_eq!(decode(&wanted[..wanted.len() - 1], &chars), pack["program"][&1109536]);
+        // Nothing else of the program changed but the string's room and that word.
+        let ours = |at: usize| (0x10EE20..0x10EE38).contains(&at) || (0xC7100..0xC7104).contains(&at);
+        assert!(old.len() == new.len() && (0..old.len()).all(|at| ours(at) || old[at] == new[at]));
+    }
+    fs_remove(&out);
+    // The game writes the town's name into the number of the $0A at the prompt's seventh byte, so the
+    // code must stay there.
+    let elsewhere = script_of(&[("program", 1109536, "{09:35 00 00 00} QUITTER {0A:00 00 00 00}")]);
+    assert_eq!(
+        message(build(&disc, &elsewhere, &out, &[])),
+        "string program.1109536 is the prompt to leave a town, and the game writes the town's name into the number \
+         of a {0A} at the string's seventh byte, where the game's own has it: start it as the game's own does, \
+         with {09:35 00 00 00} {0A:00 00 00 00}, and put the words after the name"
+    );
     // A string alone in its pack has no more than its own room.
     assert_eq!(
         message(build(&disc, &script_of(&[("program", 1094168, "APPLE GUMMY ONE!")]), &out, &[])),
