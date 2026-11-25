@@ -1399,6 +1399,8 @@ fn the_adapter_declares_itself_properly() {
     );
     assert_eq!((kind("program"), kind("programs")), (Some("lists"), None));
     assert_eq!((kind("program-script"), kind("program-scripts")), (Some("dialogue"), None));
+    // The world maps' scripts are dialogue, as story scripts are.
+    assert_eq!([kind("09028"), kind("09032")], [Some("dialogue"), Some("dialogue")]);
     assert_eq!(
         [kind("08177"), kind("08178"), kind("08727"), kind("08728")].map(Option::unwrap),
         ["dialogue", "enemies", "enemies", "dialogue"]
@@ -1707,6 +1709,66 @@ fn the_program_s_own_script_shares_the_room_of_its_text() {
     assert!(rebuild_program_script(&original[..10], &BTreeMap::new()).is_err());
 }
 
+/// A world map's pack: entries of a byte or a few, each its number repeated, with `script` as entry
+/// 19 and `after` following it.
+fn world_map_like(script: &[u8], after: &[&[u8]]) -> Vec<u8> {
+    let before = (0..WORLD_MAP_SCRIPT).map(|entry| vec![entry as u8; entry % 3 + 1]);
+    let entries: Vec<Vec<u8>> =
+        before.chain([script.to_vec()]).chain(after.iter().map(|entry| entry.to_vec())).collect();
+    let sizes = entries.iter().flat_map(|entry| (entry.len() as u32).to_le_bytes());
+    [(entries.len() as u32).to_le_bytes().to_vec(), sizes.collect(), entries.concat()].concat()
+}
+
+#[test]
+fn a_world_map_s_script_grows_and_the_entries_after_it_start_later() {
+    // An empty string nothing names, then two that are named.
+    let script = program_script_like(&[b"", b"ab", b"cd"]);
+    let member = world_map_like(&script, &[b"next", b"last"]);
+    let entries = world_map_entries(&member).unwrap();
+    assert_eq!(entries.len(), 22);
+    assert_eq!(world_map_script(&member).unwrap(), script);
+    // A pack that changes nothing gives back the same bytes.
+    assert_eq!(rebuild_world_map(&member, &BTreeMap::new(), "09028").unwrap(), (member.clone(), 0));
+    // A string that fits stays where it is, and nothing else changes.
+    let (rebuilt, moved) = rebuild_world_map(&member, &BTreeMap::from([(1, b"x".to_vec())]), "09028").unwrap();
+    assert_eq!((rebuilt.len(), moved), (member.len(), 0));
+    assert_eq!(named_by(world_map_script(&rebuilt).unwrap(), 0), b"x");
+    // One that grows goes to the end of the text, and the script grows by its bytes and its zero
+    // byte. The pack's table gives the script its new size, and every other entry keeps its bytes,
+    // those after the script starting later.
+    let (rebuilt, moved) = rebuild_world_map(&member, &BTreeMap::from([(1, b"abcdef".to_vec())]), "09028").unwrap();
+    assert_eq!((rebuilt.len(), moved), (member.len() + 7, 1));
+    let new_entries = world_map_entries(&rebuilt).unwrap();
+    assert_eq!(new_entries[WORLD_MAP_SCRIPT].len(), script.len() + 7);
+    for (entry, (old, new)) in entries.iter().zip(&new_entries).enumerate() {
+        assert!(entry == WORLD_MAP_SCRIPT || member[old.clone()] == rebuilt[new.clone()], "entry {entry}");
+    }
+    let new_script = world_map_script(&rebuilt).unwrap();
+    assert_eq!((named_by(new_script, 0), named_by(new_script, 1)), (b"abcdef".to_vec(), b"cd".to_vec()));
+    // A string that nothing in the code refers to cannot grow.
+    assert_eq!(
+        message(rebuild_world_map(&member, &BTreeMap::from([(0, b"x".to_vec())]), "09028")),
+        "string 09028.000 takes 1 bytes where the game's has 0, and it cannot move: nothing in the script's code \
+         refers to it"
+    );
+    // A member that would pass the block the game reads it into is refused, with what to do.
+    let filler = vec![0; WORLD_MAP_ROOM - member.len() + 4];
+    let full = world_map_like(&script, &[b"next", &filler]);
+    assert_eq!(full.len(), WORLD_MAP_ROOM);
+    assert_eq!(rebuild_world_map(&full, &BTreeMap::new(), "09028").unwrap().0, full);
+    assert_eq!(
+        message(rebuild_world_map(&full, &BTreeMap::from([(1, b"abc".to_vec())]), "09028")),
+        "world map 09028 would take 1572868 bytes with the pack's strings, and the game reads it into a block of \
+         1572864: shorten some of its strings (a wide character takes two bytes and a narrow one takes one)"
+    );
+    // A pack whose sizes do not add up to its length, or whose entry 19 is not a script, is no world map.
+    assert_eq!(world_map_entries(&member[..member.len() - 1]), None);
+    assert_eq!(
+        message(rebuild_world_map(&world_map_like(b"SCEX", &[]), &BTreeMap::new(), "09028")),
+        "world map 09028 is not laid out as a world map is"
+    );
+}
+
 #[test]
 fn the_compressed_modules_are_written_out_again_around_a_changed_entry() {
     // Three blocks, the first two stored as they are, the second followed by three unused bytes.
@@ -1874,6 +1936,93 @@ fn the_program_s_own_script() {
     }
 }
 
+/// Each place in a script's code that refers to a string, with the offset it gives and the string
+/// there.
+fn referred(script: &[u8]) -> Vec<(usize, usize, Vec<u8>)> {
+    let (code_start, text_start) = (number(script, 4).unwrap() as usize, number(script, 8).unwrap() as usize);
+    let references = string_references(&script[code_start..text_start]).unwrap();
+    let mut found: Vec<(usize, usize, Vec<u8>)> = Vec::new();
+    for places in references.values() {
+        for place in places {
+            let at = code_start + place;
+            let offset = usize::from(u16::from_le_bytes([script[at], script[at + 1]]));
+            found.push((*place, offset, split_strings(&script[text_start + offset..])[0].to_vec()));
+        }
+    }
+    found.sort();
+    found
+}
+
+#[test]
+fn the_world_maps() {
+    let Some(disc) = game() else { return };
+    let chars = characters(&disc).unwrap();
+    let maps = world_map_scripts(&disc).unwrap();
+    assert_eq!(maps.keys().copied().collect::<Vec<_>>(), WORLD_MAPS.collect::<Vec<_>>());
+    // For each: the member's size and entries, where the script is in it, its size, and its strings.
+    let expected = [
+        (9028, 0x14_32C4, 62, 0xF_D76B, 0x2E02, 134),
+        (9029, 0x12_AAFC, 48, 0xF_D22A, 0x10CE, 39),
+        (9030, 0x12_FA3B, 47, 0x10_0493, 0xFF1, 32),
+        (9031, 0xF_CF37, 43, 0xD_78E7, 0xFAC, 32),
+        (9032, 0x14_3E17, 62, 0xF_DBDD, 0x29FE, 129),
+    ];
+    for (index, size, count, at, script_size, strings) in expected {
+        let (offset, span) = member_span(&disc, index).unwrap();
+        let member = disc.read(ARCHIVE, offset, span as u64).unwrap();
+        assert_eq!(member.len(), size);
+        assert!(size <= WORLD_MAP_ROOM);
+        let entries = world_map_entries(&member).unwrap();
+        assert_eq!((entries.len(), entries[WORLD_MAP_SCRIPT].clone()), (count, at..at + script_size));
+        let script = &maps[&index];
+        assert!(*script == member[at..at + script_size]);
+        // Every string that is not empty is one the code refers to, so that any of them can move.
+        let (code_start, text_start) = (number(script, 4).unwrap() as usize, number(script, 8).unwrap() as usize);
+        let references = string_references(&script[code_start..text_start]).unwrap();
+        let mut position = 0;
+        for (number, string) in split_strings(text_of(script)).iter().enumerate() {
+            assert!(string.is_empty() || references.contains_key(&position), "{index}.{number}");
+            position += string.len() + 1;
+        }
+        assert_eq!(split_strings(text_of(script)).len(), strings);
+        // No other entry is a script, stored as it is or compressed.
+        for (entry, place) in entries.iter().enumerate().filter(|(entry, _)| *entry != WORLD_MAP_SCRIPT) {
+            let data = &member[place.clone()];
+            let expanded = lzss_ring::is_block(data).then(|| lzss_ring::decompress_block(data, 0).unwrap());
+            assert!(!expanded.as_deref().unwrap_or(data).starts_with(SCRIPT_MAGIC), "{index} entry {entry}");
+        }
+    }
+    // The name of Cresta over the map, at the place in member 9028 where memory showed the game reads
+    // it ($FFE4A), and a signpost.
+    let text = |index: usize, number: usize| decode(split_strings(text_of(&maps[&index]))[number], &chars);
+    assert_eq!(text(9028, 44), "クレスタの街");
+    let cresta = 0xF_D76B + number(&maps[&9028], 8).unwrap() as usize + 0x404;
+    assert_eq!(
+        (cresta, split_strings(&text_of(&maps[&9028])[0x404..])[0]),
+        (0xF_FE4A, split_strings(text_of(&maps[&9028]))[44])
+    );
+    assert_eq!(text(9028, 41), "北：坑道南西出入口\n西：ノイシュタット方面\n東：リーネ方面");
+    // The program sets aside a block of `WORLD_MAP_ROOM` bytes for the world map when it starts: lui
+    // a0, $18, then jal $108630 (which takes a block from the heap) and sw v0, $5854(s0), at $151E84 on.
+    let program = program_file(&disc).unwrap();
+    let word = |address: u32| number(&program, (address - PROGRAM_BASE) as usize).unwrap();
+    assert_eq!((word(0x15_1E84), word(0x15_1E9C), word(0x15_1EA8)), (0x3C04_0018, 0x0C04_218C, 0xAE02_5854));
+    assert_eq!(0x18 << 16, WORLD_MAP_ROOM);
+    // It reads member 9028 + n into that block: lw a0, $5854(v0), then addiu a1, s0, $2344.
+    assert_eq!((word(0x15_1F90), word(0x15_1F94)), (0x8C44_5854, 0x2605_2344));
+    assert_eq!(0x2344, *WORLD_MAPS.start());
+    // The field's module takes the size of entry 19 from the pack's table (lw s0, $50(v1)), asks for
+    // a block of that size (jal $2BAC78, which calls $108630), and copies the entry into it (jal
+    // $18F7F4); the same for entry 20 after it.
+    let module = &menu_modules(&disc).unwrap()[&FIELD_MODULE];
+    let in_module = |address: u32| number(module, (address - LARGE_MODULE_BASE) as usize).unwrap();
+    assert_eq!(4 + 4 * WORLD_MAP_SCRIPT, 0x50);
+    assert_eq!(
+        [0x2B_5DDC, 0x2B_5DE0, 0x2B_5E00, 0x2B_AC80].map(in_module),
+        [0x8C70_0050, 0x0C0A_EB1E, 0x0C06_3DFD, 0x0C04_218C]
+    );
+}
+
 #[test]
 fn the_enemies() {
     let Some(disc) = game() else { return };
@@ -2017,17 +2166,18 @@ fn extract_and_verify() {
     let Some(disc) = game() else { return };
     let mut texts = extract(&disc).unwrap();
     let strings = texts.values().map(BTreeMap::len).sum::<usize>();
-    // The story scripts and the script the program holds itself, the skits, the menus, the program's
-    // lists, the enemies and the games within the game.
+    // The story scripts, the world maps' and the script the program holds itself, the skits, the
+    // menus, the program's lists, the enemies and the games within the game.
     assert_eq!(
         (texts.len(), strings),
-        (461 + 1 + 609 + 22 + 1 + 550 + 96, 39929 + 17 + 3022 + 716 + 3259 + 933 + 5732)
+        (461 + 5 + 1 + 609 + 22 + 1 + 550 + 96, 39929 + 366 + 17 + 3022 + 716 + 3259 + 933 + 5732)
     );
     assert_eq!(
         texts["program-script"][&13],
         "その後、{15:30 1C}の行方を知る者は
 誰もいなかった････{02}"
     );
+    assert_eq!(texts["09028"][&44], "クレスタの街");
     assert_eq!(texts["program"][&1094168], "アップルグミ");
     assert_eq!(texts["06816"][&4136], "ゲーム開始");
     assert_eq!(texts["00060"].len(), 2);
@@ -2532,6 +2682,67 @@ fn build_writes_the_program_s_own_script_where_it_is() {
     let refused = message(build(&disc, &script_of(&pack), &out, &[]));
     assert!(refused.starts_with("the strings of program-script ("), "{refused}");
     assert!(refused.contains("share the 588 bytes of its text"), "{refused}");
+    assert!(!out.exists(), "a refused build left a file behind");
+}
+
+#[test]
+fn build_writes_the_world_map_s_script_where_the_game_reads_it() {
+    let Some(disc) = game() else { return };
+    let folder = tempfile::tempdir().unwrap();
+    let out = folder.path().join("built.iso");
+    let read = |disc: &Disc, index: usize| {
+        let (offset, size) = member_span(disc, index).unwrap();
+        disc.read(ARCHIVE, offset, size as u64).unwrap()
+    };
+    let old = read(&disc, 9028);
+    let old_script = world_map_script(&old).unwrap().to_vec();
+    // Cresta's name grows and moves to the end of the text; a signpost's text is shorter and stays.
+    let (name, sign) = ("VILLE DE CRESTA", "NORD : CRESTA");
+    let pack = script_of(&[("09028", 44, name), ("09028", 41, sign)]);
+    let result = build(&disc, &pack, &out, &[]).unwrap();
+    assert_eq!(result.summary()[0], "dialogue:  2 strings changed in 1 scripts, 1 of them moved");
+    {
+        let built = Disc::open(&out).unwrap();
+        let chars = characters(&built).unwrap();
+        let new = read(&built, 9028);
+        // The script grew by the new name and its zero byte, and nothing else in the member changed.
+        assert_eq!(new.len(), old.len() + name.len() + 1);
+        let (old_entries, new_entries) = (world_map_entries(&old).unwrap(), world_map_entries(&new).unwrap());
+        for (entry, (before, after)) in old_entries.iter().zip(&new_entries).enumerate() {
+            assert!(entry == WORLD_MAP_SCRIPT || old[before.clone()] == new[after.clone()], "entry {entry}");
+        }
+        // Every place in the code refers to the string it referred to, but for the two changed: string
+        // 044 is at $404 of the text and 041 at $3AD. String 042 has the same bytes as 044, and keeps
+        // them.
+        let new_script = world_map_script(&new).unwrap();
+        let wanted: Vec<(usize, Vec<u8>)> = referred(&old_script)
+            .into_iter()
+            .map(|(place, offset, string)| match offset {
+                0x404 => (place, encode(name, &chars).unwrap()),
+                0x3AD => (place, encode(sign, &chars).unwrap()),
+                _ => (place, string),
+            })
+            .collect();
+        let found: Vec<(usize, Vec<u8>)> =
+            referred(new_script).into_iter().map(|(place, _, string)| (place, string)).collect();
+        assert_eq!(found, wanted);
+        assert_eq!(
+            referred(new_script).iter().filter(|(.., string)| *string == encode(name, &chars).unwrap()).count(),
+            1
+        );
+        assert_eq!(world_map_scripts(&built).unwrap()[&9028].len(), old_script.len() + name.len() + 1);
+        // The other world maps are as they were.
+        for index in 9029..=9032 {
+            assert!(read(&built, index) == read(&disc, index), "{index}");
+        }
+    }
+    fs_remove(&out);
+    // An empty string that nothing refers to cannot be given text, and the build says so.
+    assert_eq!(
+        message(build(&disc, &script_of(&[("09028", 22, "X")]), &out, &[])),
+        "string 09028.022 takes 1 bytes where the game's has 0, and it cannot move: nothing in the script's code \
+         refers to it"
+    );
     assert!(!out.exists(), "a refused build left a file behind");
 }
 
