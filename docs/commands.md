@@ -35,10 +35,10 @@ Download the program for your system from the
 
 | System | File |
 | --- | --- |
-| Windows | `ventris-0.2.0-windows-x86_64.zip` |
-| macOS, Apple silicon (M1 and later) | `ventris-0.2.0-macos-aarch64.tar.gz` |
-| macOS, Intel | `ventris-0.2.0-macos-x86_64.tar.gz` |
-| Linux | `ventris-0.2.0-linux-x86_64.tar.gz` |
+| Windows | `ventris-0.3.0-windows-x86_64.zip` |
+| macOS, Apple silicon (M1 and later) | `ventris-0.3.0-macos-aarch64.tar.gz` |
+| macOS, Intel | `ventris-0.3.0-macos-x86_64.tar.gz` |
+| Linux | `ventris-0.3.0-linux-x86_64.tar.gz` |
 
 It is one program, `ventris` (`ventris.exe` on Windows), with nothing else to install, and the fonts it
 needs are built in. It is not signed yet;
