@@ -349,3 +349,101 @@ fn a_changed_string_is_refused_by_the_round_trip() {
     script.insert("stg_999".to_string(), BTreeMap::new());
     assert_eq!(verify_script(&disc, &script).unwrap_err().to_string(), "stg_999 is not a part of this game's script");
 }
+
+// --- the stages, on an overlay made up here
+
+const LUI_AT: u32 = 0x0F << 26;
+const ADDIU_AT: u32 = 0x09 << 26;
+const SW_AT: u32 = 0x2B << 26;
+
+fn lui(target: u32, high: u32) -> u32 {
+    LUI_AT | target << 16 | high
+}
+
+fn addiu(target: u32, source: u32, low: u32) -> u32 {
+    ADDIU_AT | source << 21 | target << 16 | low
+}
+
+fn sw(value: u32, base: u32, low: u32) -> u32 {
+    SW_AT | base << 21 | value << 16 | low
+}
+
+/// The address an offset of an overlay is loaded at.
+fn loaded(offset: usize) -> u32 {
+    STAGE_BASE + offset as u32
+}
+
+fn put(image: &mut [u8], offset: usize, words: &[u32]) {
+    for (index, word) in words.iter().enumerate() {
+        image[offset + 4 * index..offset + 4 * index + 4].copy_from_slice(&word.to_le_bytes());
+    }
+}
+
+/// A stage's overlay: code that stores the addresses of three conditions, then records of each kind,
+/// some that hold together and some that do not, a glossary entry, the conditions' lists and the
+/// strings, each a kana after a zero byte.
+fn made_up_overlay() -> Overlay {
+    let mut image = vec![0u8; 0x400];
+    image[OVERLAY_NAME..OVERLAY_NAME + 11].copy_from_slice(b"stg_999.bin");
+    put(&mut image, OVERLAY_CODE_SIZE, &[0x100]);
+    // The code: $8 = 0x590000; each slot gets the address of a list.
+    let mut code = vec![lui(8, 0x59)];
+    for (slot, list) in [(0x52B0, 0x200), (0x52B8, 0x210), (0x52C0, 0x220), (0x52C8, 0x230)] {
+        let address = loaded(list);
+        code.extend([lui(9, address >> 16), addiu(9, 9, address & 0xFFFF), sw(9, 8, slot)]);
+    }
+    put(&mut image, OVERLAY_HEADER, &code);
+    // The records: kind, three numbers, the text's address, then what follows it, a link, a zero.
+    put(&mut image, 0x100, &[0, 1, 1, 1, loaded(0x280), 0, 0, 0]); // a line
+    put(&mut image, 0x120, &[0, 1, 0, 1, loaded(0x290), 0, 0, 0]); // no window: not a line
+    put(&mut image, 0x140, &[10, 1, 1, 1, loaded(0x2A0), 2, 0, 0]); // a choice of two
+    put(&mut image, 0x160, &[16, 0, 0, 0, loaded(0x2B0), 0, 0, 0]); // a caption
+    put(&mut image, 0x180, &[1, 1, 1, 1, loaded(0x2C0), 0, loaded(0x1C0), 0]); // a line with a link
+    put(&mut image, 0x1A0, &[0, 1, 1, 1, loaded(0x342), 0, 0, 0]); // text that is not after a zero
+    // The link: a list of one glossary entry, its four fields.
+    put(&mut image, 0x1C0, &[loaded(0x1D0), 1]);
+    put(&mut image, 0x1D0, &[loaded(0x1E0)]);
+    put(&mut image, 0x1E0, &[loaded(0x2D0), loaded(0x2E0), loaded(0x2F0), loaded(0x300)]);
+    // The conditions: one string in each list, the lists ending with a zero.
+    put(&mut image, 0x200, &[loaded(0x310)]);
+    put(&mut image, 0x210, &[loaded(0x320)]);
+    put(&mut image, 0x220, &[loaded(0x330)]);
+    // あ い う え お か き く け こ さ し, then すせ, pointed at in its middle.
+    let kana = [0xA0, 0xA2, 0xA4, 0xA6, 0xA8, 0xA9, 0xAB, 0xAD, 0xAF, 0xB1, 0xB3, 0xB5];
+    for (index, trail) in kana.into_iter().enumerate() {
+        image[0x280 + 16 * index..0x282 + 16 * index].copy_from_slice(&[0x82, trail]);
+    }
+    image[0x340..0x344].copy_from_slice(&[0x82, 0xB7, 0x82, 0xB9]);
+    Overlay { name: "stg_999".to_string(), image }
+}
+
+#[test]
+fn a_stages_lines_and_choices_are_the_records_that_hold_together() {
+    let (lines, _) = stage_strings(&made_up_overlay(), &table());
+    let kana = |trail: u8| vec![0x82, trail];
+    assert_eq!(lines, BTreeMap::from([(0x280, kana(0xA0)), (0x2A0, kana(0xA4)), (0x2C0, kana(0xA8))]));
+}
+
+#[test]
+fn a_stages_captions_glossary_entries_and_conditions_are_its_other_strings() {
+    let (_, info) = stage_strings(&made_up_overlay(), &table());
+    let offsets: Vec<u32> = info.keys().copied().collect();
+    // The caption; the glossary entry's term, series and two descriptions; three conditions.
+    assert_eq!(offsets, [0x2B0, 0x2D0, 0x2E0, 0x2F0, 0x300, 0x310, 0x320, 0x330]);
+}
+
+#[test]
+fn what_an_overlays_code_stores_is_known_until_it_returns() {
+    let mut image = vec![0u8; 0x100];
+    let code = [
+        lui(8, 0x59),
+        addiu(9, 0, 5),
+        sw(9, 8, 0x52B0),
+        sw(0, 8, 0x52B4), // a zero, from $0
+        RETURN,
+        sw(9, 8, 0x52B8), // after the return, $8 is not known
+    ];
+    put(&mut image, OVERLAY_HEADER, &code);
+    let stored = stores(&image, 0x100);
+    assert_eq!(stored, HashMap::from([(0x59_52B0, 5), (0x59_52B4, 0)]));
+}
