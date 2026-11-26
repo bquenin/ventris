@@ -85,12 +85,14 @@ a form for each.
 
 ## Games
 
-It is early days: two games so far, one on the Super Famicom and one on the PlayStation 2.
+It is early days: three games so far, one on the Super Famicom, one on the PlayStation and one on the
+PlayStation 2.
 
 | Game | Extract | Insert |
 | --- | --- | --- |
 | Tales of Phantasia (Super Famicom) | dialogue, menus and captions | dialogue, menus, captions and names, in any alphabet |
 | Tales of Destiny 2 (PlayStation 2) | story scripts, skits, menus, battle and place names, the lists of skills, items, equipment, titles and recipes, the names of enemies, and the quiz and other games within the game | story scripts and skits, longer strings included, in any alphabet, with dialogue fitted to the speech bubble; the lists and the menus, whose changed strings share the room they had, so that one may be longer where others are shorter, and a menu may grow besides; the rest where it fits in the room of the game's own |
+| G.O.D pure (PlayStation) | dialogue, and the program's own text: shops, help pages, item, monster and place names, battle messages, menus | dialogue, longer strings included, in the Latin alphabet with characters the font lacks drawn into its free cells; the program's text not yet |
 
 Each adapter was made for one release of its game, the Japanese one. The app shows each game's limits on
 the game's page, and the command `ventris games` lists the same, with the release.

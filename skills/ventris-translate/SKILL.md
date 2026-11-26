@@ -27,8 +27,9 @@ its guardrails; the facts are there, and they win where the two differ.
 
 ## Guardrails
 
-- **The game comes from the user.** Ask for the path to their copy. Never download a game, a disc image or
-  a patch, and never suggest where to get one.
+- **The game comes from the user.** Ask for the path to their copy. Never download a game or a disc image,
+  and never suggest where to get one. An existing fan translation's patch may be fetched from its authors'
+  own page, never a copy of the game with it applied; what it may be used for is in "Translate from the game's own text" below.
 - **The game stays out.** The game, the extracted script, a built image, a font picture and anything made
   from them never go into a pack, a commit, an issue or a pull request. Keep them in a working folder
   outside any repository, or under `work/` in a copy of the ventris repository, which git ignores.

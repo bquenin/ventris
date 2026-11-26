@@ -189,7 +189,7 @@ fn find(folder: &Path) -> Result<()> {
     }
     // A game that is not found, and of which the folder holds a wrong copy, is named with why each
     // copy is not the file needed, and with the file that is.
-    let is_found = |adapter: &&dyn Adapter| found.iter().any(|game| std::ptr::addr_eq(game.adapter, *adapter));
+    let is_found = |adapter: &&dyn Adapter| found.iter().any(|game| game.adapter.id() == adapter.id());
     let missing: Vec<&'static dyn Adapter> =
         adapters::ALL.iter().copied().filter(|adapter| !is_found(adapter)).collect();
     for missed in survey.missed(&missing, &read).iter().filter(|missed| !missed.is_empty()) {

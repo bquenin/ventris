@@ -25,17 +25,17 @@ use crate::platform::{Glance, Image, Label, Platform};
 
 pub const SECTOR: u64 = 2048;
 /// Where the primary volume descriptor is.
-const VOLUME_SECTOR: u64 = 16;
+pub(crate) const VOLUME_SECTOR: u64 = 16;
 /// How an ISO 9660 volume descriptor starts.
-const VOLUME_MAGIC: &[u8] = b"\x01CD001";
+pub(crate) const VOLUME_MAGIC: &[u8] = b"\x01CD001";
 /// Where the root directory's record is inside the volume descriptor.
-const ROOT_RECORD: usize = 156;
+pub(crate) const ROOT_RECORD: usize = 156;
 /// The flag that marks a directory record.
-const DIRECTORY: u8 = 2;
+pub(crate) const DIRECTORY: u8 = 2;
 /// A directory record up to the first byte of the name it gives.
-const RECORD_HEAD: usize = 33;
+pub(crate) const RECORD_HEAD: usize = 33;
 /// Folders inside folders: the standard allows eight, and an image that loops would never end.
-const DEEPEST_FOLDER: usize = 32;
+pub(crate) const DEEPEST_FOLDER: usize = 32;
 /// How much of an image is read or copied at a time.
 const CHUNK: usize = 1 << 24;
 /// In the volume descriptor: the number of sectors, little-endian then big-endian.
@@ -63,12 +63,12 @@ pub fn is_disc(path: &Path) -> bool {
 }
 
 /// Bytes as text, for the names a disc gives: what is not ASCII is shown as the replacement character.
-fn ascii(bytes: &[u8]) -> String {
+pub(crate) fn ascii(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| if byte.is_ascii() { char::from(*byte) } else { char::REPLACEMENT_CHARACTER }).collect()
 }
 
 /// Whether a character of such text is blank: a space, a tab, a line end or one of the separators.
-fn is_blank(char: char) -> bool {
+pub(crate) fn is_blank(char: char) -> bool {
     matches!(char, '\t'..='\r' | '\x1c'..=' ')
 }
 
@@ -286,12 +286,12 @@ fn boot_name_in(config: &str) -> Option<String> {
 }
 
 /// A program's name as the serial printed on the case: `SLPS-25172` for `SLPS_251.72`.
-fn serial_of(boot_name: &str) -> String {
+pub(crate) fn serial_of(boot_name: &str) -> String {
     boot_name.replace('_', "-").replace('.', "")
 }
 
 /// The version a `SYSTEM.CNF` gives on its line `VER = 1.01`.
-fn version_in(config: &str) -> Option<String> {
+pub(crate) fn version_in(config: &str) -> Option<String> {
     config.lines().find_map(|line| {
         let (key, value) = line.split_once('=')?;
         let value = value.trim_matches(is_blank);
@@ -338,7 +338,7 @@ fn peek_label(path: &Path) -> Option<Label> {
 
 /// Where a directory record says its file or directory is: the first sector, and the size in bytes.
 /// Each is stored both little-endian and big-endian; the first is read.
-fn extent(record: &[u8]) -> (u32, u32) {
+pub(crate) fn extent(record: &[u8]) -> (u32, u32) {
     let number = |at: usize| u32::from_le_bytes([record[at], record[at + 1], record[at + 2], record[at + 3]]);
     (number(2), number(10))
 }
@@ -502,8 +502,13 @@ impl Platform for Ps2 {
         if !matches!(ending.as_deref(), Some("iso" | "bin" | "img")) {
             return Ok(None);
         }
+        // An image of 2048-byte sectors; a PlayStation disc's .bin, of 2352-byte ones, is not one.
+        let size = fs::metadata(path).map_err(at(path))?.len();
+        if !size.is_multiple_of(SECTOR) {
+            return Ok(None);
+        }
         let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        Ok(Some(Glance { size: fs::metadata(path).map_err(at(path))?.len(), name }))
+        Ok(Some(Glance { size, name }))
     }
 
     fn open(&self, path: &Path) -> Result<(Image, String)> {

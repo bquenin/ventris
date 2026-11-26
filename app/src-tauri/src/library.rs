@@ -134,9 +134,11 @@ mod tests {
         fs::write(folder.path().join("game.chd"), b"MComprHD and the rest").unwrap();
         let looked = search(folder.path(), &BTreeMap::new()).unwrap();
         assert!(looked.games.is_empty());
-        // A compressed disc image could be the disc game, and is no cartridge.
-        assert_eq!(looked.near.keys().collect::<Vec<_>>(), ["tod2-ps2"]);
-        assert!(looked.near["tod2-ps2"][0].starts_with("game.chd is a compressed disc image (CHD, CSO or ZSO): "));
+        // A compressed disc image could be either disc game, and is no cartridge.
+        assert_eq!(looked.near.keys().collect::<Vec<_>>(), ["god-ps1", "tod2-ps2"]);
+        for game in ["god-ps1", "tod2-ps2"] {
+            assert!(looked.near[game][0].starts_with("game.chd is a compressed disc image (CHD, CSO or ZSO): "));
+        }
     }
 
     /// With the game at hand: it is found in an archive, known again without being read, and
