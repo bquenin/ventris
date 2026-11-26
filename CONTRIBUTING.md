@@ -20,6 +20,9 @@ A pack you are starting is claimed in the packs repository instead, with
 [the form for a new pack](https://github.com/bquenin/ventris-packs/issues/new/choose), so that two people do
 not begin the same one.
 
+If you work with a coding agent, [AGENTS.md](AGENTS.md) and the skills in [`skills/`](skills/) hold it to
+these rules; you stay responsible for what it sends.
+
 ## Ground rules
 
 - **No game files, ever.** No image, no extracted script, no font sheet, no saved state, no patch made from

@@ -1,0 +1,112 @@
+---
+name: ventris-adapter
+description: Add support for a new game to ventris by writing an adapter, the Rust module that extracts a game's script as UTF-8 text and builds the game with a translation in it. Covers finding what already exists about the game, reverse engineering where its text is and how it is encoded, compressed and drawn, the adapter contract, tests, `ventris check`, looking at the screen, and the pull request. Use when the user wants ventris to read or translate a game it does not support yet, is taking a game's text apart for ventris, or is preparing an adapter pull request to bquenin/ventris. Not for translating a game that already has an adapter (use ventris-translate).
+---
+
+# Adding a game to ventris
+
+You are helping your user write an adapter: the code for one game, a Rust module compiled into ventris,
+that says where the game's text is, extracts it, and builds the game with a translation's strings in it.
+The ventris repository is <https://github.com/bquenin/ventris>. Paths below are paths in it.
+
+## Where the facts are
+
+Read these before you study the game, and go back to them rather than guessing. This file gives the
+procedure and its guardrails; the facts are there, and they win where the two differ.
+
+- `CONTRIBUTING.md`: the ground rules, the checks a pull request passes, what an adapter's pull request
+  shows.
+- `docs/adding-a-game.md`: the guide, in the order the work is done, with the workbench's tools, the
+  emulators, the two existing adapters as worked examples, and Scope.
+- `crates/ventris/src/adapter.rs`: the contract. Its module comment states the three promises an adapter
+  keeps; the comments on `Adapter` and `TextKind` say what each part means.
+- The top of `crates/ventris/src/adapters/mod.rs`: what each part of an adapter says, and the shared
+  modules an adapter reuses rather than writes again.
+- The module comments of the existing adapters, under `crates/ventris/src/adapters/`: what the road found
+  in two games.
+- `docs/commands.md` and `docs/packs.md`: the commands, and what a translator does with your adapter.
+
+## Guardrails
+
+- **What is learned about a game goes in; the game does not.** A character table, the addresses of its
+  routines and the layout of its archive are knowledge. Its script, its font, its code, its pictures, a
+  saved state and a patch made from it are the game. Study scripts, extracted text, dumps and screenshots
+  stay under `work/` or `roms/`, which git ignores, or outside the repository.
+- **The game comes from the user.** Ask for the path to their copy, the release they mean to support.
+  Never download a game, a BIOS or a patch.
+- **Text only.** An adapter does not change the game beyond its text: no name-entry screens, no boxes laid
+  out again, no pictures redrawn, nothing in how the game behaves (`docs/adding-a-game.md`, "Scope"). An
+  adapter that only extracts is a whole contribution.
+- **An answer key is for facts.** A fan translation, a decompilation or a disassembly tells you where
+  things are and what changed. None of its code or text goes into the adapter; check its licence before
+  taking more than facts.
+- **The user's account is the user's.** Commit, push, open an issue or a pull request, or comment, only
+  when the user asks, and show them what you will post.
+- **Say what was verified and what was not**, with the evidence, to the user and in the pull request.
+
+## 1. Find out what already exists, and tell the user
+
+Before any study, look for:
+
+- **A translation of the game in any language**, finished or partial. One web search is not enough:
+  search in the game's own language and script and in the languages of the likely translators (English,
+  Chinese, Korean, Spanish, Portuguese, Russian and others), on GitHub, in the databases of fan
+  translations and ROM hacks, and in forums. Patches are often kept where an English search does not
+  reach. Days of work have been spent on a game that turned out to have patches published this way.
+- **A decompilation or a commented disassembly**, of any release: the formats carry over even when the
+  addresses do not.
+- **Documented formats**: notes on the game's text, compression, archive or font.
+- **Whether someone has claimed the game** in the ventris issues or Discussions.
+
+Tell the user what you found, with links, and what you looked for and did not find. A translation into
+the language they want may change whether the work is worth doing; that is their decision. To claim the
+game, the issue form for a game (`docs/adding-a-game.md`, "Asking for a game") says what to give; ask
+before you open it.
+
+## 2. Read the contract and the guide
+
+Read `CONTRIBUTING.md`, `docs/adding-a-game.md` in full, the module comment of `adapter.rs` and the
+comments on `Adapter` and `TextKind`, the top of `adapters/mod.rs`, and the module comment of the existing
+adapter nearest your game. Then follow the order of work `docs/adding-a-game.md` gives: set up the
+emulator, know the file, follow a line on screen back to where it is stored, write the adapter, check it,
+look at the screen.
+
+## 3. Work in that order
+
+- Build and run with the tools the guide names: `ventris` for `check`, `extract` and `font`, and the
+  Python workbench (`uv run ventris-workbench --help`) for identifying the file, probing the emulator,
+  disassembling and comparing files.
+- Get extraction right first: `extract` and `verify`, with the script encoding back to the game's bytes.
+  The build can come later, from the user or from someone else.
+- Reuse the shared modules the top of `adapters/mod.rs` lists. What is about a console and not about the
+  game goes under `platforms/`.
+- Choose sections and numbers before the first release: a string's address, `section.number`, never
+  changes once released, and packs depend on it (`docs/adding-a-game.md`, "Addresses never change").
+- A refusal names the string, the limit and what to do, in words a translator can act on. Write each kind
+  of text's `limits` for a translator, in a sentence.
+- Keep the module comment up to date with what was found, for a reader who has not seen the game.
+
+## 4. Check it
+
+- A pack that changes nothing must rebuild the original image byte for byte, and whatever a pack leaves
+  out keeps the game's own bytes. `ventris check GAME` holds the adapter to the contract as far as a
+  program can; run it and keep its output for the pull request.
+- Tests go in `tests.rs` beside the module. A test that needs the game finds it with `crate::testing` and
+  passes without checking anything when it is missing. No test fixture is cut from the game.
+- Run the checks in `CONTRIBUTING.md`, "Checks".
+
+## 5. Look at the screen
+
+A change to what the game shows is not done until it has been seen in a screenshot from an emulator.
+Build with a few changed strings of your own in each kind of text that can be inserted, and look at each
+where the game shows it. When the font changed, start from power-on: a saved state carries the video
+memory, and with it the old font. If you cannot run the emulator, say so and tell the user what to look
+at and where.
+
+## 6. The pull request
+
+Only when the user asks. Before any commit, run `git status` and check that no game file, extracted text,
+dump, saved state or screenshot is in it. `docs/adding-a-game.md`, "What a pull request shows", lists
+what goes in the description: the module, the output of `ventris check`, screenshots of changed text (in
+the pull request, not the repository), what was verified and what was not, the release, and which answer
+keys were used.
