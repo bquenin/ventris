@@ -23,9 +23,14 @@ pub enum Error {
     /// An image is not one a platform can read, or has no such file or address.
     #[error("{0}")]
     Image(String),
-    /// No adapter matches the file.
+    /// No adapter matches the file, and nothing can be said of what it is.
     #[error("{} is not a game ventris knows how to read yet", .0.display())]
     UnknownGame(PathBuf),
+    /// No adapter matches the file, and it can be told what the file is and what is needed instead:
+    /// a compressed file, another release of a game ventris knows, a changed copy, a game with no
+    /// adapter. The message is written for a player (`refusal`).
+    #[error("{0}")]
+    Refused(String),
     /// An adapter does not do what the contract says.
     #[error("{0}")]
     Conformance(String),

@@ -21,6 +21,8 @@ interface Props {
   own: OwnFolder | undefined;
   file: GameFile | undefined;
   gamesFolder: string | null;
+  /** What the games folder holds of the game when it is not found there. */
+  near?: string[];
   /** Whether the games folder is being looked through. */
   searching: boolean;
   building: boolean;
@@ -60,6 +62,7 @@ export function TranslatePage(props: Props) {
           games={props.games}
           file={file}
           gamesFolder={props.gamesFolder}
+          near={props.near}
           searching={props.searching}
           building={props.building}
           reading={reading}

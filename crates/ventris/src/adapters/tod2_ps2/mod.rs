@@ -263,7 +263,7 @@ use std::ops::{Range, RangeInclusive};
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
-use crate::adapter::{Adapter, BuildOptions, Built, Release, TextKind};
+use crate::adapter::{Adapter, BuildOptions, Built, CatalogueEntry, Refused, Release, TextKind};
 use crate::codecs::lzss_ring;
 use crate::error::{Error, Result, text_error};
 use crate::fonts::{self, Bitmap, Font};
@@ -4162,7 +4162,38 @@ impl Adapter for Tod2 {
     }
 
     fn images(&self) -> &'static [Release] {
-        &[Release { sha1: ROM_SHA1, name: "Japan, version 1.01", size: 3_234_004_992 }]
+        // Redump's "Tales of Destiny 2 (Japan, Asia)", disc 15921, whose record gives this SHA-1: the
+        // print sold in Asia, SCPS-55050, is the same image, and its SYSTEM.CNF names the same program.
+        &[Release {
+            sha1: ROM_SHA1,
+            name: "Japan, version 1.01",
+            size: 3_234_004_992,
+            label: "SLPS-25172",
+            version: "1.01",
+            // redump.org does not answer over https, so its address is http.
+            catalogue: Some(CatalogueEntry {
+                catalogue: &ps2::REDUMP,
+                name: "Tales of Destiny 2 (Japan, Asia)",
+                page: Some("http://redump.org/disc/15921/"),
+            }),
+        }]
+    }
+
+    fn refuses(&self) -> &'static [Refused] {
+        // The other releases, from Redump and PCSX2's list of games. Each serial is one edition,
+        // whatever version its disc gives. None has been taken apart: a reissue's program and
+        // archive differ from this one's, so none of the offsets here would hold.
+        const fn release(label: &'static str, about: &'static str) -> Refused {
+            Refused { label, version: None, about, patched: false }
+        }
+        const REFUSED: &[Refused] = &[
+            release("SLPS-72502", "the Mega Hits! reissue, in Japanese"),
+            release("SLPS-73219", "the PlayStation 2 the Best reissue, in Japanese"),
+            release("SCAJ-20028", "the release for Asia"),
+            release("SCKA-20008", "the release in Korean"),
+            release("SCKA-20054", "the PlayStation 2 BigHit Series reissue, in Korean"),
+        ];
+        REFUSED
     }
 
     fn source_language(&self) -> &'static str {

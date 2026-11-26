@@ -303,6 +303,7 @@ export default function App() {
               own={ownOf(game)}
               file={kept.games[game.id]}
               gamesFolder={kept.games_folder}
+              near={kept.near?.[game.id]}
               searching={searching}
               building={job?.state === "building" || script?.state === "saving"}
               onFile={(found) => setKept((known) => ({ ...known, games: { ...known.games, [found.game]: found.file } }))}
@@ -325,6 +326,7 @@ export default function App() {
               onLookAgain={refreshPacks}
               file={kept.games[game.id]}
               gamesFolder={kept.games_folder}
+              near={kept.near?.[game.id]}
               searching={searching}
               building={job?.state === "building" || script?.state === "saving"}
               onFile={(found) => setKept((known) => ({ ...known, games: { ...known.games, [found.game]: found.file } }))}

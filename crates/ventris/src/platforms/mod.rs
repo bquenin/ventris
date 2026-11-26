@@ -1,9 +1,11 @@
 //! What is about a console and not about one game.
 //!
 //! Each console's module is two things. Its `PLATFORM` is the little the engine itself needs, on the
-//! contract in `platform`: recognising an image, opening it, naming it by its SHA-1. The rest of
-//! the module is a library for the adapters of that console's games: address mapping, headers and
-//! checksums, expansion, an assembler for injected code, reading and rebuilding a disc image.
+//! contract in `platform`: recognising an image, opening it, naming it by its SHA-1, and reading what
+//! it says it is (a disc's serial, a cartridge's title), which tells a refused file what it is. The
+//! rest of the module is a library for the adapters of that console's games: address mapping,
+//! headers and checksums, expansion, an assembler for injected code, reading and rebuilding a disc
+//! image.
 
 use std::path::Path;
 

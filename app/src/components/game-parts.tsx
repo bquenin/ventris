@@ -5,7 +5,7 @@
 import { useState } from "react";
 
 import * as backend from "../lib/backend";
-import type { Fault, Game, GameFile, Pack, Recognised } from "../lib/backend";
+import type { Catalogued, Fault, Game, GameFile, Pack, Recognised, Release } from "../lib/backend";
 import { languageName, splitName, whatItChanges } from "../lib/format";
 
 type Notice = { tone: "bad" | "plain"; words: string };
@@ -20,6 +20,8 @@ export function YourCopy(props: {
   games: Game[];
   file: GameFile | undefined;
   gamesFolder: string | null;
+  /** What the games folder holds of the game when it is not found there, as sentences that each start with a file. */
+  near?: string[];
   /** Whether the games folder is being looked through. */
   searching: boolean;
   /** Whether something else is under way that needs the game's file, such as a build. */
@@ -35,7 +37,6 @@ export function YourCopy(props: {
   const [notice, setNotice] = useState<Notice | null>(null);
   const { title } = splitName(game.name);
   const busy = reading || searching || props.building;
-  const releases = game.releases.map((known) => known.name).join("; ");
 
   async function chooseFile() {
     const path = await backend.pickGameFile(`Choose your copy of ${title}`);
@@ -96,20 +97,33 @@ export function YourCopy(props: {
               {reading ? "Reading the file…" : "or choose this game's file"}
             </button>
           </div>
+          <KnownReleases game={game} />
         </>
       ) : searching ? (
         <p className="text-sm text-fg-muted">Looking through your games folder…</p>
       ) : (
         <>
           <p className="text-sm">This game was not found in your games folder.</p>
-          <p className="mt-1 text-sm text-fg-muted">
-            This is the release ventris knows: {releases}. A copy that was changed, such as one with a translation
-            already applied, is not the same file and is not recognised. If you keep the game somewhere else, choose its
-            file.
+          {props.near && props.near.length > 0 && (
+            <>
+              <p className="mt-2 text-sm text-fg-muted">These files in it are this game, or may be, and are not the file needed:</p>
+              <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-fg-muted">
+                {props.near.map((line) => (
+                  <li key={line} className="selectable">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          <p className="mt-2 text-sm text-fg-muted">
+            A copy that was changed, such as one with a translation already applied, is not the same file and is not
+            recognised. If you keep the game somewhere else, choose its file.
           </p>
           <button className="button mt-3" onClick={chooseFile} disabled={busy}>
             {reading ? "Reading the file…" : "Choose the game's file…"}
           </button>
+          <KnownReleases game={game} />
         </>
       )}
       {reading && <p className="mt-2 text-xs text-fg-faint">A disc is read whole, which takes a little while.</p>}
@@ -120,6 +134,59 @@ export function YourCopy(props: {
       )}
     </div>
   );
+}
+
+/**
+ * The releases of the game ventris reads, in full, so that a player can check a file of theirs against them without
+ * a document: what the file says it is, its size, and the SHA-1, which alone says it is that file.
+ */
+export function KnownReleases({ game }: { game: Game }) {
+  const one = game.releases.length === 1;
+  return (
+    <div className="mt-4 border-t border-bg-border pt-3 text-xs">
+      <p className="text-fg-faint">{one ? "The release ventris reads, and no other:" : "The releases ventris reads, and no others:"}</p>
+      {game.releases.map((release) => (
+        <div key={release.sha1} className="mt-1">
+          <p className="selectable text-fg-muted">{releaseFacts(release)}</p>
+          {release.catalogue && <CatalogueName catalogued={release.catalogue} />}
+          <p className="selectable break-all font-mono text-fg-faint">SHA-1 {release.sha1}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Where a catalogue of dumps lists the release: its name there, which players and their tools know a dump by, and what
+ * the catalogue is. The name opens the record's page in the browser where one is given; the app fetches nothing.
+ */
+function CatalogueName({ catalogued }: { catalogued: Catalogued }) {
+  const name = catalogued.page ? (
+    <button className="text-left text-accent hover:underline" onClick={() => backend.openHomepage(catalogued.page!)}>
+      {catalogued.entry}
+    </button>
+  ) : (
+    <span className="text-fg-muted">{catalogued.entry}</span>
+  );
+  return (
+    <p className="selectable text-fg-faint">
+      Its name in {catalogued.name}, {catalogued.about}: {name}
+    </p>
+  );
+}
+
+/**
+ * A release as a line: "Japan, version 1.01 · serial SLPS-25172 · 3,234,004,992 bytes". The version is left out where
+ * the release's name already gives it, as the engine leaves it out, so that it is not read twice.
+ */
+export function releaseFacts(release: Release): string {
+  // A label with spaces in it, a cartridge's title, is quoted as the engine quotes it, so that it reads as one name.
+  const name = release.label.includes(" ") ? `"${release.label}"` : release.label;
+  const label = release.label ? `${release.label_kind} ${name}` : "";
+  const named = release.version && release.name.includes(`version ${release.version}`);
+  const version = release.version && !named ? `version ${release.version}` : "";
+  const size = `${release.size.toLocaleString("en-US")} bytes`;
+  return [release.name, label, version, size].filter(Boolean).join(" · ");
 }
 
 /**

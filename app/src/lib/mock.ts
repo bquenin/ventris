@@ -9,7 +9,17 @@ const games: Game[] = [
     name: "Tales of Phantasia (Super Famicom, Japan)",
     platform: "Super Famicom / SNES",
     source_language: "ja",
-    releases: [{ sha1: "0000000000000000000000000000000000000001", name: "Japan" }],
+    releases: [
+      {
+        sha1: "fdecb234f416eb1cc1924e4f3d52c080c5bcd8d0",
+        name: "Japan",
+        size: 6291456,
+        label: "TALES OF PHANTASIA",
+        version: "1.0",
+        label_kind: "title",
+        catalogue: { name: "No-Intro", about: "the catalogue of cartridge dumps", entry: "Tales of Phantasia (Japan)", page: null },
+      },
+    ],
     kinds: [
       {
         name: "dialogue",
@@ -38,7 +48,22 @@ const games: Game[] = [
     name: "Tales of Destiny 2 (PlayStation 2, Japan)",
     platform: "PlayStation 2",
     source_language: "ja",
-    releases: [{ sha1: "0000000000000000000000000000000000000002", name: "Japan, version 1.01" }],
+    releases: [
+      {
+        sha1: "3b2be72b751607a7a2a56d62feec71584b4b8c72",
+        name: "Japan, version 1.01",
+        size: 3234004992,
+        label: "SLPS-25172",
+        version: "1.01",
+        label_kind: "serial",
+        catalogue: {
+          name: "Redump",
+          about: "the catalogue of disc dumps",
+          entry: "Tales of Destiny 2 (Japan, Asia)",
+          page: "http://redump.org/disc/15921/",
+        },
+      },
+    ],
     kinds: [
       { name: "dialogue", insert: true, grow: true, new_characters: true, max_length: null, limits: "" },
       { name: "skits", insert: true, grow: true, new_characters: true, max_length: null, limits: "" },
@@ -161,8 +186,44 @@ function listing(): Listing {
   return { ...theirs, own };
 }
 
+/**
+ * With `?missing` in the address the games folder holds neither game, to see the page that says so; with `?near` as
+ * well, it holds wrong copies of both, which the page names; with `?refuse`, a file chosen by hand is refused, as a disc
+ * of another release is.
+ */
+const missing = typeof window !== "undefined" && window.location.search.includes("missing");
+const near = typeof window !== "undefined" && window.location.search.includes("near");
+const refuse = typeof window !== "undefined" && window.location.search.includes("refuse");
+
+/** What the engine says of wrong copies in a games folder; the words are the engine's own, copied. */
+const nearMisses: Record<string, string[]> = {
+  "tod2-ps2": [
+    "ps2\\Tales of Destiny 2 (Japan) (PlayStation 2 the Best).iso is Tales of Destiny 2, but not the release ventris reads: " +
+      "it is the PlayStation 2 the Best reissue, in Japanese (serial SLPS-73219, version 2.01).",
+    "ps2\\Tales of Destiny 2 (Japan).chd, ps2\\Ace Combat 5.cso and ps2\\Ico.chd are compressed disc images (CHD, CSO or " +
+      "ZSO): ventris cannot read them, or tell which game they hold. If one is this game, convert it back to a plain disc " +
+      "image first.",
+  ],
+  "top-sfc": [
+    "snes\\Tales of Phantasia (Japan) [T-En DeJap].sfc is Tales of Phantasia with DeJap's English translation already " +
+      'applied (title "ToP English (C) DeJap", version 1.0). ventris reads the game as it was released, so it needs a copy ' +
+      "without the patch.",
+  ],
+};
+
+/** What the engine says of a disc of another release; the words are the engine's own, copied. */
+function refusal(path: string): string {
+  return (
+    `${path} is Tales of Destiny 2, but not the release ventris reads: it is the Mega Hits! reissue, in Japanese ` +
+    '(serial SLPS-72502, version 2.01). The release ventris reads is Japan, version 1.01, named "Tales of Destiny 2 ' +
+    '(Japan, Asia)" in Redump, the catalogue of disc dumps: serial SLPS-25172, 3,234,004,992 bytes, SHA-1 ' +
+    "3b2be72b751607a7a2a56d62feec71584b4b8c72."
+  );
+}
+
 /** What a search of a games folder gives: both games, one of them in an archive. */
 function found(folder: string): Remembered {
+  if (missing) return { games_folder: folder, own_packs: { ...ownPacks }, games: {}, near: near ? nearMisses : {} };
   return {
     games_folder: folder,
     own_packs: { ...ownPacks },
@@ -215,7 +276,9 @@ export const mock = {
     return later(listing(), 0);
   },
   recogniseGame: (path: string): Promise<Recognised> =>
-    later(
+    refuse
+      ? new Promise((_, reject) => setTimeout(() => reject(refusal(path)), 1200))
+      : later(
       { game: "tod2-ps2", file: { path, release: "Japan, version 1.01", sha1: games[1].releases[0].sha1, chosen: true } },
       1200,
     ),

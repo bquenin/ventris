@@ -14,7 +14,7 @@ use std::path::Path;
 
 use crate::adapter::{Adapter, BuildOptions, declaration_faults};
 use crate::error::{Error, Result};
-use crate::platform::Image;
+use crate::platform::{Image, label_words};
 use crate::script::{Pack, Script, parse_name, read_pack, string_name, write_pack};
 
 fn require(condition: bool, message: impl Into<String>) -> Result<()> {
@@ -52,6 +52,12 @@ pub fn check(adapter: &dyn Adapter, image: &Image, sha1: &str, work: &Path) -> R
     // A folder of games is searched by size: an image whose size is given wrong would never be found.
     let (given, size) = (known.map_or(0, |release| release.size), image.size()?);
     require(given == size, format!("the adapter gives its image as {given} bytes, and it is {size}"))?;
+    // A refused file is told whether it is this release by what it says it is, so that must be what
+    // the image says.
+    let platform = adapter.platform();
+    let given = known.map_or(String::new(), |release| label_words(platform, release.label, release.version));
+    let read = platform.label(image).map_or(String::new(), |label| label_words(platform, &label.name, &label.version));
+    require(given == read, format!("the adapter says its image gives {given}, and it gives {read}"))?;
 
     // --- extracting
     let game = adapter.extract(image)?;
@@ -182,9 +188,9 @@ mod tests {
 
     use sha1::{Digest, Sha1};
 
-    use crate::adapter::{Built, Release, TextKind};
+    use crate::adapter::{Built, CatalogueEntry, Refused, Release, TextKind};
     use crate::error::text_error;
-    use crate::platform::{Glance, Platform};
+    use crate::platform::{Glance, Label, Platform};
     use crate::script::changes;
 
     use super::*;
@@ -216,6 +222,12 @@ mod tests {
             let data = fs::read(path)?;
             let sha1 = sha1_of(&data);
             Ok((Image::Cartridge(data), sha1))
+        }
+
+        /// A made-up game says what it is on its first line, and is always version 1.
+        fn label(&self, image: &Image) -> Option<Label> {
+            let first = image.cartridge().ok()?.split(|byte| *byte == b'\n').next()?;
+            Some(Label { name: String::from_utf8_lossy(first).into_owned(), version: "1".into() })
         }
     }
 
@@ -301,6 +313,7 @@ mod tests {
     struct Toy {
         id: &'static str,
         images: &'static [Release],
+        refuses: &'static [Refused],
         kinds: &'static [TextKind],
         fonts: &'static [&'static str],
         name_limits: &'static str,
@@ -309,7 +322,15 @@ mod tests {
 
     const SOUND_TOY: Toy = Toy {
         id: "toy-files",
-        images: &[Release { sha1: TOY_SHA1, name: "the only one", size: TOY_SIZE }],
+        images: &[Release {
+            sha1: TOY_SHA1,
+            name: "the only one",
+            size: TOY_SIZE,
+            label: "one",
+            version: "1",
+            catalogue: None,
+        }],
+        refuses: &[],
         kinds: &SOUND,
         fonts: &[],
         name_limits: "",
@@ -340,6 +361,10 @@ mod tests {
 
         fn images(&self) -> &'static [Release] {
             self.images
+        }
+
+        fn refuses(&self) -> &'static [Refused] {
+            self.refuses
         }
 
         fn source_language(&self) -> &'static str {
@@ -510,11 +535,31 @@ mod tests {
         for (broken, fault) in [
             (Toy { id: "Toy Game", ..SOUND_TOY }, "is not lowercase words joined by hyphens"),
             (
-                Toy { images: &[Release { sha1: "abc", name: "not a SHA-1", size: 1 }], ..SOUND_TOY },
+                Toy {
+                    images: &[Release {
+                        sha1: "abc",
+                        name: "not a SHA-1",
+                        size: 1,
+                        label: "one",
+                        version: "1",
+                        catalogue: None,
+                    }],
+                    ..SOUND_TOY
+                },
                 "its images are not named by SHA-1",
             ),
             (
-                Toy { images: &[Release { sha1: TOY_SHA1, name: "no size", size: 0 }], ..SOUND_TOY },
+                Toy {
+                    images: &[Release {
+                        sha1: TOY_SHA1,
+                        name: "no size",
+                        size: 0,
+                        label: "one",
+                        version: "1",
+                        catalogue: None,
+                    }],
+                    ..SOUND_TOY
+                },
                 "it does not say how large its images are",
             ),
             (Toy { kinds: &NO_TRIAL, ..SOUND_TOY }, "names no two strings to try it on"),
@@ -528,6 +573,53 @@ mod tests {
                 "cannot be changed, yet says how a changed string is treated",
             ),
             (
+                Toy { refuses: &[Refused { label: "one", version: None, about: "it", patched: false }], ..SOUND_TOY },
+                "it both reads and refuses the files that say they are one",
+            ),
+            (
+                Toy {
+                    refuses: &[Refused { label: "two", version: Some("1"), about: "", patched: false }],
+                    ..SOUND_TOY
+                },
+                "a file it refuses is not given a label and a few words about it",
+            ),
+            (
+                Toy {
+                    images: &[Release {
+                        sha1: TOY_SHA1,
+                        name: "named by halves",
+                        size: TOY_SIZE,
+                        label: "one",
+                        version: "1",
+                        catalogue: Some(CatalogueEntry {
+                            catalogue: &crate::platforms::ps2::REDUMP,
+                            name: "",
+                            page: None,
+                        }),
+                    }],
+                    ..SOUND_TOY
+                },
+                "the name a catalogue gives one of its images is not given in full",
+            ),
+            (
+                Toy {
+                    images: &[Release {
+                        sha1: TOY_SHA1,
+                        name: "linked to a file",
+                        size: TOY_SIZE,
+                        label: "one",
+                        version: "1",
+                        catalogue: Some(CatalogueEntry {
+                            catalogue: &crate::platforms::ps2::REDUMP,
+                            name: "Toy (World)",
+                            page: Some("ftp://example.org/toy"),
+                        }),
+                    }],
+                    ..SOUND_TOY
+                },
+                "the page of a catalogue's record it gives is not a web address",
+            ),
+            (
                 Toy { name_limits: "a name is short", ..SOUND_TOY },
                 "it gives limits on its characters' names, and a pack cannot set any",
             ),
@@ -537,6 +629,28 @@ mod tests {
             // And the checks stop there, before looking at the game.
             assert!(matches!(checked(&broken, TOY), Err(Error::Conformance(message)) if message.contains(fault)));
         }
+    }
+
+    #[test]
+    fn what_an_image_says_it_is_must_be_what_the_adapter_says() {
+        // Another release of the game is refused elsewhere; this one is not, and says so.
+        let other =
+            Toy { refuses: &[Refused { label: "ONE", version: None, about: "it", patched: false }], ..SOUND_TOY };
+        assert_eq!(declaration_faults(&other), Vec::<String>::new());
+        assert!(checked(&other, TOY).is_ok());
+        let wrong = Toy {
+            images: &[Release {
+                sha1: TOY_SHA1,
+                name: "the only one",
+                size: TOY_SIZE,
+                label: "one",
+                version: "2",
+                catalogue: None,
+            }],
+            ..SOUND_TOY
+        };
+        let fault = checked(&wrong, TOY).unwrap_err().to_string();
+        assert_eq!(fault, "the adapter says its image gives name one, version 2, and it gives name one, version 1");
     }
 
     #[test]

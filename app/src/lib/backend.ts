@@ -20,6 +20,34 @@ export interface Kind {
   limits: string;
 }
 
+/** A release of a game that ventris reads, in full, so that a player can check a file against it. */
+export interface Release {
+  sha1: string;
+  /** "Japan, version 1.01" */
+  name: string;
+  /** Its size in bytes. */
+  size: number;
+  /** What the image says it is: a disc's serial, "SLPS-25172", or a cartridge's title. */
+  label: string;
+  version: string;
+  /** What the label is, as a word to show before it: "serial", "title". */
+  label_kind: string;
+  /** Where a catalogue of dumps lists it, when one does. */
+  catalogue: Catalogued | null;
+}
+
+/** A release as a catalogue of dumps lists it. The catalogues host no games: a record is facts about a dump. */
+export interface Catalogued {
+  /** "Redump" */
+  name: string;
+  /** What it is, for someone who has never heard of it: "the catalogue of disc dumps". */
+  about: string;
+  /** The release's name there: "Tales of Destiny 2 (Japan, Asia)". */
+  entry: string;
+  /** The address of its record there, opened in the browser; null where none is given. */
+  page: string | null;
+}
+
 export interface Game {
   /** The id of the game's adapter, which packs name: "tod2-ps2". */
   id: string;
@@ -28,7 +56,8 @@ export interface Game {
   platform: string;
   /** The language of the game's own text, as a tag: "ja". */
   source_language: string;
-  releases: { sha1: string; name: string }[];
+  /** The releases ventris reads, which are the only files of the game it takes. */
+  releases: Release[];
   kinds: Kind[];
   can_insert: boolean;
   sets_names: boolean;
@@ -111,6 +140,12 @@ export interface Remembered {
   own_packs: Record<string, string>;
   /** Each game's file, by the id of the game's adapter. */
   games: Record<string, GameFile>;
+  /**
+   * Given by a search of the games folder, and not remembered: for each game not found there, what the folder holds of
+   * it, as sentences that start with a file's path from the folder (a wrong copy and why it is not read, compressed
+   * disc images). A game with nothing to say is left out.
+   */
+  near?: Record<string, string[]>;
 }
 
 export interface Recognised {

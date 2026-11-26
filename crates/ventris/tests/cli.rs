@@ -99,7 +99,10 @@ fn the_games_command_lists_every_adapter() {
     // The games come in the order the Python reference lists them, this one first.
     let entry = "Tales of Phantasia (Super Famicom, Japan)\n\
         \x20 id         top-sfc, for Super Famicom / SNES, in ja\n\
-        \x20 image      fdecb234f416eb1cc1924e4f3d52c080c5bcd8d0  Japan\n\
+        \x20 release    Japan\n\
+        \x20            title \"TALES OF PHANTASIA\", version 1.0, 6,291,456 bytes, SHA-1 \
+        fdecb234f416eb1cc1924e4f3d52c080c5bcd8d0\n\
+        \x20            named \"Tales of Phantasia (Japan)\" in No-Intro, the catalogue of cartridge dumps\n\
         \x20 dialogue   extract; insert, longer strings; new characters; lines fitted to the screen\n\
         \x20            limits: an area's longest string and its events must fit together in the 16,480 bytes of \
         memory the game has for them; the name of a place, shown on entering it, is centred on one line, which \
@@ -127,7 +130,10 @@ fn the_games_command_lists_every_adapter() {
     assert_eq!(titles, adapters::ALL.iter().map(|adapter| adapter.name()).collect::<Vec<_>>());
     let entry = "Tales of Destiny 2 (PlayStation 2, Japan)\n\
         \x20 id         tod2-ps2, for PlayStation 2, in ja\n\
-        \x20 image      3b2be72b751607a7a2a56d62feec71584b4b8c72  Japan, version 1.01\n\
+        \x20 release    Japan, version 1.01\n\
+        \x20            serial SLPS-25172, 3,234,004,992 bytes, SHA-1 3b2be72b751607a7a2a56d62feec71584b4b8c72\n\
+        \x20            named \"Tales of Destiny 2 (Japan, Asia)\" in Redump, the catalogue of disc dumps\n\
+        \x20            http://redump.org/disc/15921/\n\
         \x20 dialogue   extract; insert, longer strings; new characters; lines fitted to the screen\n\
         \x20            limits: the text of one script cannot pass 65,535 bytes, and a string that nothing in its \
         script's code refers to cannot take more bytes than the game's own; the strings of program-script share the \
@@ -171,6 +177,14 @@ fn a_file_that_is_no_game_is_refused() {
         run.err.starts_with("error: ")
             && run.err.trim_end().ends_with("notes.txt is not a game ventris knows how to read yet")
     );
+    assert!(!folder.path().join("out").exists());
+
+    // A compressed disc image is told for what it is, and how to get the plain file back.
+    let chd = folder.path().join("game.chd");
+    fs::write(&chd, b"MComprHD\x00\x00\x00\x7c\x00\x00\x00\x05").unwrap();
+    let run = ventris(&["extract", text(&chd), "-o", text(&folder.path().join("out"))]);
+    assert_eq!((run.code, run.out.as_str()), (Some(1), ""));
+    assert!(run.err.contains("game.chd is a CHD file, a compressed disc image. "), "{}", run.err);
     assert!(!folder.path().join("out").exists());
 
     let run = ventris(&["font", text(&folder.path().join("missing.sfc")), "-o", text(&folder.path().join("font.png"))]);
@@ -733,6 +747,27 @@ fn the_built_in_fonts_are_listed_with_their_terms() {
         let terms = terms.split("\n==== ").next().unwrap_or_default();
         assert!(terms.contains(words), "{name}: {terms}");
     }
+}
+
+#[test]
+fn a_game_that_is_not_found_is_named_with_what_the_folder_holds_of_it() {
+    let folder = tempfile::tempdir().unwrap();
+    fs::write(folder.path().join("game.chd"), b"MComprHD\x00\x00\x00\x7c and the rest").unwrap();
+    let run = ventris(&["find", text(folder.path())]);
+    assert_eq!(run.code, Some(0), "{}", run.err);
+    assert_eq!(
+        run.out.lines().collect::<Vec<_>>(),
+        [
+            DISC_GAME,
+            "  id         tod2-ps2",
+            "  not found  The release ventris reads is Japan, version 1.01, named \"Tales of Destiny 2 (Japan, Asia)\" in \
+             Redump, the catalogue of disc dumps: serial SLPS-25172, 3,234,004,992 bytes, SHA-1 \
+             3b2be72b751607a7a2a56d62feec71584b4b8c72.",
+            "  passed by  game.chd is a compressed disc image (CHD, CSO or ZSO): ventris cannot read it, or tell which \
+             game it holds. If it is this game, convert it back to a plain disc image first.",
+            "found 0 of the 2 games there are adapters for; 0 files had the size of one",
+        ]
+    );
 }
 
 #[test]
