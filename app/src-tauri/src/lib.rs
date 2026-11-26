@@ -553,7 +553,7 @@ mod tests {
     fn every_game_is_listed_with_what_a_pack_can_change() {
         let listed = games();
         let ids: Vec<&str> = listed.iter().map(|game| game.id).collect();
-        assert_eq!(ids, ["top-sfc", "tod2-ps2"]);
+        assert_eq!(ids, ["top-sfc", "tod2-ps2", "srwz-ps2"]);
         let last = &listed[1];
         assert_eq!((last.platform, last.source_language, last.can_insert), ("PlayStation 2", "ja", true));
         assert!(last.kinds.iter().any(|kind| kind.name == "menus" && kind.insert && kind.grow));

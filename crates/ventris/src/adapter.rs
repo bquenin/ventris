@@ -313,6 +313,12 @@ pub trait Adapter: Sync {
     }
 }
 
+/// Whether two adapters are the same one. They are told apart by id, not by address: an adapter is
+/// an empty type, and the statics of empty types may all share one address.
+pub fn same_adapter(one: &dyn Adapter, other: &dyn Adapter) -> bool {
+    one.id() == other.id()
+}
+
 /// What is wrong with what an adapter says about itself, without looking at any game.
 pub fn declaration_faults(adapter: &dyn Adapter) -> Vec<String> {
     let mut faults = Vec::new();

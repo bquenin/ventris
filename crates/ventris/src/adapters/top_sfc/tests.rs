@@ -313,7 +313,7 @@ fn the_adapter_declares_itself_properly() {
         [Some("dialogue"), Some("dialogue"), None, None, None]
     );
     assert_eq!(ADAPTER.unmapped("あ{K:04E8}い{K:04e8}{K:12}{K:0CC5}{K:04E8"), ["04E8", "0CC5"]);
-    assert!(std::ptr::addr_eq(ADAPTER.platform(), &snes::PLATFORM));
+    assert!(crate::platform::same_platform(ADAPTER.platform(), &snes::PLATFORM));
     assert!(ADAPTER.sets_names() && ADAPTER.takes_menu_font());
     // The limits a name is said to have are the ones a build holds it to.
     let limits = ADAPTER.name_limits();

@@ -83,6 +83,12 @@ pub fn label_words(platform: &dyn Platform, name: &str, version: &str) -> String
     words
 }
 
+/// Whether two consoles are the same one. They are told apart by name, not by address: a console is
+/// an empty type, and the statics of empty types may all share one address.
+pub fn same_platform(one: &dyn Platform, other: &dyn Platform) -> bool {
+    one.name() == other.name()
+}
+
 /// One console.
 pub trait Platform: Sync {
     /// As shown to a user: "Super Famicom / SNES".

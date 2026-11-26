@@ -8,10 +8,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::adapter::{Adapter, BuildOptions, Release, TextKind};
+use crate::adapter::{Adapter, BuildOptions, Release, TextKind, same_adapter};
 use crate::error::{Error, Result};
 use crate::manifest::{self, Manifest};
-use crate::platform::{Image, Platform};
+use crate::platform::{Image, Platform, same_platform};
 use crate::script::{Script, read_pack, write_pack_with};
 use crate::{adapters, platforms, refusal};
 
@@ -33,7 +33,7 @@ pub fn open_game(path: &Path) -> Result<(Image, &'static dyn Adapter, String)> {
         return Err(refusal::unrecognised(path));
     };
     let (image, sha1) = platform.open(path)?;
-    let adapter = adapters::find(&sha1).filter(|adapter| std::ptr::addr_eq(adapter.platform(), platform));
+    let adapter = adapters::find(&sha1).filter(|adapter| same_platform(adapter.platform(), platform));
     match adapter {
         Some(adapter) => Ok((image, adapter, sha1)),
         None => Err(refusal::refused(path, platform, &image)),
@@ -302,7 +302,7 @@ const LARGER_THAN_A_CARTRIDGE: u64 = 16 << 20;
 
 /// The games on a console that have an image of this size.
 fn games_of_size(platform: &'static dyn Platform, size: u64) -> Vec<&'static dyn Adapter> {
-    let on_it = |adapter: &&'static dyn Adapter| std::ptr::addr_eq(adapter.platform(), platform);
+    let on_it = |adapter: &&'static dyn Adapter| same_platform(adapter.platform(), platform);
     let of_size = |adapter: &&'static dyn Adapter| adapter.images().iter().any(|image| image.size == size);
     adapters::ALL.iter().copied().filter(on_it).filter(of_size).collect()
 }
@@ -405,12 +405,12 @@ pub fn identify_noting<'a>(candidates: impl IntoIterator<Item = &'a Candidate>) 
     let mut games: Vec<Found> = Vec::new();
     let mut passed = Vec::new();
     for candidate in candidates {
-        let wanted = |adapter: &&dyn Adapter| !games.iter().any(|found| std::ptr::addr_eq(found.adapter, *adapter));
+        let wanted = |adapter: &&dyn Adapter| !games.iter().any(|found| same_adapter(found.adapter, *adapter));
         if !candidate.could_be.iter().any(wanted) {
             continue;
         }
         match candidate.examine() {
-            Ok(Examined::Game(found)) if !games.iter().any(|known| std::ptr::addr_eq(known.adapter, found.adapter)) => {
+            Ok(Examined::Game(found)) if !games.iter().any(|known| same_adapter(known.adapter, found.adapter)) => {
                 games.push(found)
             }
             Ok(Examined::Not(Some(near))) => passed.push(near),
@@ -459,9 +459,9 @@ impl Survey {
     /// now. Those are read only for the consoles of the games that are missing, a few bytes each;
     /// nothing is hashed.
     pub fn missed(&self, missing: &[&'static dyn Adapter], read: &[Passed]) -> Vec<Missed> {
-        let is_missing = |adapter: &dyn Adapter| missing.iter().any(|wanted| std::ptr::addr_eq(*wanted, adapter));
+        let is_missing = |adapter: &dyn Adapter| missing.iter().any(|wanted| same_adapter(*wanted, adapter));
         let wanted_on =
-            |platform: &dyn Platform| missing.iter().any(|adapter| std::ptr::addr_eq(adapter.platform(), platform));
+            |platform: &dyn Platform| missing.iter().any(|adapter| same_platform(adapter.platform(), platform));
         let mut passed: Vec<Passed> = read.iter().filter(|near| is_missing(near.adapter)).cloned().collect();
         let mut compressed = Vec::new();
         for glimpse in &self.glimpses {
@@ -481,7 +481,7 @@ impl Survey {
             .iter()
             .map(|adapter| Missed {
                 adapter: *adapter,
-                passed: passed.iter().filter(|near| std::ptr::addr_eq(near.adapter, *adapter)).cloned().collect(),
+                passed: passed.iter().filter(|near| same_adapter(near.adapter, *adapter)).cloned().collect(),
                 compressed: if adapter.platform().disc() { compressed.clone() } else { Vec::new() },
             })
             .collect()
