@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use crate::adapter::{Adapter, Refused, Release};
 use crate::adapters;
 use crate::error::Error;
-use crate::platform::{Image, Label, Platform, label_words};
+use crate::platform::{Image, Label, Platform, label_words, same_platform};
 use crate::tasks::shown;
 
 /// A compressed or wrapped file, told by how it starts.
@@ -198,7 +198,7 @@ enum Miss {
 
 /// Which of those a file is, from what it says it is and its size.
 fn classify(platform: &'static dyn Platform, label: &Label, size: u64) -> Miss {
-    let on_it = |adapter: &&'static dyn Adapter| std::ptr::addr_eq(adapter.platform(), platform);
+    let on_it = |adapter: &&'static dyn Adapter| same_platform(adapter.platform(), platform);
     let games: Vec<&'static dyn Adapter> = adapters::ALL.iter().copied().filter(on_it).collect();
     for adapter in &games {
         let same =

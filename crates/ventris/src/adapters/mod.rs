@@ -80,7 +80,7 @@ mod tests {
     fn the_registry_holds_adapters_that_declare_themselves_properly() {
         assert_eq!(ALL.iter().map(|adapter| adapter.id()).collect::<Vec<_>>(), ["top-sfc", "tod2-ps2", "srwz-ps2"]);
         let same = |found: Option<&dyn Adapter>, adapter: &dyn Adapter| {
-            found.is_some_and(|found| std::ptr::addr_eq(found, adapter))
+            found.is_some_and(|found| crate::adapter::same_adapter(found, adapter))
         };
         for adapter in ALL.iter().copied() {
             assert_eq!(declaration_faults(adapter), Vec::<String>::new());
