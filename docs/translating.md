@@ -325,6 +325,21 @@ A pack may be machine translated, in whole or in part, as long as it says so in 
 `authors` or in `description`. The packs there now say it in both. A reader then knows what they are
 getting, and a reviewer knows where to look hardest.
 
+## Working with a coding agent
+
+A coding agent, such as Claude Code or Codex, can do this work with you by command line: extract the
+script, keep the pack's files and its glossary in order, build the game, and read what a refused build
+says. It cannot drive the app, so it uses the commands in [Commands](commands.md#for-a-translator).
+
+This repository has a skill for it, [`skills/ventris-translate`](../skills/ventris-translate/SKILL.md): a
+file of instructions in the [Agent Skills](https://agentskills.io/) format that holds the agent to the
+rules on this page. To give it to your agent, copy that folder into the folder your agent takes skills
+from: `~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex. Other agents have their own
+place, which their documentation gives. Any agent can also be asked to read the file.
+
+You stay responsible for what you send. What an agent translates is a machine translation and is
+declared as one, and only what someone saw on screen counts as seen.
+
 ## The licence
 
 Packs in the packs repository are under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0

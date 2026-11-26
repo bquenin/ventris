@@ -60,6 +60,20 @@ start work, and the build can come later, from you or from someone else.
 
 The engine keeps its rules in [CONTRIBUTING.md](../CONTRIBUTING.md). Read it before you start.
 
+### Working with a coding agent
+
+If you work with a coding agent, such as Claude Code or Codex, give it the skill
+[`skills/ventris-adapter`](../skills/ventris-adapter/SKILL.md): a file of instructions in the
+[Agent Skills](https://agentskills.io/) format that holds it to this page and to the rules. Copy that
+folder into the folder your agent takes skills from: `~/.claude/skills/` for Claude Code,
+`~/.agents/skills/` for Codex; other agents have their own place, which their documentation gives. Any
+agent can also be asked to read the file. [AGENTS.md](../AGENTS.md), at the top of the repository, says
+in short which skill is for which job, the rules and the checks; Codex and many other agents read it by
+themselves in a copy of the repository.
+
+You stay responsible for the pull request: read the code, and say what was seen on screen and what was
+not.
+
 ## Setting up the emulators
 
 You need the emulator for your game's console, set up once. The last step for each is a command that
