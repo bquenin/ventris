@@ -48,6 +48,12 @@ start work, and the build can come later, from you or from someone else.
   [uv](https://docs.astral.sh/uv/) and Python 3.11 or later; `uv run ventris-workbench --help` lists the
   tools. Nothing in it is part of what a translator runs.
 - **Rust** (1.89 or later) to build ventris and run its tests.
+- A decompilation or a commented disassembly of the game, if there is one. Look before you start: it takes
+  minutes, and where one exists it has already written down, with names, what you would otherwise trace in an
+  emulator: where the text is, its encoding, what points at it, the compression, the routine that draws it.
+  Many are of another release than yours, often the American one: the formats carry over, but the addresses
+  have to be found again. Like a fan translation, it is an answer key for facts. Decompiled code is the game's
+  code in another form, so none of it goes into an adapter; check its licence before taking more than facts.
 - An existing fan translation of the game, if there is one. It is an answer key for facts: comparing it
   with the original shows where the text is and what had to change to move it. Check its licence before
   taking more than facts.
@@ -293,7 +299,8 @@ old font.
   keep it to the pull request.
 - What was verified and what was not: which scenes were seen, which kinds were only built, what is known
   not to work.
-- The release the adapter was made for, and where a fan translation was used as an answer key.
+- The release the adapter was made for, and where a fan translation, a decompilation or a disassembly was used
+  as an answer key.
 - The checks in [CONTRIBUTING.md](../CONTRIBUTING.md) passing.
 
 No game file goes in: no image, no extracted script, no font sheet, no saved state, no patch made from a
@@ -315,5 +322,6 @@ unless a pack asks for it.
 
 Open an issue with [the form for a game](https://github.com/bquenin/ventris/issues/new/choose). Say which
 game, which release and region, and which console; what is known about how it stores its text, if
-anything; and whether a fan translation exists that could serve as an answer key. A request is also the
-place to say you are starting on an adapter, so that two people do not take the same game apart at once.
+anything; and whether a fan translation, a decompilation or a disassembly exists that could serve as an
+answer key. A request is also the place to say you are starting on an adapter, so that two people do not
+take the same game apart at once.
