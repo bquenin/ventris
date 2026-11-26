@@ -152,9 +152,10 @@ you can play through and judge.
 - Play the part in the built game and read the pack's files beside it. What the screen shows tells you
   what the file cannot: a line that runs off its box, a name cut short, a sentence that reads wrong where
   it lands.
-- Correct the meaning where the translation is wrong, and the wording where it is stiff. Someone who reads
-  only the translation's language can still fix wording, spelling and what does not fit; meaning takes
-  someone who knows the original.
+- Correct the meaning where the translation is wrong, the tone where it is softer or harsher than the
+  original's ([Stay close to the original](#stay-close-to-the-original)), and the wording where it is
+  stiff. Someone who reads only the translation's language can still fix wording, spelling and what does
+  not fit; meaning and tone take someone who knows the original.
 - **Keep a name the same everywhere.** A character, a place or a skill is named in dialogue, in menus, in
   lists and in the notes, and a player who meets two spellings thinks they are two things. If you change
   an established name, change it in every file of the pack and in `NOTES.md`, in the same pull request.
@@ -208,6 +209,35 @@ is already there and has files in it, nothing is written, so a second save never
 the app says so, and you can pick another place.
 
 That script is the game's own text: keep it on your computer, never in a pack, and never share it.
+
+### Fix the names first
+
+Before translating at volume, read through the script and make the pack's glossary: the names of
+characters, places, machines, attacks, skills and items, and the terms that come back. Write it in the
+pack's `NOTES.md`, one line a term, with the original, the name chosen and where it comes from.
+
+- **An official name wins.** Many games, and the series, films and shows they draw on, have official
+  names in your language: in an earlier or later release of the game, a release in another country, the
+  anime or manga it comes from, the publisher's own site. Use those, and give the source.
+- **Where there is none**, choose one, preferring the usage of a reference work players know (a wiki, a
+  database), and say so. A fan translation's own wording is not a source.
+- **Then keep to it.** Every string uses the glossary's name, in dialogue, menus and lists alike: a player
+  who meets two spellings thinks they are two things. A term that is not in the glossary yet goes in
+  before it is used, not after.
+
+### Stay close to the original
+
+A pack translates what the game says, as the game says it. The aim is the original's meaning and its
+tone, as close as the language allows.
+
+- **Rough stays rough.** Swearing, insults, crude jokes, threats, violence and innuendo keep their
+  strength. Polite stays polite, stiff stays stiff, and a character's way of speaking is the same in every
+  line.
+- **Nothing is softened, censored, left out or added.** No toning down, no explaining, no modernising, no
+  jokes the original does not make.
+- **Wordplay that cannot carry over**, a pun or a tongue twister, gets one that does the same job in your
+  language, with a comment under its header saying what the original was.
+- **When a line has to be shorter**, cut words, not meaning or tone.
 
 ### Write the pack
 
