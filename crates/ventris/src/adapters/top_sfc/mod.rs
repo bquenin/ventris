@@ -203,7 +203,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use crate::adapter::{Adapter, BuildOptions, Built, Release, TextKind};
+use crate::adapter::{Adapter, BuildOptions, Built, CatalogueEntry, Refused, Release, TextKind};
 use crate::codecs::lzss_rle;
 use crate::error::{Error, Result, text_error};
 use crate::fonts::{self, Font, Glyph};
@@ -3031,7 +3031,33 @@ impl Adapter for Top {
     }
 
     fn images(&self) -> &'static [Release] {
-        &[Release { sha1: ROM_SHA1, name: "Japan", size: 0x600000 }]
+        // No-Intro's name for this SHA-1, from its list of Super Famicom dumps.
+        &[Release {
+            sha1: ROM_SHA1,
+            name: "Japan",
+            size: 0x600000,
+            label: "TALES OF PHANTASIA",
+            version: "1.0",
+            // Dat-o-Matic, where No-Intro's records are, shows a record only past a page of terms to
+            // accept, so its address could not be confirmed and none is given.
+            catalogue: Some(CatalogueEntry {
+                catalogue: &snes::NO_INTRO,
+                name: "Tales of Phantasia (Japan)",
+                page: None,
+            }),
+        }]
+    }
+
+    fn refuses(&self) -> &'static [Refused] {
+        // DeJap's English translation writes its own title into the header, so a copy with it applied
+        // can be named. It is refused as any changed copy is: the patch rewrote the script this adapter
+        // reads.
+        &[Refused {
+            label: "ToP English (C) DeJap",
+            version: None,
+            about: "DeJap's English translation",
+            patched: true,
+        }]
     }
 
     fn source_language(&self) -> &'static str {

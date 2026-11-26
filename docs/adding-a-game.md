@@ -136,7 +136,11 @@ uv run ventris-workbench identify roms/game.sfc
 ```
 
 hashes the file and says what it is: for a cartridge, its internal header and mapping. The SHA-1 is what
-the adapter will recognise the game by.
+the adapter will recognise the game by. The adapter also gives, for each release, what the image says it is
+(a disc's serial and version, a cartridge's title and version byte), which `ventris check` confirms, and
+the name the catalogue of dumps for its console gives it, matched on the hash, with the address of the
+record where the record has one of its own. It can list the game's other releases it does not read
+(`refuses`), so that a player who has one is told so.
 
 If there is a fan translation, apply it to a copy and compare the two. The regions that differ are where
 the text and the code that draws it are:

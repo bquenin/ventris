@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 use crate::manifest::{self, Manifest};
 use crate::platform::{Image, Platform};
 use crate::script::{Script, read_pack, write_pack_with};
-use crate::{adapters, platforms};
+use crate::{adapters, platforms, refusal};
 
 /// A path as a report shows it: with the separators of the system it is on, and without the parts
 /// that change nothing (`./`, a doubled or a final separator). The Python reference prints paths
@@ -25,13 +25,19 @@ pub fn shown(path: &Path) -> String {
 
 /// Open a game file and find its adapter: the image as the adapter takes it, the adapter, the SHA-1.
 ///
-/// Which console the file is for, and so how it is opened, is for the platforms to say.
+/// Which console the file is for, and so how it is opened, is for the platforms to say. A file no
+/// adapter reads is refused with what it is and what is needed instead, where that can be told
+/// (`refusal`).
 pub fn open_game(path: &Path) -> Result<(Image, &'static dyn Adapter, String)> {
-    let unknown = || Error::UnknownGame(PathBuf::from(shown(path)));
-    let platform = platforms::recognise(path)?.ok_or_else(unknown)?;
+    let Some(platform) = platforms::recognise(path)? else {
+        return Err(refusal::unrecognised(path));
+    };
     let (image, sha1) = platform.open(path)?;
     let adapter = adapters::find(&sha1).filter(|adapter| std::ptr::addr_eq(adapter.platform(), platform));
-    Ok((image, adapter.ok_or_else(unknown)?, sha1))
+    match adapter {
+        Some(adapter) => Ok((image, adapter, sha1)),
+        None => Err(refusal::refused(path, platform, &image)),
+    }
 }
 
 /// How much of one body of text a script holds.
@@ -239,18 +245,60 @@ pub struct Found {
     pub path: PathBuf,
 }
 
+/// A file in a folder of games that is not the file a game's adapter reads, and is that game or says
+/// it is: another release, one with a known patch applied, or the release by what it says with other
+/// contents. A search names these for a game it does not find, so that a wrong copy is not passed
+/// over in silence.
+#[derive(Clone)]
+pub struct Passed {
+    pub path: PathBuf,
+    pub adapter: &'static dyn Adapter,
+    /// Why it is not read, to follow the file's name: "is Tales of Destiny 2, but not the release
+    /// ventris reads: ...". It is the reason a file chosen by hand is refused with.
+    pub reason: String,
+}
+
+/// What reading a candidate found: the game, or what the file says it is when it is not the game.
+enum Examined {
+    Game(Found),
+    Not(Option<Passed>),
+}
+
 impl Candidate {
     /// Read the file and say which game it is, or `None` when it only happens to have a game's size.
     pub fn identify(&self) -> Result<Option<Found>> {
-        let (_, sha1) = self.platform.open(&self.path)?;
+        Ok(match self.examine()? {
+            Examined::Game(found) => Some(found),
+            Examined::Not(_) => None,
+        })
+    }
+
+    /// Read the file: the game it is, or, when it is not, whether it says it is a game there is an
+    /// adapter for. What it says is read from the image that was opened to hash it, so it costs
+    /// nothing more.
+    fn examine(&self) -> Result<Examined> {
+        let (image, sha1) = self.platform.open(&self.path)?;
         let releases = self.could_be.iter().flat_map(|adapter| adapter.images().iter().map(|image| (*adapter, image)));
-        let found = releases.into_iter().find(|(_, release)| release.sha1 == sha1);
-        Ok(found.map(|(adapter, release)| Found { adapter, release, path: self.path.clone() }))
+        if let Some((adapter, release)) = releases.into_iter().find(|(_, release)| release.sha1 == sha1) {
+            return Ok(Examined::Game(Found { adapter, release, path: self.path.clone() }));
+        }
+        let passed = self.platform.label(&image).and_then(|label| {
+            let (adapter, reason) = refusal::near_miss(self.platform, &label, image.size().ok()?)?;
+            Some(Passed { path: self.path.clone(), adapter, reason })
+        });
+        Ok(Examined::Not(passed))
     }
 }
 
 /// How many folders deep a folder of games is searched.
 const SEARCH_DEPTH: usize = 8;
+
+/// The endings of files that may be a compressed disc image, whose first bytes are read to tell.
+const DISC_ENDINGS: [&str; 6] = ["chd", "cso", "zso", "iso", "bin", "img"];
+
+/// A file larger than this is no cartridge, and its first bytes are read too, whatever its ending:
+/// a compressed disc image is sometimes given a name that does not say so.
+const LARGER_THAN_A_CARTRIDGE: u64 = 16 << 20;
 
 /// The games on a console that have an image of this size.
 fn games_of_size(platform: &'static dyn Platform, size: u64) -> Vec<&'static dyn Adapter> {
@@ -259,7 +307,23 @@ fn games_of_size(platform: &'static dyn Platform, size: u64) -> Vec<&'static dyn
     adapters::ALL.iter().copied().filter(on_it).filter(of_size).collect()
 }
 
-fn search(folder: &Path, depth: usize, found: &mut Vec<Candidate>) {
+/// A file a search may look at more closely when a game is not found: one that could be an image
+/// for a console, of no game's size, whose few bytes that say what it is can be read
+/// (`Platform::peek`); or a compressed disc image.
+enum Glimpse {
+    Peek { path: PathBuf, platform: &'static dyn Platform, size: u64 },
+    CompressedDisc(PathBuf),
+}
+
+/// What a folder of games holds, sized up: the candidates, and the files to look at more closely
+/// for a game that turns out not to be there.
+pub struct Survey {
+    pub folder: PathBuf,
+    pub candidates: Vec<Candidate>,
+    glimpses: Vec<Glimpse>,
+}
+
+fn search(folder: &Path, depth: usize, survey: &mut Survey) {
     let Ok(entries) = fs::read_dir(folder) else { return };
     let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
     paths.sort();
@@ -268,37 +332,59 @@ fn search(folder: &Path, depth: usize, found: &mut Vec<Candidate>) {
         let Ok(about) = fs::metadata(&path) else { continue };
         if about.is_dir() {
             if depth > 0 && !hidden {
-                search(&path, depth - 1, found);
+                search(&path, depth - 1, survey);
             }
             continue;
         }
+        let ending = path.extension().map(|ending| ending.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if (DISC_ENDINGS.contains(&ending.as_str()) || about.len() > LARGER_THAN_A_CARTRIDGE)
+            && refusal::is_compressed_disc(&path)
+        {
+            survey.glimpses.push(Glimpse::CompressedDisc(path));
+            continue;
+        }
+        let own_name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut glimpse = None;
         for platform in platforms::ALL.iter().copied() {
             // A file that cannot be sized up, such as a damaged archive, is passed over.
             let Ok(Some(glance)) = platform.glance(&path) else { continue };
             let could_be = games_of_size(platform, glance.size);
             if !could_be.is_empty() {
                 let (file_size, modified) = (about.len(), about.modified().ok());
-                found.push(Candidate { path: path.clone(), file_size, modified, platform, could_be });
+                survey.candidates.push(Candidate { path: path.clone(), file_size, modified, platform, could_be });
+                glimpse = None;
                 break;
             }
+            // An image inside an archive is not looked at: that would mean unpacking it.
+            if glimpse.is_none() && glance.name == own_name {
+                glimpse = Some(Glimpse::Peek { path: path.clone(), platform, size: glance.size });
+            }
         }
+        survey.glimpses.extend(glimpse);
     }
 }
 
-/// The files in a folder of games, and in the folders inside it, that are the size of a game there
-/// is an adapter for, in the order of their names.
+/// What a folder of games, and the folders inside it, holds: the files that are the size of a game
+/// there is an adapter for, in the order of their names, and the files to look at more closely for
+/// a game that is not found.
 ///
-/// This is the quick half of finding someone's games. No file is read, only its name and its size,
-/// and for an archive the list of what it holds; a collection of thousands of games takes a moment.
-/// What is left is the few files to read whole, and a caller that has read one before can tell it
-/// is the same file and not read it again.
-pub fn candidates(folder: &Path) -> Result<Vec<Candidate>> {
+/// This is the quick half of finding someone's games. No file is read but for a few bytes: its name
+/// and its size, for an archive the list of what it holds, and for a file with a disc image's ending
+/// or larger than any cartridge its first 8 bytes, which say whether it is a compressed disc image.
+/// A collection of thousands of games takes a moment. What is left is the few files to read whole,
+/// and a caller that has read one before can tell it is the same file and not read it again.
+pub fn survey(folder: &Path) -> Result<Survey> {
     if !folder.is_dir() {
         return Err(Error::Image(format!("{} is not a folder", shown(folder))));
     }
-    let mut found = Vec::new();
-    search(folder, SEARCH_DEPTH, &mut found);
-    Ok(found)
+    let mut survey = Survey { folder: folder.to_path_buf(), candidates: Vec::new(), glimpses: Vec::new() };
+    search(folder, SEARCH_DEPTH, &mut survey);
+    Ok(survey)
+}
+
+/// The files in a folder of games that are the size of a game there is an adapter for (`survey`).
+pub fn candidates(folder: &Path) -> Result<Vec<Candidate>> {
+    Ok(survey(folder)?.candidates)
 }
 
 /// The games there are adapters for that are in a folder: each game once, as the first file found
@@ -310,19 +396,96 @@ pub fn find_games(folder: &Path) -> Result<Vec<Found>> {
 /// The games among some candidates: each game once, as the first file found to be it. Once a game
 /// is found, the other files of its size are not read.
 pub fn identify(candidates: &[Candidate]) -> Vec<Found> {
+    identify_noting(candidates).0
+}
+
+/// The same, and the candidates that were read and are not the game they have the size of, but say
+/// they are a game there is an adapter for: a near miss, read at no cost beyond the reading.
+pub fn identify_noting<'a>(candidates: impl IntoIterator<Item = &'a Candidate>) -> (Vec<Found>, Vec<Passed>) {
     let mut games: Vec<Found> = Vec::new();
+    let mut passed = Vec::new();
     for candidate in candidates {
         let wanted = |adapter: &&dyn Adapter| !games.iter().any(|found| std::ptr::addr_eq(found.adapter, *adapter));
         if !candidate.could_be.iter().any(wanted) {
             continue;
         }
-        if let Ok(Some(found)) = candidate.identify()
-            && !games.iter().any(|known| std::ptr::addr_eq(known.adapter, found.adapter))
-        {
-            games.push(found);
+        match candidate.examine() {
+            Ok(Examined::Game(found)) if !games.iter().any(|known| std::ptr::addr_eq(known.adapter, found.adapter)) => {
+                games.push(found)
+            }
+            Ok(Examined::Not(Some(near))) => passed.push(near),
+            _ => {}
         }
     }
-    games
+    (games, passed)
+}
+
+/// What a folder holds of a game that is not found in it: the files that are that game, or say they
+/// are, and are not the file needed; and, for a disc game, the compressed disc images, which could
+/// be any disc game.
+pub struct Missed {
+    pub adapter: &'static dyn Adapter,
+    pub passed: Vec<Passed>,
+    /// The compressed disc images, by their path from the folder searched.
+    pub compressed: Vec<String>,
+}
+
+impl Missed {
+    /// What it holds of the game as sentences, each starting with a file's path from the folder
+    /// searched: the files passed over, then the compressed disc images, a few of them by name.
+    pub fn lines(&self, folder: &Path) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .passed
+            .iter()
+            .map(|passed| format!("{} {}", from_folder(folder, &passed.path), passed.reason))
+            .collect();
+        lines.extend(refusal::compressed_note(&self.compressed));
+        lines
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.passed.is_empty() && self.compressed.is_empty()
+    }
+}
+
+/// A path as it is shown in a list of what a folder holds: from that folder.
+fn from_folder(folder: &Path, path: &Path) -> String {
+    shown(path.strip_prefix(folder).unwrap_or(path))
+}
+
+impl Survey {
+    /// What the folder holds of each game in `missing`, which were not found in it: the candidates
+    /// that were read and are near misses (`identify_noting`), and the files looked at more closely
+    /// now. Those are read only for the consoles of the games that are missing, a few bytes each;
+    /// nothing is hashed.
+    pub fn missed(&self, missing: &[&'static dyn Adapter], read: &[Passed]) -> Vec<Missed> {
+        let is_missing = |adapter: &dyn Adapter| missing.iter().any(|wanted| std::ptr::addr_eq(*wanted, adapter));
+        let wanted_on =
+            |platform: &dyn Platform| missing.iter().any(|adapter| std::ptr::addr_eq(adapter.platform(), platform));
+        let mut passed: Vec<Passed> = read.iter().filter(|near| is_missing(near.adapter)).cloned().collect();
+        let mut compressed = Vec::new();
+        for glimpse in &self.glimpses {
+            match glimpse {
+                Glimpse::Peek { path, platform, size } if wanted_on(*platform) => {
+                    let near = platform.peek(path).and_then(|label| refusal::near_miss(*platform, &label, *size));
+                    if let Some((adapter, reason)) = near.filter(|(adapter, _)| is_missing(*adapter)) {
+                        passed.push(Passed { path: path.clone(), adapter, reason });
+                    }
+                }
+                Glimpse::CompressedDisc(path) => compressed.push(from_folder(&self.folder, path)),
+                Glimpse::Peek { .. } => {}
+            }
+        }
+        passed.sort_by(|one, other| one.path.cmp(&other.path));
+        missing
+            .iter()
+            .map(|adapter| Missed {
+                adapter: *adapter,
+                passed: passed.iter().filter(|near| std::ptr::addr_eq(near.adapter, *adapter)).cloned().collect(),
+                compressed: if adapter.platform().disc() { compressed.clone() } else { Vec::new() },
+            })
+            .collect()
+    }
 }
 
 /// The name of the image a game's file holds, which is the file's own unless it is an archive.
@@ -393,6 +556,92 @@ mod tests {
         let missing = root.join("nowhere");
         let refused = candidates(&missing).err().unwrap().to_string();
         assert_eq!(refused, format!("{} is not a folder", shown(&missing)));
+    }
+
+    /// A disc whose SYSTEM.CNF gives this program and version, in `folder` under `name`.
+    fn disc(folder: &Path, name: &str, program: &str, version: &str) -> PathBuf {
+        let config = format!("BOOT2 = cdrom0:\\{program};1\r\nVER = {version}\r\n");
+        crate::platforms::ps2::tests::disc_with(folder, name, config.as_bytes())
+    }
+
+    #[test]
+    fn a_game_that_is_not_found_is_told_which_files_are_it_and_why_they_are_not_read() {
+        use crate::platforms::snes::Mapping;
+        use crate::platforms::snes::tests::titled;
+
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path();
+        fs::create_dir_all(root.join("ps2")).unwrap();
+        fs::create_dir_all(root.join("snes")).unwrap();
+        // Discs: another release, the release by its label with other contents, a game with no adapter.
+        disc(&root.join("ps2"), "Best.iso", "SLPS_732.19", "2.01");
+        let changed = disc(&root.join("ps2"), "Changed.iso", "SLPS_251.72", "1.01");
+        disc(&root.join("ps2"), "Other game.iso", "SLPM_660.01", "1.00");
+        // Compressed disc images, one with a name that does not say so, and archives of unknown content.
+        write(root, "ps2/Game.chd", b"MComprHD\x00\x00\x00\x7c and the rest");
+        write(root, "ps2/Renamed.iso", b"CISO\x18\x00\x00\x00 and the rest");
+        write(root, "ps2/Packed.7z", b"7z\xBC\xAF\x27\x1C\x00\x04 and the rest");
+        write(root, "ps2/Packed.zip", &archive::make(&[("game.iso", b"a disc", true)]));
+        // Cartridges: DeJap's translation applied, plain and in an archive (which is not looked into),
+        // and a file with the game's size and title that is not the game, which is read and hashed.
+        let dejap = titled(Mapping::HiRom, 0x100000, b"ToP English (C) DeJap", 0);
+        write(root, "snes/DeJap.sfc", &dejap);
+        write(root, "snes/DeJap.zip", &archive::make(&[("DeJap.sfc", &dejap, true)]));
+        write(root, "snes/Look-alike.sfc", &titled(Mapping::ExHiRom, 0x600000, b"TALES OF PHANTASIA", 0));
+        write(root, "snes/Another game.sfc", &titled(Mapping::LoRom, 0x80000, b"ANOTHER GAME", 0));
+
+        let survey = survey(root).unwrap();
+        assert_eq!(survey.candidates.len(), 1);
+        let (found, read) = identify_noting(&survey.candidates);
+        assert!(found.is_empty());
+        let missed = survey.missed(adapters::ALL, &read);
+        let lines = |id: &str| {
+            let missed = missed.iter().find(|missed| missed.adapter.id() == id).unwrap();
+            missed.lines(root)
+        };
+        assert_eq!(fs::metadata(&changed).unwrap().len(), 53_248);
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(
+            lines("tod2-ps2"),
+            [
+                format!(
+                    "ps2{sep}Best.iso is Tales of Destiny 2, but not the release ventris reads: it is the PlayStation 2 \
+                     the Best reissue, in Japanese (serial SLPS-73219, version 2.01)."
+                ),
+                format!(
+                    "ps2{sep}Changed.iso says it is the release of Tales of Destiny 2 that ventris reads (serial \
+                     SLPS-25172, version 1.01), but its contents are not the original's: it has been changed, by a \
+                     patch such as an undub or a translation, or it is a damaged or cut-short copy. It is 53,248 bytes, \
+                     and the original is 3,234,004,992."
+                ),
+                format!(
+                    "ps2{sep}Game.chd and ps2{sep}Renamed.iso are compressed disc images (CHD, CSO or ZSO): ventris \
+                     cannot read them, or tell which game they hold. If one is this game, convert it back to a plain \
+                     disc image first."
+                ),
+            ]
+        );
+        assert_eq!(
+            lines("top-sfc"),
+            [
+                format!(
+                    "snes{sep}DeJap.sfc is Tales of Phantasia with DeJap's English translation already applied (title \
+                     \"ToP English (C) DeJap\", version 1.0). ventris reads the game as it was released, so it needs a \
+                     copy without the patch."
+                ),
+                format!(
+                    "snes{sep}Look-alike.sfc says it is the release of Tales of Phantasia that ventris reads (title \
+                     \"TALES OF PHANTASIA\", version 1.0), but its contents are not the original's: it has been \
+                     changed, by a patch such as an undub or a translation, or it is a damaged or cut-short copy."
+                ),
+            ]
+        );
+        // A game that is found is not asked about, and nothing is said of a folder with nothing of it.
+        let only = survey.missed(&[&crate::adapters::top_sfc::ADAPTER], &read);
+        assert_eq!(only.len(), 1);
+        let empty = tempfile::tempdir().unwrap();
+        let nothing = super::survey(empty.path()).unwrap().missed(adapters::ALL, &[]);
+        assert!(nothing.iter().all(Missed::is_empty));
     }
 
     /// With the game at hand: it is found however it is kept, once, and opens to the same image.

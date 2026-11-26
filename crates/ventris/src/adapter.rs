@@ -90,6 +90,54 @@ pub struct Release {
     /// Its size in bytes, without anything a dumping tool added. A folder of games is searched by
     /// size first, so that only a file of this size is read to see whether it is the game.
     pub size: u64,
+    /// What the image says it is, as its platform reads it back (`Platform::label`): a disc's
+    /// serial, "SLPS-25172", or a cartridge's title. With `version`, it lets a file that is refused
+    /// be told whether it is this release with other contents, or another release.
+    pub label: &'static str,
+    /// The version the image gives with its label, as its platform shows it: "1.01".
+    pub version: &'static str,
+    /// Where a catalogue of dumps lists the image, when one does. Players, their download sets and
+    /// tools such as an emulator's own check know a dump by its name there, so it is shown wherever
+    /// the release is.
+    pub catalogue: Option<CatalogueEntry>,
+}
+
+/// An image as a catalogue of dumps lists it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CatalogueEntry {
+    pub catalogue: &'static Catalogue,
+    /// The name it has there: "Tales of Destiny 2 (Japan, Asia)".
+    pub name: &'static str,
+    /// The address of its record there, given only where the record has an address of its own (a
+    /// record number, not a search). The catalogues host no games: a record is facts about a dump,
+    /// its hashes and sizes, and this is never to be a link to anything that offers a game.
+    pub page: Option<&'static str>,
+}
+
+/// A catalogue of dumps that players and their tools name game files by: Redump for discs,
+/// No-Intro for cartridges. Each console's module has the one for its games.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Catalogue {
+    /// "Redump"
+    pub name: &'static str,
+    /// What it is, in a few words for someone who has never heard of it: "the catalogue of disc dumps".
+    pub about: &'static str,
+}
+
+/// A file of the game, or one that says it is, that the adapter does not read and can name: another
+/// release of the game, or one of its releases with a known patch applied. Listing one lets a
+/// refusal say what the file is. It is matched by what the file says it is (`Platform::label`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Refused {
+    /// The label it gives: "SLPS-72502".
+    pub label: &'static str,
+    /// The version it gives with it, or `None` where any version is that one.
+    pub version: Option<&'static str>,
+    /// What it is, in a few words that follow "it is": "the Mega Hits! reissue, in Japanese". For a
+    /// patch, what the patch is: "DeJap's English translation".
+    pub about: &'static str,
+    /// It is one of the adapter's releases with a patch applied, not another release.
+    pub patched: bool,
 }
 
 /// What a user can ask of a build, besides the pack.
@@ -138,6 +186,11 @@ pub trait Adapter: Sync {
     fn platform(&self) -> &'static dyn Platform;
     /// Each image the adapter was worked out on.
     fn images(&self) -> &'static [Release];
+    /// The files of its game it knows of and does not read: other releases, and its releases with a
+    /// known patch applied. They are not read; they are named, so that a refused file is told why.
+    fn refuses(&self) -> &'static [Refused] {
+        &[]
+    }
     /// The language of the game's own text, as an IETF tag: "ja".
     fn source_language(&self) -> &'static str;
     fn kinds(&self) -> &'static [TextKind];
@@ -275,6 +328,28 @@ pub fn declaration_faults(adapter: &dyn Adapter) -> Vec<String> {
     }
     if adapter.images().iter().any(|image| image.size == 0) {
         faults.push("it does not say how large its images are".into());
+    }
+    // A program cannot check a catalogue's name against the catalogue itself, which is not here; it
+    // can only see that the name is given in full.
+    let partial = |entry: &CatalogueEntry| {
+        entry.catalogue.name.is_empty() || entry.catalogue.about.is_empty() || entry.name.is_empty()
+    };
+    if adapter.images().iter().any(|image| image.catalogue.as_ref().is_some_and(partial)) {
+        faults.push("the name a catalogue gives one of its images is not given in full".into());
+    }
+    let web = |page: &str| page.starts_with("http://") || page.starts_with("https://");
+    let pages = adapter.images().iter().filter_map(|image| image.catalogue.and_then(|entry| entry.page));
+    if pages.into_iter().any(|page| !web(page)) {
+        faults.push("the page of a catalogue's record it gives is not a web address".into());
+    }
+    for refused in adapter.refuses() {
+        let reads = |image: &Release| refused.version.is_none_or(|version| version == image.version);
+        if adapter.images().iter().any(|image| image.label == refused.label && reads(image)) {
+            faults.push(format!("it both reads and refuses the files that say they are {}", refused.label));
+        }
+        if refused.label.is_empty() || refused.about.is_empty() {
+            faults.push("a file it refuses is not given a label and a few words about it".into());
+        }
     }
     let kinds = adapter.kinds();
     if kinds.is_empty() {

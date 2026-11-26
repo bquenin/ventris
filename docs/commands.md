@@ -123,12 +123,18 @@ file:
 
 A game is recognised by the SHA-1 of its image, so only the release an adapter was made for is recognised.
 An image that already has a fan patch applied is a different file and is not recognised as the game. A
-file that is not recognised is refused with `... is not a game ventris knows how to read yet`.
+file that is not recognised is refused with what it is, as far as can be told, and what is needed instead:
+a compressed or archived file is to be unpacked or converted back first; another release of a game that
+has an adapter, or that release with its contents changed, is told the release needed; a game with no
+adapter is named by what it says it is. A file that is none of these is refused with
+`... is not a game ventris knows how to read yet`.
 
 ## `games`
 
-Lists every game that has an adapter. For each it gives the game's id (`tod2-ps2`), the release and the
-SHA-1 of the image the adapter was made for, and its kinds of text (dialogue, menus, lists and so on) with
+Lists every game that has an adapter. For each it gives the game's id (`tod2-ps2`), the release the adapter
+was made for in full (what the image says it is, such as a disc's serial, its version, its size in bytes
+and its SHA-1, which is what a file is checked against; its name in the catalogue of dumps that lists it,
+and the address of its record there where one is given), and its kinds of text (dialogue, menus, lists and so on) with
 what a pack can do with each: whether a string may be longer than the game's own, whether new characters
 can be added, whether lines are fitted to the screen, and the limits in a sentence. It also names the
 built-in fonts each game draws new characters from, and the game's own build options.
@@ -142,6 +148,14 @@ It does not read every file. An adapter gives the exact size of its game's image
 without reading it (for an archive, from its list of contents), and only a file of a game's size is read
 to see whether it is the game. A collection of a few thousand games takes well under a second, plus the
 reading of the few files that have the right size. Folders whose names start with a dot are skipped.
+
+For a game it does not find, it says which files in the folder are that game, or say they are, and are
+not the file needed, each with the reason `insert` would refuse it with, and gives the release needed.
+For this it reads a few bytes more of some files and hashes nothing more: where a disc image or a plain
+cartridge image says what it is, and the first bytes of a file with a disc image's ending or larger than
+any cartridge, which say whether it is a compressed disc image. A disc game that is not found is also
+told of the compressed disc images in the folder, since which game each holds cannot be told. A game
+there is no adapter for is never named, and a cartridge in an archive is not looked into.
 
 ## `describe FOLDER`
 

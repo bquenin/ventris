@@ -18,7 +18,9 @@
 //!
 //! | What | Says |
 //! | --- | --- |
-//! | `id`, `name`, `platform`, `images`, `source_language` | which game this is |
+//! | `id`, `name`, `platform`, `source_language` | which game this is |
+//! | `images` | each release it reads: its name, SHA-1 and size, and what the image says it is (`label`, `version`: a disc's serial, a cartridge's title), which `ventris check` confirms, and its name in the catalogue of dumps for its console (`catalogue`) |
+//! | `refuses` | the files of its game it knows and does not read, other releases and releases with a known patch applied, so that a refused file is told what it is |
 //! | `kinds` | its bodies of text, and what a pack can do with each |
 //! | `extract` | every string, by section and number |
 //! | `verify` | that the extracted script encodes back to the game's bytes |

@@ -19,8 +19,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use sha1::{Digest, Sha1};
 
+use crate::adapter::Catalogue;
 use crate::error::{Error, Result, at};
-use crate::platform::{Glance, Image, Platform};
+use crate::platform::{Glance, Image, Label, Platform};
 
 pub const SECTOR: u64 = 2048;
 /// Where the primary volume descriptor is.
@@ -43,6 +44,9 @@ const VOLUME_SIZE: u64 = 80;
 const RECORD_SIZE: u64 = 10;
 /// The kind of UDF descriptor that sits in the image's last sector.
 const UDF_ANCHOR: u16 = 2;
+
+/// The catalogue players know a disc dump by.
+pub const REDUMP: Catalogue = Catalogue { name: "Redump", about: "the catalogue of disc dumps" };
 
 fn image_error<T>(message: impl Into<String>) -> Result<T> {
     Err(Error::Image(message.into()))
@@ -219,15 +223,7 @@ impl Disc {
 
     /// The name of the program the console starts, from `SYSTEM.CNF`.
     pub fn boot_name(&self) -> Result<String> {
-        let config = ascii(&self.read_from("SYSTEM.CNF", 0)?);
-        // A line such as `BOOT2 = cdrom0:\SLPS_251.72;1`: the name runs up to the semicolon.
-        let name = config.match_indices("BOOT2").find_map(|(found, key)| {
-            let rest = config[found + key.len()..].trim_start_matches(is_blank).strip_prefix('=')?;
-            let rest = rest.trim_start_matches(is_blank).strip_prefix("cdrom0:\\")?;
-            let name = rest.split(|char| char == ';' || is_blank(char)).next().filter(|name| !name.is_empty())?;
-            Some(name.to_string())
-        });
-        match name {
+        match boot_name_in(&ascii(&self.read_from("SYSTEM.CNF", 0)?)) {
             Some(name) => Ok(name),
             None => image_error(format!("{}: SYSTEM.CNF does not name a program to start", self.path.display())),
         }
@@ -235,7 +231,12 @@ impl Disc {
 
     /// The game's serial number as it is printed on the case: `SLPS-25172` for `SLPS_251.72`.
     pub fn serial(&self) -> Result<String> {
-        Ok(self.boot_name()?.replace('_', "-").replace('.', ""))
+        Ok(serial_of(&self.boot_name()?))
+    }
+
+    /// The version `SYSTEM.CNF` gives on its line `VER = 1.01`, or `None` when it has no such line.
+    pub fn version(&self) -> Result<Option<String>> {
+        Ok(version_in(&ascii(&self.read_from("SYSTEM.CNF", 0)?)))
     }
 
     /// SHA-1 of the whole image, read in pieces, in lowercase hexadecimal.
@@ -271,6 +272,68 @@ impl Disc {
     fn kept(&self) -> MutexGuard<'_, Kept> {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// The program a `SYSTEM.CNF` names, from a line such as `BOOT2 = cdrom0:\SLPS_251.72;1`: the name
+/// runs up to the semicolon.
+fn boot_name_in(config: &str) -> Option<String> {
+    config.match_indices("BOOT2").find_map(|(found, key)| {
+        let rest = config[found + key.len()..].trim_start_matches(is_blank).strip_prefix('=')?;
+        let rest = rest.trim_start_matches(is_blank).strip_prefix("cdrom0:\\")?;
+        let name = rest.split(|char| char == ';' || is_blank(char)).next().filter(|name| !name.is_empty())?;
+        Some(name.to_string())
+    })
+}
+
+/// A program's name as the serial printed on the case: `SLPS-25172` for `SLPS_251.72`.
+fn serial_of(boot_name: &str) -> String {
+    boot_name.replace('_', "-").replace('.', "")
+}
+
+/// The version a `SYSTEM.CNF` gives on its line `VER = 1.01`.
+fn version_in(config: &str) -> Option<String> {
+    config.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        let value = value.trim_matches(is_blank);
+        (key.trim_matches(is_blank) == "VER" && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
+/// What a disc image says it is, read without opening it as a `Disc`: the volume descriptor, the
+/// root folder and `SYSTEM.CNF`, three small reads, where opening it lists every folder on the disc.
+/// `None` when it is no ISO 9660 image or names no PlayStation 2 program.
+fn peek_label(path: &Path) -> Option<Label> {
+    let mut image = File::open(path).ok()?;
+    let volume = read_at(&mut image, VOLUME_SECTOR * SECTOR, SECTOR).ok()?;
+    if !volume.starts_with(VOLUME_MAGIC) || volume.len() < SECTOR as usize {
+        return None;
+    }
+    let (first, size) = extent(&volume[ROOT_RECORD..]);
+    // A root folder is a few sectors; a larger one is not believed.
+    let root = read_at(&mut image, u64::from(first) * SECTOR, u64::from(size).min(16 * SECTOR)).ok()?;
+    let mut position = 0;
+    let mut config = None;
+    while position < root.len() {
+        let length = usize::from(root[position]);
+        if length == 0 {
+            position = (position / SECTOR as usize + 1) * SECTOR as usize;
+            continue;
+        }
+        let record = &root[position..root.len().min(position + length)];
+        position += length;
+        if record.len() < RECORD_HEAD {
+            return None;
+        }
+        let name = &record[RECORD_HEAD..record.len().min(RECORD_HEAD + usize::from(record[32]))];
+        if name.split(|byte| *byte == b';').next() == Some(b"SYSTEM.CNF") {
+            config = Some(extent(record));
+            break;
+        }
+    }
+    let (sector, size) = config?;
+    let config = ascii(&read_at(&mut image, u64::from(sector) * SECTOR, u64::from(size).min(SECTOR)).ok()?);
+    let name = serial_of(&boot_name_in(&config)?);
+    Some(Label { name, version: version_in(&config).unwrap_or_default() })
 }
 
 /// Where a directory record says its file or directory is: the first sector, and the size in bytes.
@@ -448,10 +511,30 @@ impl Platform for Ps2 {
         let sha1 = disc.sha1()?;
         Ok((Image::Disc(disc), sha1))
     }
+
+    /// The serial and version `SYSTEM.CNF` gives. A disc without one is not a PlayStation 2 game
+    /// that can be named, such as a PlayStation disc, whose `SYSTEM.CNF` has no `BOOT2` line.
+    fn label(&self, image: &Image) -> Option<Label> {
+        let disc = image.disc().ok()?;
+        let name = disc.serial().ok()?;
+        Some(Label { name, version: disc.version().ok().flatten().unwrap_or_default() })
+    }
+
+    fn label_kind(&self) -> &'static str {
+        "serial"
+    }
+
+    fn peek(&self, path: &Path) -> Option<Label> {
+        peek_label(path)
+    }
+
+    fn disc(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// One entry of an ISO 9660 directory.
@@ -488,11 +571,17 @@ mod tests {
 
     /// A disc with two files in its root and one in a folder, written to `folder`.
     fn image(folder: &Path) -> PathBuf {
+        disc_with(folder, "disc.iso", CONFIG)
+    }
+
+    /// The same disc with another `SYSTEM.CNF`, under another name: other tests make one to say a
+    /// game's serial and version.
+    pub(crate) fn disc_with(folder: &Path, name: &str, config: &[u8]) -> PathBuf {
         let whole = SECTOR as u32;
         let root = [
             record(&[0], 18, whole, true),
             record(&[1], 18, whole, true),
-            record(b"SYSTEM.CNF;1", 20, CONFIG.len() as u32, false),
+            record(b"SYSTEM.CNF;1", 20, config.len() as u32, false),
             record(b"DATA.BIN;1", 21, data().len() as u32, false),
             record(b"SUB", 19, whole, true),
         ]
@@ -509,14 +598,14 @@ mod tests {
         volume[318..446].copy_from_slice(format!("{:<128}", "A PUBLISHER").as_bytes());
         volume[156..190].copy_from_slice(&record(&[0], 18, whole, true));
         volume[80..88].copy_from_slice(&both_ways(26));
-        let path = folder.join("disc.iso");
+        let path = folder.join(name);
         let sectors = [
             vec![0; 16 * SECTOR as usize],
             volume,
             vec![0; SECTOR as usize],
             sector(&root),
             sector(&sub),
-            sector(CONFIG),
+            sector(config),
             sector(&data()),
             sector(NOTE),
             sector(b"after the last file"),
@@ -642,6 +731,27 @@ mod tests {
         let disc = Disc::open(&image(folder.path())).unwrap();
         assert_eq!(disc.boot_name().unwrap(), "SLPS_123.45");
         assert_eq!(disc.serial().unwrap(), "SLPS-12345");
+        assert_eq!(disc.version().unwrap().as_deref(), Some("1.00"));
+    }
+
+    #[test]
+    fn a_disc_says_its_serial_and_version() {
+        let folder = tempfile::tempdir().unwrap();
+        let (image, _) = PLATFORM.open(&image(folder.path())).unwrap();
+        let label = PLATFORM.label(&image).unwrap();
+        assert_eq!((label.name.as_str(), label.version.as_str()), ("SLPS-12345", "1.00"));
+        assert_eq!(
+            crate::platform::label_words(&PLATFORM, &label.name, &label.version),
+            "serial SLPS-12345, version 1.00"
+        );
+        // No version line: the serial alone. No BOOT2 line, as on a PlayStation disc: nothing to name it by.
+        let bare = disc_with(folder.path(), "bare.iso", b"BOOT2 = cdrom0:\\SLPM_660.01;1\r\n");
+        let (bare, _) = PLATFORM.open(&bare).unwrap();
+        assert_eq!(PLATFORM.label(&bare), Some(Label { name: "SLPM-66001".into(), version: String::new() }));
+        let first = disc_with(folder.path(), "ps1.iso", b"BOOT = cdrom:\\SLPS_000.01;1\r\nVER = 1.0\r\n");
+        let (first, _) = PLATFORM.open(&first).unwrap();
+        assert_eq!(PLATFORM.label(&first), None);
+        assert_eq!(PLATFORM.label(&Image::Cartridge(Vec::new())), None);
     }
 
     #[test]

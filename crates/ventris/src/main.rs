@@ -9,11 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 
-use ventris::adapter::BuildOptions;
+use ventris::adapter::{Adapter, BuildOptions};
 use ventris::error::at;
 use ventris::fonts::{self, Font};
 use ventris::tasks::{self, open_game, shown};
-use ventris::{Result, adapters, conformance, png};
+use ventris::{Result, adapters, conformance, png, refusal};
 
 #[derive(Parser)]
 #[command(name = "ventris", version, about = "Game translation patch engine.")]
@@ -179,19 +179,32 @@ fn check(rom: &Path, work: Option<&Path>) -> Result<()> {
 
 /// The games in a folder that there is an adapter for, and where each is.
 fn find(folder: &Path) -> Result<()> {
-    let candidates = tasks::candidates(folder)?;
-    let found = tasks::identify(&candidates);
+    let survey = tasks::survey(folder)?;
+    let (found, read) = tasks::identify_noting(&survey.candidates);
     for game in &found {
         println!("{}", game.adapter.name());
         println!("  id         {}", game.adapter.id());
         println!("  release    {}", game.release.name);
         println!("  file       {}", shown(&game.path));
     }
+    // A game that is not found, and of which the folder holds a wrong copy, is named with why each
+    // copy is not the file needed, and with the file that is.
+    let is_found = |adapter: &&dyn Adapter| found.iter().any(|game| std::ptr::addr_eq(game.adapter, *adapter));
+    let missing: Vec<&'static dyn Adapter> =
+        adapters::ALL.iter().copied().filter(|adapter| !is_found(adapter)).collect();
+    for missed in survey.missed(&missing, &read).iter().filter(|missed| !missed.is_empty()) {
+        println!("{}", missed.adapter.name());
+        println!("  id         {}", missed.adapter.id());
+        println!("  not found  {}", refusal::needed(missed.adapter));
+        for line in missed.lines(folder) {
+            println!("  passed by  {line}");
+        }
+    }
     let known = adapters::ALL.len();
     println!(
         "found {} of the {known} games there are adapters for; {} files had the size of one",
         found.len(),
-        candidates.len()
+        survey.candidates.len()
     );
     Ok(())
 }
@@ -201,7 +214,14 @@ fn games() {
         println!("{}", adapter.name());
         println!("  id         {}, for {}, in {}", adapter.id(), adapter.platform().name(), adapter.source_language());
         for image in adapter.images() {
-            println!("  image      {}  {}", image.sha1, image.name);
+            println!("  release    {}", image.name);
+            println!("             {}", refusal::release_facts(adapter.platform(), image));
+            if let Some(words) = refusal::catalogue_words(image) {
+                println!("             {words}");
+            }
+            if let Some(page) = image.catalogue.and_then(|entry| entry.page) {
+                println!("             {page}");
+            }
         }
         for kind in adapter.kinds() {
             let mut can = vec!["extract".to_string()];

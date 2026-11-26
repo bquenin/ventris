@@ -5,7 +5,7 @@ import * as backend from "../lib/backend";
 import type { Game, GameFile, Listing, OwnFolder, Pack } from "../lib/backend";
 import { GamePage } from "./game-page";
 import { TranslatePage } from "./translate-page";
-import { WhatItCanChange } from "./game-parts";
+import { KnownReleases, releaseFacts, WhatItCanChange } from "./game-parts";
 import { ScriptDialog } from "./script-dialog";
 import { answeredWithError, Translations, translationsNote } from "./translations";
 
@@ -13,6 +13,9 @@ import { answeredWithError, Translations, translationsNote } from "./translation
 vi.mock("../lib/backend", async (original) => ({
   ...(await original<typeof import("../lib/backend")>()),
   pickFolder: vi.fn(),
+  pickGameFile: vi.fn(),
+  openHomepage: vi.fn(),
+  recogniseGame: vi.fn(),
   chooseOwnPacks: vi.fn(),
   forgetOwnPacks: vi.fn(),
   listPacks: vi.fn(),
@@ -23,7 +26,17 @@ const game: Game = {
   name: "Tales of Phantasia (Super Famicom, Japan)",
   platform: "Super Famicom / SNES",
   source_language: "ja",
-  releases: [{ sha1: "0000000000000000000000000000000000000001", name: "Japan" }],
+  releases: [
+    {
+      sha1: "0000000000000000000000000000000000000001",
+      name: "Japan",
+      size: 6291456,
+      label: "TALES OF PHANTASIA",
+      version: "1.0",
+      label_kind: "title",
+      catalogue: { name: "No-Intro", about: "the catalogue of cartridge dumps", entry: "Tales of Phantasia (Japan)", page: null },
+    },
+  ],
   kinds: [
     {
       name: "menu",
@@ -100,6 +113,7 @@ function fromListing(given: Listing | null | undefined) {
 /** The game's page on the Play a translation tab. */
 function play(props: {
   file?: GameFile;
+  near?: string[];
   listing?: Listing | null;
   fetching?: boolean;
   fetchTrouble?: string | null;
@@ -118,6 +132,7 @@ function play(props: {
       fetchTrouble={props.fetchTrouble ?? null}
       file={props.file}
       gamesFolder="C:\\games"
+      near={props.near}
       searching={false}
       building={false}
       onFile={() => {}}
@@ -193,6 +208,60 @@ describe("a game's page on the Play a translation tab", () => {
     // A fetched one for a game this version does not know has no page, and is listed below.
     expect(screen.getByText("1 translation from the ventris packs cannot be used by this version of ventris")).toBeTruthy();
     expect(screen.getByText(/Your own pack for this game is chosen in/)).toBeTruthy();
+  });
+
+  it("states the release ventris reads in full when the game is not found, and why a file is refused", async () => {
+    play({});
+    expect(screen.getByText("This game was not found in your games folder.")).toBeTruthy();
+    expect(screen.getByText("The release ventris reads, and no other:")).toBeTruthy();
+    expect(screen.getByText('Japan · title "TALES OF PHANTASIA" · version 1.0 · 6,291,456 bytes')).toBeTruthy();
+    expect(screen.getByText("SHA-1 0000000000000000000000000000000000000001")).toBeTruthy();
+    // A file chosen by hand that is not the game: the engine's reason is shown as it is.
+    const reason = "C:\\games\\top.zip is a zip archive that does not hold one cartridge image.";
+    vi.mocked(backend.pickGameFile).mockResolvedValue("C:\\games\\top.zip");
+    vi.mocked(backend.recogniseGame).mockRejectedValue(reason);
+    fireEvent.click(screen.getByRole("button", { name: "Choose the game's file…" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe(reason));
+  });
+
+  it("names the files in the games folder that are the game and not the file needed, with why", () => {
+    play({});
+    expect(screen.queryByText(/are not the file needed/)).toBeNull();
+    cleanup();
+    const near = [
+      'snes\\DeJap.sfc is Tales of Phantasia with DeJap\'s English translation already applied (title "ToP English (C) DeJap", version 1.0).',
+      "snes\\game.chd is a compressed disc image (CHD, CSO or ZSO): ventris cannot read it, or tell which game it holds.",
+    ];
+    play({ near });
+    expect(screen.getByText("These files in it are this game, or may be, and are not the file needed:")).toBeTruthy();
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent).slice(0, 2)).toEqual(near);
+  });
+
+  it("gives the release's name in its catalogue, and opens the record in the browser where there is one", () => {
+    play({});
+    const line = screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.startsWith("Its name in") === true);
+    expect(line.textContent).toBe("Its name in No-Intro, the catalogue of cartridge dumps: Tales of Phantasia (Japan)");
+    expect(screen.queryByRole("button", { name: "Tales of Phantasia (Japan)" })).toBeNull();
+    cleanup();
+    const page = "http://redump.org/disc/15921/";
+    const disc = {
+      ...game.releases[0],
+      name: "Japan, version 1.01",
+      label: "SLPS-25172",
+      version: "1.01",
+      label_kind: "serial",
+      catalogue: { name: "Redump", about: "the catalogue of disc dumps", entry: "Tales of Destiny 2 (Japan, Asia)", page },
+    };
+    render(<KnownReleases game={{ ...other, releases: [disc] }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tales of Destiny 2 (Japan, Asia)" }));
+    expect(backend.openHomepage).toHaveBeenCalledWith(page);
+    // The version the release's name gives is not given again.
+    expect(releaseFacts(disc)).toBe("Japan, version 1.01 · serial SLPS-25172 · 6,291,456 bytes");
+  });
+
+  it("does not repeat the release once the game's file is found", () => {
+    play({ file });
+    expect(screen.queryByText("The release ventris reads, and no other:")).toBeNull();
   });
 
   it("shows the limits of each body of text", () => {

@@ -20,6 +20,7 @@ pub mod fetch;
 pub mod library;
 pub mod settings;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -45,10 +46,35 @@ struct Kind {
     limits: &'static str,
 }
 
+/// A release of a game that the engine reads, in full, so that a player can check a file against it.
 #[derive(Serialize)]
 struct Release {
     sha1: &'static str,
+    /// "Japan, version 1.01"
     name: &'static str,
+    /// Its size in bytes.
+    size: u64,
+    /// What the image says it is: its serial for a disc, its title for a cartridge, and its version.
+    label: &'static str,
+    version: &'static str,
+    /// What `label` is, as a word to show before it: "serial", "title".
+    label_kind: &'static str,
+    /// Where a catalogue of dumps lists it, when one does.
+    catalogue: Option<Catalogued>,
+}
+
+/// A release as a catalogue of dumps lists it.
+#[derive(Serialize)]
+struct Catalogued {
+    /// The catalogue: "Redump".
+    name: &'static str,
+    /// What it is, for someone who has never heard of it: "the catalogue of disc dumps".
+    about: &'static str,
+    /// The release's name there: "Tales of Destiny 2 (Japan, Asia)".
+    entry: &'static str,
+    /// The address of its record there, which the page opens in the browser. A record is facts about
+    /// a dump; the catalogues host no games.
+    page: Option<&'static str>,
 }
 
 /// A game the engine has an adapter for.
@@ -82,7 +108,24 @@ fn game(adapter: &dyn Adapter) -> Game {
         name: adapter.name(),
         platform: adapter.platform().name(),
         source_language: adapter.source_language(),
-        releases: adapter.images().iter().map(|image| Release { sha1: image.sha1, name: image.name }).collect(),
+        releases: adapter
+            .images()
+            .iter()
+            .map(|image| Release {
+                sha1: image.sha1,
+                name: image.name,
+                size: image.size,
+                label: image.label,
+                version: image.version,
+                label_kind: adapter.platform().label_kind(),
+                catalogue: image.catalogue.map(|entry| Catalogued {
+                    name: entry.catalogue.name,
+                    about: entry.catalogue.about,
+                    entry: entry.name,
+                    page: entry.page,
+                }),
+            })
+            .collect(),
         kinds: adapter.kinds().iter().map(kind).collect(),
         can_insert: adapter.can_insert(),
         sets_names: adapter.sets_names(),
@@ -138,34 +181,50 @@ fn remembered(app: tauri::AppHandle) -> Result<Settings, String> {
     Ok(settings)
 }
 
+/// What is remembered after a search, and what the games folder holds of each game it was not
+/// found in, which is said on that game's page and not remembered.
+#[derive(Debug, Serialize)]
+struct Searched {
+    #[serde(flatten)]
+    settings: Settings,
+    /// For each game not found, sentences that start with a file's path from the games folder.
+    near: BTreeMap<String, Vec<String>>,
+}
+
 /// Search the games folder, remember what it holds, and give back all that is remembered. With no
 /// games folder chosen, only the files the user chose themselves are kept, while they are there.
 ///
 /// The settings are read, and the result written, while they are held, so that a file the user
 /// chooses for a game during the search is not lost when the search writes what it found.
-fn search_and_remember(file: &Path, folder: Option<String>) -> Result<Settings, String> {
-    change_settings(file, |settings| {
+fn search_and_remember(file: &Path, folder: Option<String>) -> Result<Searched, String> {
+    let mut near = BTreeMap::new();
+    let settings = change_settings(file, |settings| {
         let folder = folder.or(settings.games_folder.take());
         let before = std::mem::take(&mut settings.games);
         settings.games = match &folder {
-            Some(folder) => library::search(Path::new(folder), &before)?,
+            Some(folder) => {
+                let looked = library::search(Path::new(folder), &before)?;
+                near = looked.near;
+                looked.games
+            }
             None => before.into_iter().filter(|(_, game)| Path::new(&game.path).is_file()).collect(),
         };
         settings.games_folder = folder;
         Ok(())
-    })
+    })?;
+    Ok(Searched { settings, near })
 }
 
 /// Look through the games folder again.
 #[tauri::command]
-async fn search_games(app: tauri::AppHandle) -> Result<Settings, String> {
+async fn search_games(app: tauri::AppHandle) -> Result<Searched, String> {
     let file = settings_file(&app)?;
     away(move || search_and_remember(&file, None)).await
 }
 
 /// Take a folder as the place the user keeps their games, and search it.
 #[tauri::command]
-async fn choose_games_folder(app: tauri::AppHandle, folder: String) -> Result<Settings, String> {
+async fn choose_games_folder(app: tauri::AppHandle, folder: String) -> Result<Searched, String> {
     let file = settings_file(&app)?;
     away(move || search_and_remember(&file, Some(folder))).await
 }
@@ -284,7 +343,7 @@ async fn recognise_game(app: tauri::AppHandle, path: String) -> Result<Recognise
 
 /// Forget the file the user chose for a game, and go back to what the games folder holds.
 #[tauri::command]
-async fn forget_game(app: tauri::AppHandle, game: String) -> Result<Settings, String> {
+async fn forget_game(app: tauri::AppHandle, game: String) -> Result<Searched, String> {
     let file = settings_file(&app)?;
     away(move || {
         remember(&file, |settings| {
@@ -499,6 +558,16 @@ mod tests {
         assert_eq!((last.platform, last.source_language, last.can_insert), ("PlayStation 2", "ja", true));
         assert!(last.kinds.iter().any(|kind| kind.name == "menus" && kind.insert && kind.grow));
         assert!(!last.releases.is_empty() && last.releases[0].sha1.len() == 40);
+        // The release in full, for the page to state it.
+        let release = &last.releases[0];
+        assert_eq!(
+            (release.label_kind, release.label, release.version, release.size),
+            ("serial", "SLPS-25172", "1.01", 3_234_004_992)
+        );
+        assert_eq!(listed[0].releases[0].label_kind, "title");
+        let redump = release.catalogue.as_ref().unwrap();
+        assert_eq!((redump.name, redump.entry), ("Redump", "Tales of Destiny 2 (Japan, Asia)"));
+        assert_eq!(redump.page, Some("http://redump.org/disc/15921/"));
         assert!(!last.sets_names && last.name_limits.is_empty());
         // The page shows what a name may be beside the row for names.
         let phantasia = &listed[0];
@@ -698,6 +767,12 @@ mod tests {
         fs::write(&file, vec![0u8; 0x8000]).unwrap();
         let refused = recognise(&file).unwrap_err();
         assert!(refused.ends_with("is not a game ventris knows how to read yet"), "{refused}");
+        // A file that can be told what it is is told in the command line's words.
+        let chd = folder.path().join("game.chd");
+        fs::write(&chd, b"MComprHD and the rest").unwrap();
+        let refused = recognise(&chd).unwrap_err();
+        assert_eq!(refused, tasks::open_game(&chd).err().unwrap().to_string());
+        assert!(refused.contains("game.chd is a CHD file, a compressed disc image. "), "{refused}");
     }
 
     /// With the game at hand: the app recognises it and builds the same image as the command line's
@@ -786,9 +861,9 @@ mod search_tests {
         fs::write(&elsewhere, &rom).unwrap();
 
         // Nothing chosen yet: nothing is known, and nothing fails.
-        assert_eq!(search_and_remember(&settings, None).unwrap(), Settings::default());
+        assert_eq!(search_and_remember(&settings, None).unwrap().settings, Settings::default());
 
-        let found = search_and_remember(&settings, Some(games.display().to_string())).unwrap();
+        let found = search_and_remember(&settings, Some(games.display().to_string())).unwrap().settings;
         assert_eq!(found.games_folder.as_deref(), games.to_str());
         assert_eq!(
             (found.games["top-sfc"].path.as_str(), found.games["top-sfc"].chosen),
@@ -806,11 +881,11 @@ mod search_tests {
             kept.games.insert(chosen.game.clone(), chosen.file.clone());
         })
         .unwrap();
-        let searched = search_and_remember(&settings, None).unwrap();
+        let searched = search_and_remember(&settings, None).unwrap().settings;
         assert_eq!(searched.games["top-sfc"].path, elsewhere.to_str().unwrap());
         // Once it is gone, the folder's own is back.
         fs::remove_file(&elsewhere).unwrap();
-        let searched = search_and_remember(&settings, None).unwrap();
+        let searched = search_and_remember(&settings, None).unwrap().settings;
         assert_eq!(searched.games["top-sfc"].path, zipped.to_str().unwrap());
     }
 }

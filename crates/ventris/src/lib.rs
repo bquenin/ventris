@@ -6,7 +6,8 @@
 //! rest is what adapters share: scripts as files, a pack's manifest, the tag language, fonts and
 //! the few that are built in, wrapping, placement, and under `codecs` the compression schemes games use.
 //! `tasks` is what a user does with a game and a pack, for the command line and the app to share,
-//! and `archive` reads a game out of the zip file a collection keeps it in.
+//! `refusal` says why a file is not a game it can read, and `archive` reads a game out of the zip
+//! file a collection keeps it in.
 //!
 //! The engine was first written in Python and ported here, and comments call that first version
 //! "the Python reference". The port was held to building the same image from the same pack, byte
@@ -27,6 +28,7 @@ pub mod placement;
 pub mod platform;
 pub mod platforms;
 pub mod png;
+pub mod refusal;
 pub mod script;
 pub mod shift_jis;
 pub mod tasks;

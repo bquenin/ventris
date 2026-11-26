@@ -2,13 +2,18 @@
 
 use std::fmt;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use sha1::{Digest, Sha1};
 
+use crate::adapter::Catalogue;
 use crate::archive;
 use crate::error::{Error, Result, at};
-use crate::platform::{Glance, Image, Platform};
+use crate::platform::{Glance, Image, Label, Platform};
+
+/// The catalogue players know a cartridge dump by.
+pub const NO_INTRO: Catalogue = Catalogue { name: "No-Intro", about: "the catalogue of cartridge dumps" };
 
 pub const COPIER_HEADER_SIZE: usize = 512;
 /// 8 MiB: the most a cartridge mapping reaches.
@@ -148,7 +153,13 @@ fn title_text(bytes: &[u8]) -> String {
 
 fn parse_header(rom: &[u8], mapping: Mapping) -> Option<SnesHeader> {
     let offset = mapping.header_offset();
-    let raw = rom.get(offset..offset + 0x40)?;
+    header_from(rom.get(offset..offset + 0x40)?, mapping)
+}
+
+/// The 64 bytes of a header for `mapping`, read.
+fn header_from(raw: &[u8], mapping: Mapping) -> Option<SnesHeader> {
+    let offset = mapping.header_offset();
+    let raw = raw.get(..0x40)?;
     let word = |at: usize| u16::from_le_bytes([raw[at], raw[at + 1]]);
     let map_mode = raw[0x15];
     let checksum_complement = word(0x1C);
@@ -198,16 +209,40 @@ fn parse_header(rom: &[u8], mapping: Mapping) -> Option<SnesHeader> {
 /// Returns None when no candidate location scores `min_score` or more; `LIKELY_HEADER` is the
 /// score to ask for when the file may not be a SNES game at all, and 0 takes the best there is.
 pub fn detect_header(rom: &[u8], min_score: i32) -> Option<SnesHeader> {
+    best_header(Mapping::ALL.iter().filter_map(|mapping| parse_header(rom, *mapping)), min_score)
+}
+
+/// The header that scores best, if it scores `min_score` or more. Of two that score the same, the
+/// first one looked for is kept.
+fn best_header(headers: impl Iterator<Item = SnesHeader>, min_score: i32) -> Option<SnesHeader> {
     let mut best: Option<SnesHeader> = None;
-    for mapping in Mapping::ALL {
-        // Of two that score the same, the first one looked for is kept.
-        if let Some(header) = parse_header(rom, mapping)
-            && best.as_ref().is_none_or(|best| header.score > best.score)
-        {
+    for header in headers {
+        if best.as_ref().is_none_or(|best| header.score > best.score) {
             best = Some(header);
         }
     }
     best.filter(|best| best.score >= min_score)
+}
+
+/// The internal header of the cartridge image at `path`, read where each mapping keeps it, past a
+/// copier's header when the file has one: three reads of 64 bytes, and not the whole file.
+fn header_in_file(path: &Path) -> Option<SnesHeader> {
+    let mut file = fs::File::open(path).ok()?;
+    let size = file.metadata().ok()?.len() as usize;
+    let skip = if has_copier_header(size) { COPIER_HEADER_SIZE } else { 0 };
+    let headers = Mapping::ALL.iter().filter_map(|mapping| {
+        let mut raw = [0; 0x40];
+        file.seek(SeekFrom::Start((skip + mapping.header_offset()) as u64)).ok()?;
+        file.read_exact(&mut raw).ok()?;
+        header_from(&raw, *mapping)
+    });
+    best_header(headers.collect::<Vec<_>>().into_iter(), LIKELY_HEADER)
+}
+
+/// A header's title and version byte as a label: the version byte is shown as the console's tools
+/// show it, 0 as "1.0" and 1 as "1.1".
+fn label_of(header: SnesHeader) -> Label {
+    Label { name: header.title, version: format!("1.{}", header.version) }
 }
 
 /// Cartridge checksum: the byte sum with the last part mirrored up to a power of two.
@@ -484,14 +519,39 @@ impl Platform for Snes {
         }
         vec![format!("size:      expanded from {} to {} MiB", original.len() / 0x100000, built.len() / 0x100000)]
     }
+
+    /// The title and version of the cartridge's header. A copier's header is gone by now: `open`
+    /// took it off.
+    fn label(&self, image: &Image) -> Option<Label> {
+        detect_header(image.cartridge().ok()?, LIKELY_HEADER).map(label_of)
+    }
+
+    /// The same, from a plain cartridge file. A cartridge in an archive is not looked into: its
+    /// header is past most of the image, which would have to be unpacked to reach it.
+    fn peek(&self, path: &Path) -> Option<Label> {
+        if archive::is_zip(path) {
+            return None;
+        }
+        header_in_file(path).map(label_of)
+    }
+
+    fn label_kind(&self) -> &'static str {
+        "title"
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A made-up game of `size` bytes with a sound header for `mapping`.
     fn make_rom(mapping: Mapping, size: usize) -> Vec<u8> {
+        titled(mapping, size, b"TEST GAME", 0)
+    }
+
+    /// The same with this title and version byte in its header: other tests make one to say which
+    /// game a cartridge claims to be.
+    pub(crate) fn titled(mapping: Mapping, size: usize, title: &[u8], version: u8) -> Vec<u8> {
         let mode = match mapping {
             Mapping::LoRom => 0x20,
             Mapping::HiRom => 0x21,
@@ -501,12 +561,13 @@ mod tests {
         let base = mapping.header_offset();
         rom[base..base + 0x40].fill(0);
         rom[base..base + 0x15].fill(b' ');
-        rom[base..base + 9].copy_from_slice(b"TEST GAME");
+        rom[base..base + title.len()].copy_from_slice(title);
         rom[base + 0x15] = mode;
         rom[base + 0x16] = 0x02;
         rom[base + 0x17] = 0x0C;
         rom[base + 0x18] = 0x03;
         rom[base + 0x19] = 0x00;
+        rom[base + 0x1B] = version;
         rom[base + 0x3C..base + 0x3E].copy_from_slice(&0x8000u16.to_le_bytes());
         // The checksum covers its own fields, which always sum to 0x1FE once they are consistent.
         rom[base + 0x1C..base + 0x20].copy_from_slice(&[0xFF, 0xFF, 0x00, 0x00]);
@@ -692,5 +753,36 @@ mod tests {
         let grown = Image::Cartridge(expand(&make_rom(Mapping::HiRom, 0x400000), 0x800000).unwrap());
         let small = Image::Cartridge(make_rom(Mapping::HiRom, 0x400000));
         assert_eq!(PLATFORM.changes(&small, &grown), ["size:      expanded from 4 to 8 MiB"]);
+    }
+
+    #[test]
+    fn a_cartridge_says_its_title_and_version() {
+        let mut rom = make_rom(Mapping::HiRom, 0x100000);
+        rom[0xFFC0 + 0x1B] = 1;
+        let label = PLATFORM.label(&Image::Cartridge(rom)).unwrap();
+        assert_eq!((label.name.as_str(), label.version.as_str()), ("TEST GAME", "1.1"));
+        let words = crate::platform::label_words(&PLATFORM, &label.name, &label.version);
+        assert_eq!(words, "title \"TEST GAME\", version 1.1");
+        assert_eq!(PLATFORM.label(&Image::Cartridge(vec![0; 0x100000])), None);
+    }
+
+    #[test]
+    fn a_plain_cartridge_file_says_what_it_is_without_being_read_whole() {
+        let folder = tempfile::tempdir().unwrap();
+        let rom = titled(Mapping::HiRom, 0x100000, b"PEEKED", 2);
+        let expected = Some(Label { name: "PEEKED".into(), version: "1.2".into() });
+        for (name, data) in [("plain.sfc", rom.clone()), ("copier.smc", [vec![0; 512], rom.clone()].concat())] {
+            let path = folder.path().join(name);
+            fs::write(&path, data).unwrap();
+            assert_eq!(PLATFORM.peek(&path), expected, "{name}");
+        }
+        // Not looked into: an archive, a file with no header, a file that is not there.
+        let zipped = folder.path().join("game.zip");
+        fs::write(&zipped, archive::make(&[("game.sfc", &rom, true)])).unwrap();
+        let noise = folder.path().join("noise.sfc");
+        fs::write(&noise, vec![0; 0x100000]).unwrap();
+        for path in [zipped, noise, folder.path().join("missing.sfc")] {
+            assert_eq!(PLATFORM.peek(&path), None);
+        }
     }
 }

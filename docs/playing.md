@@ -23,16 +23,22 @@ game.
 ### Your copy of the game
 
 A game is recognised by the exact contents of its file, so only the release its adapter was made for will
-do. The app names that release on the game's page when it does not find your copy, such as
-`Japan, version 1.01`.
+do. The app states that release in full on the game's page when it does not find your copy: what the file
+says it is (a disc's serial, a cartridge's title) and its version, its size in bytes, its SHA-1, and its name
+in the catalogue of dumps that lists it, which is the name download sets and tools know it by, so that you
+can check a file against it. `ventris games` prints the same.
 
 A Super Famicom game can be kept as its image (`.sfc`, `.smc`, `.swc` or `.fig`, with or without a
 copier's header) or as a zip archive that holds one image. A PlayStation 2 game is its disc image (a file
 ending in `.iso`, `.bin` or `.img`).
 
-If your game is not found, or you are told `... is not a game ventris knows how to read yet`, your file is
-not the exact one the adapter knows. Usually that is for one of two reasons:
+If your game is not found, or a file you choose is refused, your file is not the exact one the adapter
+knows. When you choose a file, ventris says what it is, as far as it can tell, and what is needed instead;
+when a copy in your games folder is the game but not the file needed, the game's page names it, with why.
+Usually it is for one of these reasons:
 
+- **It is compressed or in an archive**, and has to be unpacked or converted back to the game's plain file
+  first.
 - **It is a different release**: another region, another version of the same region, or a re-release.
   Others need an adapter of their own.
 - **It already has a patch applied**, such as a fan translation or a fix. A patched file is a different

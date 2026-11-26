@@ -10,7 +10,17 @@ const phantasia: Game = {
   name: "Tales of Phantasia (Super Famicom, Japan)",
   platform: "Super Famicom / SNES",
   source_language: "ja",
-  releases: [{ sha1: "0000000000000000000000000000000000000001", name: "Japan" }],
+  releases: [
+    {
+      sha1: "0000000000000000000000000000000000000001",
+      name: "Japan",
+      size: 6291456,
+      label: "TALES OF PHANTASIA",
+      version: "1.0",
+      label_kind: "title",
+      catalogue: { name: "No-Intro", about: "the catalogue of cartridge dumps", entry: "Tales of Phantasia (Japan)", page: null },
+    },
+  ],
   kinds: [],
   can_insert: true,
   sets_names: true,
