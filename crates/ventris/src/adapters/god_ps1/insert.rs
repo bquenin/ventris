@@ -125,8 +125,8 @@ pub const LIMITS: &str = "the window shows 4 lines of 16 characters, 15 in a spo
                           and a word as 8 (with wrapping off, a line longer than the window is refused); an area's \
                           code, its text included, can grow only as far as the game's heap has room for when the \
                           player goes through a door into or out of the area, loads one of its maps or fights in it: \
-                          not at all for area 105, a few thousand bytes for areas 131, 154, 157 and 179, and over \
-                          150,000 for half of the areas (docs/packs.md lists the tightest)";
+                          not at all for areas 105 and 107, a few thousand bytes for areas 131, 154, 157 and 179, and \
+                          over 150,000 for half of the areas (docs/packs.md lists the tightest)";
 
 // --- characters ------------------------------------------------------------
 

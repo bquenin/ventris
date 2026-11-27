@@ -29,8 +29,9 @@
 //! local value just before, and runs $80 (see `doors`). A door whose numbers are not put there that
 //! way (33 of them, which use values the game keeps, such as the way back to a world map) is not
 //! found. Area 178 is a room for testing the game, whose doors lead everywhere; its doors are left
-//! out, and an area that only it leads to is checked as if the player came from the area that leaves
-//! the least room. Which of an area's maps a door is in is not known, so each is supposed in turn.
+//! out, and an area that only it leads to is checked as if the player came from the area whose door
+//! into it would need the most room. Which of an area's maps a door is in is not known, so each is
+//! supposed in turn.
 //!
 //! The game leaves itself little room in places. Going from area 107 into area 105, whose code does
 //! not fit where 107's was, the three copies leave 19,636 bytes of the heap free; that is the least of
@@ -218,12 +219,11 @@ fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Opt
         .map(|(other, _)| *other)
         .collect();
     if from.is_empty() && !testing {
-        // Only the test room leads here, or no door the events show: as if from the area that leaves
-        // the least room behind it.
-        let worst = areas
-            .iter()
-            .filter(|(other, _)| **other != entry)
-            .max_by_key(|(_, footprint)| block(footprint.code) + footprint.map_blocks().0);
+        // Only the test room leads here, or no door the events show: as if from the area whose door
+        // into it needs the most. That is not always the area that leaves the most behind it: a
+        // smaller one can leave a hole the new code does not fit in, and so need the three copies.
+        let worst =
+            areas.iter().filter(|(other, _)| **other != entry).max_by_key(|(_, footprint)| door(footprint, here));
         from.extend(worst.map(|(other, _)| *other));
     }
     for other in from {

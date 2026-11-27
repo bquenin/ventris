@@ -404,6 +404,7 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   | Area | Text (bytes) | Can grow by (bytes) | Tightest moment |
   | --- | ---: | ---: | --- |
   | 105 | 27,598 | 0 | going into it from area 107 |
+  | 107 | 6,088 | 0 | going from it into area 105 |
   | 179 | 13,474 | 384 | going into it from area 131 |
   | 131 | 12,750 | 1,160 | going from it into area 179 |
   | 157 | 16,370 | 1,652 | going into it from area 154 |

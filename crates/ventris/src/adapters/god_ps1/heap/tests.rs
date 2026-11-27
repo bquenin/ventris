@@ -89,6 +89,22 @@ fn an_area_the_test_room_alone_leads_to_is_checked_as_if_from_the_worst_area() {
     assert_eq!(least.unwrap().1, "area 123, going into it from area 177");
 }
 
+#[test]
+fn with_no_door_known_into_an_area_the_worst_door_is_not_always_from_the_largest_area() {
+    // The world map leaves a hole the new code fits in; the small area leaves one it does not, so
+    // going from there needs the three copies and the rest, which is more than the heap has room for.
+    let world = area(0x149C0, 0x1E2FC, &[(0x4_0000, 0x4_0890)], &[]);
+    let small = area(0x8C14, 0x1_9CCC, &[(0x2A00, 0x1_0224)], &[]);
+    let hidden = area(0x2_0000, 0x5_0000, &[(0x1000, 0)], &[]);
+    let areas = BTreeMap::from([(177, world), (153, small), (123, hidden)]);
+    let (shortfalls, _) = check(&areas, &BTreeSet::from([123]));
+    let used = block(0x8C14) + block(0x2A00) + 3 * block(0x2_0000) + block(0x5_0000);
+    assert_eq!(
+        shortfalls,
+        [Shortfall { area: 123, other: Some(153), moment: "going into it from area 153".into(), over: used - ROOM }]
+    );
+}
+
 // --- with the game ---------------------------------------------------------
 
 fn game() -> Option<Image> {
