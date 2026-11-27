@@ -466,7 +466,12 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   chakra lessons and the diary run on. A choice (yes and no, the title screen's menu) stays as wide as the
   game's own, its box being made for that. A party member's name takes at most 6 characters, as the name
   entry allows, and 15 bytes, and is written in capitals, since the menus draw it in a font without
-  lowercase letters. The player can still rename the hero, in kana.
+  lowercase letters. The player can still rename the hero, in kana. A monster's name takes at most 17
+  bytes, since a battle puts a space and a letter after it where several of a kind are met.
+- What the game puts into a string (a name of the party, a number, an item's or a monster's name, the
+  letter after a monster's name) is drawn as narrow as the letters around it, in the dialogue, the
+  battle's messages and the menus' screens, so a translation writes `{NAME:19}`, `{NUM}` or `{WORD}` among
+  its words with a space each side, as it would a word.
 - A label of `menu` stays in its slot: it takes no more bytes than the game left for it, and draws no more
   characters than the widest label of its screen, 8 in the main menu; ﾞ and ﾟ take a byte but are drawn
   over the letter before. The menus' font has capitals, digits, punctuation and the kana; lowercase

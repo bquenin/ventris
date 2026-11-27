@@ -27,6 +27,14 @@
 ; between the two characters where the first fills it, and every character is drawn and measured
 ; as it would be with a byte of its own.
 ;
+; What the game puts in. A name or a number put into a string ($0C) is copied first with the codes
+; of the renderer's characters in place of the game's full-width letters and digits (`copy`), in the
+; writers (`set_converted`), the battle's messages (`fmt_insert`) and the menus' screens
+; (`menu_nested`). The battle's messages are a copy of the message with each $0C replaced, so there
+; the runs are kept whole across what is put in; the menus' screens move the pen by what it drew. The
+; letter after the name of each of several monsters of a kind goes in the name's run, after a space
+; (`suffix`).
+;
 ; Given: CODE, where this code goes. Register conventions of the routines below are in their notes;
 ; the game's registers that are live at each hook are kept.
 
@@ -44,6 +52,9 @@ TABLE_CODES = $0B00     ; the codes `widths` has: every code a string can write
 RUN = $0A               ; the byte that starts or ends a run of the renderer's characters
 RUN4 = $28              ; RUN times 4, as the writers have it to find its routine
 OWN_CODES = $80091328   ; the game's table of the code of each byte
+NARROW_SPACE = 772      ; `narrow_codes`: 192 pairs at most, and the 0 that ends them
+BUFFER = 40             ; a buffer a name or a number is copied into: 15 bytes, each made two, and 0
+BUFFERS = 200           ; one for each of the four windows the game opens, and one for any other
 
         org CODE
 
@@ -274,9 +285,13 @@ note_code:
 advance_menu:
         lui   at, %hi(menu_width)
         lbu   at, %lo(menu_width)(at)
-        nop
-        jr    ra
+        lui   v1, %hi(menu_sum)
+        lhu   v1, %lo(menu_sum)(v1)
         addu  s4, s4, at
+        addu  v1, v1, at
+        lui   at, %hi(menu_sum)
+        jr    ra
+        sh    v1, %lo(menu_sum)(at)
 
 ; --- runs of one byte a character ----------------------------------------------------------------
 
@@ -503,6 +518,325 @@ menu_code:
         jr    t6
         subu  s2, s2, v0
 
+; --- what the game puts into a string ------------------------------------------------------------
+
+; narrow_code: v0 = the code of the renderer's character that stands for the game's code t4, or 0
+; (`narrow_codes`). Clobbers at, v1.
+narrow_code:
+        lui   at, %hi(narrow_codes)
+        addiu at, at, %lo(narrow_codes)
+.next:
+        lhu   v1, 0(at)
+        lhu   v0, 2(at)
+        beqz  v1, .none
+        addiu at, at, 4
+        bne   v1, t4, .next
+        nop
+        jr    ra
+        nop
+.none:
+        jr    ra
+        move  v0, zero
+
+; copy, copy_run: copy the string at a1 to a0, with its zero byte, keeping track of runs, from out of
+; a run (copy) or from in one as t3 says (copy_run). With a2 not zero, each character of the game's
+; own outside a run that one of the renderer's stands for is written as that one's code, in two
+; bytes, and the spaces before its first character are left out: the game pads some numbers to a
+; width, which only spreads them out among letters drawn at their own widths. v0 = where the zero
+; byte was put, v1 = 1 if the string ends in a run. Clobbers at, a0, a1, t0, t1, t3, t4, t7, t8.
+copy:
+        move  t3, zero
+copy_run:
+        move  t8, ra
+        move  t7, a2
+.loop:
+        lbu   t0, 0(a1)
+        addiu a1, a1, 1
+        beqz  t0, .end
+        xori  at, t0, $20
+        bnez  at, .kept
+        nop
+        bnez  t7, .loop
+        nop
+.kept:
+        move  t7, zero
+        sltiu at, t0, $10
+        bnez  at, .low
+        nop
+        bnez  t3, .put          ; in a run, a character of the renderer's
+        nop
+        beqz  a2, .put
+        sll   at, t0, 1
+        lui   t4, %hi(OWN_CODES)
+        addu  t4, t4, at
+        lhu   t4, %lo(OWN_CODES)(t4)
+        b     .narrow
+        nop
+.low:
+        xori  at, t0, RUN
+        bnez  at, .ends_run
+        sltiu at, t0, RUN
+        b     .put
+        xori  t3, t3, 1
+.ends_run:
+        beqz  at, .control
+        move  t3, zero
+        lbu   t1, 0(a1)         ; $01 to $09: a code of two bytes
+        addiu a1, a1, 1
+        beqz  a2, .put_two
+        sll   t4, t0, 8
+        or    t4, t4, t1
+.narrow:
+        jal   narrow_code
+        nop
+        beqz  v0, .own
+        srl   at, v0, 8
+        sb    at, 0(a0)
+        sb    v0, 1(a0)
+        b     .loop
+        addiu a0, a0, 2
+.own:
+        sltiu at, t0, RUN
+        beqz  at, .put
+        nop
+.put_two:
+        sb    t0, 0(a0)
+        sb    t1, 1(a0)
+        b     .loop
+        addiu a0, a0, 2
+.control:                       ; $0B to $0F: $0C and $0F take the byte after, and $0F $00 one more
+        xori  at, t0, $0C
+        beqz  at, .with_next
+        xori  at, t0, $0F
+        bnez  at, .put
+        nop
+        lbu   t1, 0(a1)
+        nop
+        bnez  t1, .with_next
+        nop
+        sb    t0, 0(a0)
+        sb    t1, 1(a0)
+        addiu a0, a0, 2
+        lbu   t0, 1(a1)
+        b     .put
+        addiu a1, a1, 2
+.with_next:
+        lbu   t1, 0(a1)
+        b     .put_two
+        addiu a1, a1, 1
+.put:
+        sb    t0, 0(a0)
+        b     .loop
+        addiu a0, a0, 1
+.end:
+        sb    zero, 0(a0)
+        move  v0, a0
+        jr    t8
+        move  v1, t3
+
+; scan: v1 = 1 if the text from a0 is in a run at a3, or, with a3 zero, at its zero byte; a0 = where
+; it stopped. Clobbers at, t0.
+scan:
+        move  v1, zero
+.next:
+        beqz  a3, .byte
+        sltu  at, a0, a3
+        beqz  at, .done
+        nop
+.byte:
+        lbu   t0, 0(a0)
+        nop
+        beqz  t0, .done
+        sltiu at, t0, $10
+        beqz  at, .next
+        addiu a0, a0, 1
+        xori  at, t0, RUN
+        bnez  at, .low
+        sltiu at, t0, RUN
+        b     .next
+        xori  v1, v1, 1
+.low:
+        bnez  at, .skip         ; $01 to $09: a code of two bytes
+        move  v1, zero
+        xori  at, t0, $0C
+        beqz  at, .skip
+        xori  at, t0, $0F
+        bnez  at, .next
+        nop
+        lbu   t0, 0(a0)
+        nop
+        bnez  t0, .skip
+        nop
+        addiu a0, a0, 1
+.skip:
+        b     .next
+        addiu a0, a0, 1
+.done:
+        jr    ra
+        nop
+
+; set_converted: in place of the game's routine that gives the window at a0 a string to put in
+; ($8002492C) for a name or a number ($0C): the string at a1 is first copied into the window's own
+; buffer with the renderer's codes for its characters, so that it is drawn as narrow as the text
+; around it. Clobbers what `copy` does, and t2, t5, t9.
+set_converted:
+        move  t9, ra
+        lui   at, %hi(POOL)
+        addiu at, at, %lo(POOL)
+        subu  t2, a0, at
+        sltiu at, t2, POOL_END - POOL
+        bnez  at, .pool
+        nop
+        li    t2, POOL_END - POOL
+.pool:
+        lui   at, %hi(window_buffers)
+        addiu at, at, %lo(window_buffers)
+        addu  t2, t2, at
+        move  t5, a0
+        move  a0, t2
+        jal   copy
+        li    a2, 1
+        move  a0, t5
+        move  a1, t2
+        j     $8002492C
+        move  ra, t9
+
+; The battle's messages ($80039DD4) are made by copying a message, each $0C replaced by what it
+; stands for, into a line of their own: fmt_start keeps where the line starts. fmt_insert puts the
+; string at a1 in the line at a0, a2 not zero for a name or a number (see `copy`), and keeps the
+; runs whole: a run open in the line goes on into a string that starts with RUN, and ends before
+; one that starts with a character of the game's; a string that ends in a run goes on into the
+; message's RUN after it, and ends before a character of the game's. The formatter's frame is ours:
+; $34(sp) is where its message goes on. v0 = where the zero byte was put.
+fmt_start:
+        lui   at, %hi(fmt_line)
+        sw    a0, %lo(fmt_line)(at)
+        jr    ra
+        move  s0, a0
+
+fmt_insert:
+        move  t9, ra
+        move  t2, a0
+        lui   at, %hi(fmt_line)
+        lw    a0, %lo(fmt_line)(at)
+        jal   scan
+        move  a3, t2
+        move  a0, t2
+        beqz  v1, .copy
+        move  t3, zero
+        lbu   t0, 0(a1)
+        li    at, RUN
+        bne   t0, at, .other
+        sltiu at, t0, $10
+        addiu a1, a1, 1         ; the run goes on
+        b     .copy
+        li    t3, 1
+.other:
+        bnez  at, .copy
+        li    at, RUN
+        sb    at, 0(a0)         ; the run ends
+        addiu a0, a0, 1
+.copy:
+        jal   copy_run
+        nop
+        beqz  v1, .done
+        lw    t0, $34(sp)
+        li    at, RUN
+        lbu   t1, 0(t0)
+        nop
+        bne   t1, at, .other_after
+        sltiu at, t1, $10
+        addiu t0, t0, 1         ; the run goes on
+        b     .done
+        sw    t0, $34(sp)
+.other_after:
+        bnez  at, .done
+        li    at, RUN
+        sb    at, 0(v0)         ; the run ends
+        addiu v0, v0, 1
+        sb    zero, 0(v0)
+.done:
+        jr    t9
+        nop
+
+fmt_verbatim:                   ; $8003A010: a word, a power, a monster's name
+        j     fmt_insert
+        move  a2, zero
+
+fmt_number:                     ; $8003A008: a number, at sp+$10
+        move  a0, s0
+fmt_converted:                  ; a name of the party
+        jal   fmt_insert
+        li    a2, 1
+        j     $8003A018
+        nop
+
+; suffix: the battle puts a letter after the name of each of several monsters of a kind ($8004A9BC):
+; put letter a1 (0 for A) after the name at a0. A name that ends in a run gets a space and the letter
+; in that run (`suffix_bytes`); another, the game's own letter. Clobbers at, a0, a3, v1, t0, t1, t9.
+suffix:
+        move  t9, ra
+        jal   scan
+        move  a3, zero
+        beqz  v1, .own
+        lui   at, %hi(suffix_bytes)
+        addiu at, at, %lo(suffix_bytes)
+        lbu   t0, 0(at)
+        addu  at, at, a1
+        lbu   t1, 1(at)
+        beqz  t0, .own
+        nop
+        beqz  t1, .own
+        nop
+        sb    t0, 0(a0)
+        sb    t1, 1(a0)
+        jr    t9
+        sb    zero, 2(a0)
+.own:
+        addiu t0, a1, $41
+        sb    t0, 0(a0)
+        jr    t9
+        sb    zero, 1(a0)
+
+; The menus' screens put in what a $0C stands for by drawing it with $80058828 itself ($80058CD4),
+; then moving the pen 12 pixels a character. menu_insert sets `menu_sum`, which `advance_menu` adds
+; each character's width to, to zero; menu_nested copies a name or a number (a string not in the
+; program's data) with the renderer's codes first; menu_after moves the pen by what was drawn, and
+; leaves the string out of a run, as the $0C left it.
+menu_insert:
+        lui   at, %hi(menu_sum)
+        j     $80058CD4
+        sh    zero, %lo(menu_sum)(at)
+
+menu_nested:
+        lui   at, $8010
+        sltu  at, a2, at
+        bnez  at, .draw
+        nop
+        move  t9, ra
+        move  t5, a0
+        move  t6, a1
+        lui   a0, %hi(menu_buffer)
+        addiu a0, a0, %lo(menu_buffer)
+        move  t2, a0
+        move  a1, a2
+        jal   copy
+        li    a2, 1
+        move  a0, t5
+        move  a1, t6
+        move  a2, t2
+        move  ra, t9
+.draw:
+        j     $80058828
+        nop
+
+menu_after:
+        lui   at, %hi(menu_run)
+        sb    zero, %lo(menu_run)(at)
+        lui   at, %hi(menu_sum)
+        jr    ra
+        lh    v1, %lo(menu_sum)(at)
+
 menu_width:
         .byte SMALL
 menu_run:
@@ -510,6 +844,26 @@ menu_run:
 runs:
         .space 17
         .align 4
+menu_sum:
+        .half 0
+        .align 4
+fmt_line:
+        .word 0
+
+; What the build writes: the renderer's character that stands for each of the game's codes of the
+; same character (a full-width letter, digit or mark), as pairs of codes ended by 0, lowest first;
+; and the bytes in a run of a space and of the letters A to H.
+narrow_codes:
+        .space NARROW_SPACE
+suffix_bytes:
+        .space 12
+
+; Where a name or a number is copied for each of the four windows and for any other, and for the
+; menus' screens.
+window_buffers:
+        .space BUFFERS
+menu_buffer:
+        .space BUFFER
 
 ; What each byte of a run stands for, by byte: a character's code and 0, or the codes of the two
 ; characters of a pair. The build writes them.
@@ -593,3 +947,45 @@ widths:
         nop
         j     $8005896C
         nop
+
+        org $80024964           ; the writers at a name ($0C), drawn narrow
+        jal   set_converted
+        org $80024A9C           ; and at a number
+        jal   set_converted
+        org $80024AF0
+        jal   set_converted
+        org $80024BA8
+        jal   set_converted
+        org $80039DF4           ; the battle's messages: where the line starts
+        jal   fmt_start
+        org $80039ECC           ; a name of the party
+        j     fmt_converted
+        org $80039F28
+        j     fmt_converted
+        org $8003A008           ; a number
+        j     fmt_number
+        org $8003A010           ; a word or a monster's name
+        jal   fmt_verbatim
+        org $8004A9BC           ; the letters after the names of monsters of a kind
+        jal   suffix
+        addiu a1, s3, 1
+        addiu s3, s3, 1
+        nop
+        nop
+        nop
+        nop
+        org $8004A9FC
+        jal   suffix
+        move  a1, zero
+        nop
+        nop
+        nop
+        nop
+        org $800588E4           ; the menus' screens at $0C
+        jal   menu_insert
+        org $800588EC
+        jal   menu_after
+        nop
+        nop
+        org $80058EC8
+        jal   menu_nested
