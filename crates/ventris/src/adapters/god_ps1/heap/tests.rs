@@ -77,6 +77,14 @@ fn a_door_needs_both_areas_and_three_copies_of_a_code_that_does_not_fit_where_th
     // Only the moments of the areas that changed are checked.
     let (shortfalls, least) = check(&grown, &BTreeSet::new(), 0);
     assert!(shortfalls.is_empty() && least.is_none());
+    // What the build takes of the heap besides counts at every moment, and leaves less room to read
+    // the new rest at a door: a reserve that leaves too little for it, and the rest is not read.
+    let read = block(0x8C14) + block(0x2A00) + block(0x2_0D88);
+    let reserve = room - read - block(0x3_9894) + 4;
+    let (shortfalls, _) = check(&areas, &BTreeSet::from([154]), reserve);
+    let over = block(0x8C14) + block(0x2A00) + 3 * block(0x2_0D88) + reserve - ROOM;
+    let door = shortfalls.iter().find(|shortfall| shortfall.other == Some(153)).unwrap();
+    assert_eq!(door.over, over);
 }
 
 #[test]

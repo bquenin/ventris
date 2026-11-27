@@ -188,8 +188,9 @@ pub struct Shortfall {
 
 /// The heap an area needs at each of its moments: going through each door into it and out of it,
 /// loading each of its maps, and fighting there. Each comes with what it is, the other area for a
-/// door, and the bytes it takes. `areas` is every area, by entry.
-fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Option<usize>, usize)> {
+/// door, and the bytes it takes. `areas` is every area, by entry; `reserve` is what the build takes
+/// of the heap besides (see `check`), which leaves less room for the new rest at a door.
+fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize, reserve: usize) -> Vec<(String, Option<usize>, usize)> {
     let here = &areas[&entry];
     let (largest_map, _) = here.map_blocks();
     let mut found = Vec::new();
@@ -204,7 +205,7 @@ fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Opt
             if block(to.code) <= hole {
                 return read;
             }
-            let rest = if read + block(to.rest) <= ROOM + SPARE { block(to.rest) } else { 0 };
+            let rest = if read + reserve + block(to.rest) <= ROOM + SPARE { block(to.rest) } else { 0 };
             read.max(hole + 3 * block(to.code) + rest)
         })
         .max()
@@ -257,7 +258,7 @@ pub fn check(
         if !areas.contains_key(&entry) {
             continue;
         }
-        for (moment, other, used) in moments(areas, entry) {
+        for (moment, other, used) in moments(areas, entry, reserve) {
             let used = used + reserve;
             let free = (ROOM + SPARE).saturating_sub(used);
             if least.as_ref().is_none_or(|(least, _)| free < *least) {
