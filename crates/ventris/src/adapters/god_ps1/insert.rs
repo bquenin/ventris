@@ -95,8 +95,10 @@
 //! The cells the renderer's characters are drawn in are those of kanji that no string the pack leaves
 //! as it is uses (`free_cells`): not those of the game's other characters, kana, digits, Latin
 //! letters, punctuation, which the program also draws itself, the 「 of a spoken line, a number, a
-//! name. A full translation frees most of the font's 1,516 kanji, and the game's own text leaves 275
-//! of them unused; a pack needs about a hundred. One that needs more than there are is refused.
+//! name. Nor are those of the last column or the last row of each of the font's pictures, which the
+//! dialogue's font draws a pixel off (`drawn_true`). A full translation frees most of the font's
+//! 1,516 kanji, and the game's own text leaves 238 of them unused; a pack needs about a hundred. One
+//! that needs more than there are is refused.
 //!
 //! Characters. Without the renderer, a pack's letters, digits and punctuation in ASCII are written
 //! with the font's full-width forms of them, which are what the game uses (Ａ, ａ, ０, ！, ？, ．…), and
@@ -250,6 +252,17 @@ pub(super) fn large_cell(code: u32) -> Cell {
     let index = (code - FIRST_CODE) as usize;
     let (plane, column, row) = ((index >> 8) & 3, index & 0xF, (index >> 4) & 0xF);
     Cell { page: index / 0x400, plane, x: column * GLYPH_SIZE, y: row * GLYPH_SIZE, width: CELL, height: CELL }
+}
+
+/// Whether the dialogue's font draws a code's cell where the cell is. Its draw routines ($80025CEC,
+/// and $80026078 while a window opens) read a cell in the last column of a picture from one pixel to
+/// its left, and one in the last row from one pixel above, so that the texture they ask for stays
+/// short of the picture's 256th pixel: what such a cell holds is drawn one pixel right, or one pixel
+/// low, of where every other cell's is, and a letter there stands apart from the one before it. The
+/// small font's routines read every cell where it is.
+pub(super) fn drawn_true(code: u32) -> bool {
+    let cell = large_cell(code);
+    cell.x + GLYPH_SIZE < 16 * GLYPH_SIZE && cell.y + GLYPH_SIZE < 16 * GLYPH_SIZE
 }
 
 /// A code's cell in the font of 12 by 11 pixels, member 2, if it has one: glyph `n` of it, `n` being
@@ -1145,10 +1158,11 @@ struct Kept<'a> {
 /// which hold pieces of text nothing points at, nor the pack's own text. The game's other
 /// characters (kana, digits, letters, punctuation, the blank cells) are never taken, since the
 /// program draws some of them itself: the 「 of a spoken line, a number's digits, the names it keeps.
-/// Nor are the codes the small font has no glyph for, nor those whose low byte is zero: the
-/// renderer writes a name or a number the game puts into a string with these codes, in two bytes
-/// (see `vwf`), and a zero byte there would end the string for whatever reads it a byte at a time.
-/// The kanji the pack's changes free come first, then those no string of the game uses.
+/// Nor are the codes the small font has no glyph for, nor the cells the dialogue's font draws a pixel
+/// off (see `drawn_true`), nor those whose low byte is zero: the renderer writes a name or a number
+/// the game puts into a string with these codes, in two bytes (see `vwf`), and a zero byte there
+/// would end the string for whatever reads it a byte at a time. The kanji the pack's changes free
+/// come first, then those no string of the game uses.
 fn free_cells(file: &[u8], kept: &Kept, texts: &[&str], codes: &ByteCodes) -> Vec<u32> {
     let (mut kept_codes, mut freed) = (BTreeSet::new(), BTreeSet::new());
     for area in kept.areas {
@@ -1189,7 +1203,7 @@ fn free_cells(file: &[u8], kept: &Kept, texts: &[&str], codes: &ByteCodes) -> Ve
     }
     let kanji = (FIRST_CODE..FIRST_CODE + GLYPH_COUNT as u32)
         .filter(|code| TABLE.characters.get(code).is_some_and(|char| fonts::is_kanji(*char)))
-        .filter(|code| !kept_codes.contains(code) && *code < SMALL_END && code & 0xFF != 0);
+        .filter(|code| !kept_codes.contains(code) && *code < SMALL_END && code & 0xFF != 0 && drawn_true(*code));
     let (first, then): (Vec<u32>, Vec<u32>) = kanji.partition(|code| freed.contains(code));
     first.into_iter().chain(then).collect()
 }
@@ -1568,7 +1582,15 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         for (section, number, text) in &labels {
             let room = program_text::label_room(&file, *number as usize, own_labels, &references.referred);
             let width = program_text::label_width(&file, *number, own_labels);
+            let own_conversions = own_labels.get(number).map(|own| program_text::conversions(own)).unwrap_or_default();
             match program_text::encode_label(text) {
+                Ok(data) if program_text::conversions(&data) != own_conversions => refusals.push(format!(
+                    "string {}: it fills in {} where the game's own label fills in {}: keep the game's own, in the \
+                     same order, for the game passes what each fills in",
+                    string_name(section, *number),
+                    shown_conversions(&program_text::conversions(&data)),
+                    shown_conversions(&own_conversions),
+                )),
                 Ok(data) if program_text::label_cells(&data) > width => refusals.push(format!(
                     "string {}: it draws {} characters, and the labels of its screen have room for {width}, the most \
                      the game's own take there",
@@ -1725,6 +1747,14 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
     }
     ps1::write_image(disc, output, &patches)?;
     Ok(Built { summary: done.summary() })
+}
+
+/// The conversions of a label's format (see `program::conversions`), as a message shows them: `%d %s`.
+fn shown_conversions(conversions: &[u8]) -> String {
+    match conversions {
+        [] => "nothing".to_string(),
+        _ => conversions.iter().map(|byte| format!("%{}", char::from(*byte))).collect::<Vec<_>>().join(" "),
+    }
 }
 
 /// What a build says of each moment on the heap it would leave short, and how to fix it. `changed` is

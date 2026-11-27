@@ -554,6 +554,35 @@ fn build_puts_the_program_s_text_and_the_menus_labels_in() {
     assert!(!out.exists());
 }
 
+#[test]
+fn the_shop_s_labels_go_in_their_slots_and_a_format_keeps_its_conversions() {
+    let Some(image) = game() else { return };
+    let disc = image.ps1_disc().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let out = folder.path().join("built.bin");
+    // The shop's commands, its count of what the party has, its yes and no, in the read-only data
+    // before the program's code; and the count beside them, a format.
+    let labels = [(5576, "Buy"), (5580, "Sel"), (5584, "Leave"), (5592, "Owned"), (5620, "Yes No"), (863884, "%8d")];
+    let built = build(disc, &program_pack(&[], &labels), &out, &BuildOptions::default()).unwrap();
+    assert_eq!(built.summary[1..], ["menu:      6 labels changed, each in its slot"]);
+    let file = program_text::program_file(&Disc::open(&out).unwrap()).unwrap();
+    assert_eq!(file[0x15C8..0x15E4], *b"BUY\0SEL\0LEAVE\0\0\0OWNED\0\0\0\0\0\0\0");
+    assert_eq!(file[0x15E4..0x15F4], program_text::program_file(disc).unwrap()[0x15E4..0x15F4]);
+    assert_eq!(file[0x15F4..0x1600], *b"YES NO\0\0\0\0\0\0");
+    assert_eq!(file[863884..863892], *b"%8d\0\0\0\0\0");
+    // A label must fill in what the game's own does, in the same order, and nothing else; and the
+    // commands' slots are small.
+    fs::remove_file(&out).unwrap();
+    let labels = [(863884, "%8d %s"), (3328, "TURNS"), (5580, "Sell")];
+    let refused = build(disc, &program_pack(&[], &labels), &out, &BuildOptions::default()).err().unwrap().to_string();
+    let lines: Vec<&str> = refused.lines().collect();
+    assert_eq!(lines.len(), 3, "{refused}");
+    assert!(lines[0].starts_with("string menu.3328: it fills in nothing where the game's own label fills in %d"));
+    assert!(lines[1].starts_with("string menu.5580: it takes 4 bytes, and its slot has room for 3"), "{refused}");
+    assert!(lines[2].starts_with("string menu.863884: it fills in %d %s where the game's own label fills in %d"));
+    assert!(!out.exists());
+}
+
 /// The word at an address in the program's file.
 fn program_word(disc: &Disc, address: u32) -> u32 {
     let file = program_text::program_file(disc).unwrap();
@@ -954,15 +983,24 @@ fn the_cells_the_renderer_takes_are_kanji_no_string_left_as_it_is_uses() {
     };
     // With nothing changed, the kanji no text of the game uses: none of its other characters.
     let unused = free_cells(&file, &kept(BTreeSet::new()), &[], codes);
-    assert_eq!(unused.len(), 275);
+    assert_eq!(unused.len(), 238);
     let kanji = |code: &u32| TABLE.characters.get(code).is_some_and(|char| fonts::is_kanji(*char));
     assert!(unused.iter().all(|code| kanji(code) && *code < SMALL_END));
+    // None in the last column or the last row of a picture of the font, which its draw routines read
+    // a pixel off: the 37 kanji there no text uses are left out.
+    let last = |code: &u32| (code - FIRST_CODE) & 0xF == 0xF || (code - FIRST_CODE) & 0xF0 == 0xF0;
+    assert!(!unused.iter().any(last));
+    // Nor a code whose low byte is zero, which the renderer's two-byte codes for names and numbers
+    // would turn into a string's end.
+    assert!(unused.iter().all(|code| code & 0xFF != 0));
+    assert!(drawn_true(0x29E) && !drawn_true(0x29F) && !drawn_true(0x2F0) && !drawn_true(0x5FF) && drawn_true(0x600));
     // Every string of area 096 changed frees the kanji only they used, which come first.
     let area = areas.iter().find(|area| area.entry == 96).unwrap();
     let all: BTreeSet<(&str, u32)> = area.strings().keys().map(|number| ("096", *number)).collect();
     let freed = free_cells(&file, &kept(all.clone()), &[], codes);
     let more = freed.len() - unused.len();
     assert!(more > 0 && freed[more..] == unused[..], "{more}");
+    assert!(freed.iter().all(|code| code & 0xFF != 0 && drawn_true(*code)));
     // A code the pack's own text writes stays.
     let written = format!("{{K:{:04X}}}", freed[0]);
     assert!(!free_cells(&file, &kept(all), &[written.as_str()], codes).contains(&freed[0]));
@@ -992,7 +1030,7 @@ fn build_draws_each_character_at_its_own_width_and_installs_the_renderer() {
         built.summary[2..],
         [format!(
             "renderer:  {characters} characters drawn at their own widths, in cells of kanji no unchanged string \
-             uses, of 275, and {pairs} pairs of them written a byte each; its code at $801F8000, loaded at start-up \
+             uses, of 238, and {pairs} pairs of them written a byte each; its code at $801F8000, loaded at start-up \
              from the program's file"
         )]
     );

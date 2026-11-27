@@ -394,16 +394,17 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   about 35 letters. Each character a pack writes that the game's font lacks and `unifont` (or the fonts the
   pack names) draws 8 pixels wide, accented letters included, is drawn once into both of the game's fonts:
   the one of 16 pixels the dialogue's window uses, and the one of 12 by 11 the battle's window and the menus'
-  screens use, at the same width. This holds for the dialogue and the program's text, but not for the
-  party's names, which stay a character to a cell. The characters take the cells of kanji that no string the
-  pack leaves as it is uses: 275 when a pack changes little, most of the font's 1,516 kanji in a full
-  translation; a pack needs about a hundred, and one that needs more cells than there are, or more than 240
-  such characters, is refused. Such a letter takes **one byte**, in a run that a byte starts, so a run takes
+  screens use, at the same width. This holds for the dialogue and the program's text. The party's names are
+  written a character to a cell, and drawn narrow where the game puts one into a string (see below). The
+  characters take the cells of kanji that no string the pack leaves as it is uses: 238 when a pack changes
+  little, most of the font's 1,516 kanji in a full translation; a pack needs about a hundred, and one that
+  needs more cells than there are, or more than 240 such characters, is refused. Such a letter takes **one byte**, in a run that a byte starts, so a run takes
   one more; a line break or a tag ends a run. The bytes a run's characters leave over (156 when a pack writes
   84 such characters) each stand for **two characters**, the pairs that save the most bytes in the pack's own
   text, chosen at each build: the game draws such a byte as it draws the two letters, so a line is measured,
   broken and drawn exactly as without them, and only the bytes are fewer. The game's own text, and what the
-  pack leaves Japanese, is drawn as before.
+  pack leaves Japanese, is drawn as before, but for a name or a number the game puts into it, which is
+  drawn narrow (see below).
 - With the build option `full-width` (`--option full-width`, or `options = ["full-width"]` under
   `[build]` in `pack.toml`), every character takes a cell, as in the game's own text: Latin letters,
   digits and punctuation are drawn with the game's full-width glyphs, a space is its blank cell, and
@@ -471,8 +472,13 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
 - What the game puts into a string (a name of the party, a number, an item's or a monster's name, the
   letter after a monster's name) is drawn as narrow as the letters around it, in the dialogue, the
   battle's messages and the menus' screens, so a translation writes `{NAME:19}`, `{NUM}` or `{WORD}` among
-  its words with a space each side, as it would a word.
+  its words with a space each side, as it would a word. This also holds in a string the pack leaves
+  Japanese: a name or a number the game puts into it is drawn narrow when the build puts the renderer in.
 - A label of `menu` stays in its slot: it takes no more bytes than the game left for it, and draws no more
   characters than the widest label of its screen, 8 in the main menu; ﾞ and ﾟ take a byte but are drawn
   over the letter before. The menus' font has capitals, digits, punctuation and the kana; lowercase
-  letters are written as capitals.
+  letters are written as capitals. The shop's labels are among them: its commands (buy and sell have 3
+  bytes each, leave 7), its yes and no in one label (the hand points at its first character for yes and its
+  fourth for no), the label over what the party has, and the count beside them (`menu.863884`, `%8dコ`). A
+  label with a `%` in it is a format the game fills in before drawing it, and keeps the game's own
+  conversions (`%8d`), in the same order.
