@@ -190,9 +190,30 @@ fn the_storyteller_is_written_across_by_one_argument() {
     let code: Vec<u8> = [op(0x62, &[0]), op(VERTICAL, &[1]), op(TEXT, &[0x0E])].concat();
     let data = make_script(&[&code]);
     let across = written_across("x.dat", &data).unwrap();
-    assert_eq!(across.len(), data.len());
-    let changed: Vec<usize> = (0..data.len()).filter(|at| data[*at] != across[*at]).collect();
-    assert_eq!(changed.len(), 1);
+    let expected: Vec<u8> = [op(0x62, &[0]), op(VERTICAL, &[0]), op(TEXT, &[0x0E])].concat();
+    assert_eq!(across, make_script(&[&expected]));
+}
+
+#[test]
+fn lines_are_measured_in_cells_of_8_dots() {
+    let advance = |char: char| if char.is_ascii() { 8 } else { 16 };
+    let width = |glyph: u16| if glyph == 0x5CA { 8 } else { 16 };
+    let wrapped = |text: &str| wrap(text, 160, &advance, &width).unwrap();
+    let letters = |count: usize| "a".repeat(count);
+    // 17 letters, a space, then a letter and a wide character: the wide one would end past 160 dots.
+    assert_eq!(wrapped(&format!("{} Bあ", letters(17))), format!("{}\nBあ", letters(17)));
+    // A glyph written as a tag takes the room of its glyph, and goes to the next line whole.
+    let tags = "{K:05CA}{K:0100}";
+    assert_eq!(wrapped(&format!("{} {tags}", letters(18))), format!("{}\n{tags}", letters(18)));
+    // 20 cells fit; breaks and other tags are kept.
+    let text = format!("{} {{WAIT:001E}}b\nc d", letters(18));
+    assert_eq!(wrapped(&text), text);
+    assert_eq!(wrapped(&format!("{} bb", letters(18))), format!("{}\nbb", letters(18)));
+    // A new box puts the pen back at the left: without it, the same letters run past the edge.
+    let text = format!("{}{{0D}}{{0A}}{} c", letters(15), "b".repeat(15));
+    assert_eq!(wrapped(&text), text);
+    let text = format!("{} {} c", letters(5), "b".repeat(15));
+    assert_eq!(wrapped(&text), format!("{}\n{} c", letters(5), "b".repeat(15)));
 }
 
 #[test]
@@ -269,12 +290,16 @@ fn latin_letters_are_added_and_lines_broken_at_spaces() {
     let records = files.file_at(&built, FONT_RECORDS_FILE).unwrap();
     let count = u32::from_le_bytes(records[4..8].try_into().unwrap()) as usize;
     assert!(count > GLYPH_COUNT);
-    // Read back with the added glyphs' characters, the line is broken at spaces, 20 letters at most.
+    // Read back with the characters the build gave the added glyphs, the line is broken at spaces.
+    let mut added: Vec<char> = line.chars().filter(char::is_ascii_graphic).collect();
+    added.sort_unstable();
+    added.dedup();
     let back = extract(&built).unwrap();
-    let text = &back.texts["demo_a1_n0"][&6244];
-    let lines: Vec<&str> = text.split('\n').collect();
-    assert_eq!(lines.len(), 4, "{text}");
-    assert!(lines.iter().all(|line| line.matches("{K:").count() + line.chars().filter(|c| *c == ' ').count() <= 20));
+    let mut text = back.texts["demo_a1_n0"][&6244].clone();
+    for (index, char) in added.iter().enumerate() {
+        text = text.replace(&format!("{{K:{:04X}}}", GLYPH_COUNT + index), &char.to_string());
+    }
+    assert_eq!(text, "So you are the band\nof thieves the whole\ntown is talking\nabout?");
 }
 
 #[test]

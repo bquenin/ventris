@@ -601,6 +601,13 @@ pub struct AddedGlyphs {
 
 impl AddedGlyphs {
     pub fn new(characters: &[char], sources: &[fonts::Font]) -> Result<AddedGlyphs> {
+        if GLYPH_COUNT + characters.len() > usize::from(u16::MAX) {
+            return text_error(format!(
+                "the pack needs {} new characters and the font has room for {}",
+                characters.len(),
+                usize::from(u16::MAX) - GLYPH_COUNT
+            ));
+        }
         let drawn = fonts::new_glyphs(sources, characters)?;
         let mut numbers = HashMap::new();
         let mut glyphs = Vec::new();
@@ -657,8 +664,12 @@ impl AddedGlyphs {
                     }
                 }
             }
-            for value in [unit, width, GLYPH_SIZE] {
-                added.extend_from_slice(&(value as u16).to_le_bytes());
+            // A record gives where a glyph starts in 16 bits: past that, the font is full.
+            let Ok(unit) = u16::try_from(unit) else {
+                return text_error("the pack adds more characters than the game's font has room for");
+            };
+            for value in [unit, width as u16, GLYPH_SIZE as u16] {
+                added.extend_from_slice(&value.to_le_bytes());
             }
         }
         let mut table = records.to_vec();
@@ -703,6 +714,83 @@ pub fn written_across(name: &str, data: &[u8]) -> Result<Vec<u8>> {
 /// The tags after which the game starts a new box, at the left: `{0A}` clears the box.
 const NEW_BOX: &[&str] = &["0A"];
 
+/// Stand, while a line is measured, for the second 8 dots of a glyph 16 wide, and for each 8 dots of a
+/// glyph written as a `{K:…}` tag.
+const WIDE_CELL: char = '\u{E001}';
+const TAG_CELL: char = '\u{E000}';
+
+/// A string broken at spaces to a line `limit` dots wide; breaks and tags already in it are kept.
+///
+/// Every glyph is 8 or 16 dots wide, so a line is measured in cells of 8: a wide character as itself and
+/// one `WIDE_CELL`, a `{K:…}` tag as cells of its glyph, put back once the line is broken. The shared
+/// `layout::wrap_lines` lets a character start while the line has room; measured in cells, a character
+/// that starts in the last cell also ends there, so no glyph runs past the edge of the box.
+pub fn wrap(
+    text: &str,
+    limit: usize,
+    advance: &dyn Fn(char) -> usize,
+    glyph_width: &dyn Fn(u16) -> usize,
+) -> Result<String> {
+    let mut measured = String::new();
+    let mut tags = Vec::new();
+    for token in tokens(text) {
+        match token {
+            Token::Char(char) if char != '\n' && char != ' ' => {
+                measured.push(char);
+                measured.extend(std::iter::repeat_n(WIDE_CELL, (advance(char) / 8).saturating_sub(1)));
+            }
+            Token::Tag { raw, name: "K", value } => {
+                let glyph = value.and_then(|value| u16::from_str_radix(value.trim(), 16).ok()).unwrap_or(0);
+                let cells = (glyph_width(glyph) / 8).max(1);
+                measured.extend(std::iter::repeat_n(TAG_CELL, cells));
+                tags.push((raw, cells));
+            }
+            other => measured.push_str(&other.text()),
+        }
+    }
+    let broken = layout::wrap_lines(&measured, &|_| Ok(1), limit / 8, &|_, _| 0, NEW_BOX)?;
+    let mut restored = String::new();
+    let (mut tags, mut chars) = (tags.into_iter(), broken.chars());
+    while let Some(char) = chars.next() {
+        match char {
+            WIDE_CELL => {}
+            TAG_CELL => {
+                let (raw, cells) = tags.next().expect("each run of tag cells stands for a tag");
+                restored.push_str(raw);
+                for _ in 1..cells {
+                    chars.next();
+                }
+            }
+            char => restored.push(char),
+        }
+    }
+    Ok(restored)
+}
+
+/// The width of each of the game's glyphs, from the font's records.
+fn record_widths(records: &[u8]) -> Result<Vec<usize>> {
+    let damaged_font = || Error::Image(format!("{FONT_RECORDS_FILE} is damaged"));
+    let start = offset_in(records, 0).ok_or_else(damaged_font)?;
+    let count = word(records, 4).ok_or_else(damaged_font)? as usize;
+    (0..count)
+        .map(|index| {
+            let at = start + 6 * index + 2;
+            let pair = records.get(at..at + 2).ok_or_else(damaged_font)?;
+            Ok(usize::from(u16::from_le_bytes([pair[0], pair[1]])))
+        })
+        .collect()
+}
+
+/// The width of a glyph written as a `{K:…}` tag: one of the game's, or one a build adds.
+fn glyph_width(glyph: u16, widths: &[usize], added: &AddedGlyphs) -> usize {
+    match widths.get(usize::from(glyph)) {
+        Some(width) => *width,
+        None => {
+            added.glyphs.get(usize::from(glyph).saturating_sub(GLYPH_COUNT)).map_or(GLYPH_SIZE, |glyph| glyph.width)
+        }
+    }
+}
+
 /// The value of a pixel of ink in a glyph a build adds: the brightest of the font's 16.
 const INK: u8 = 15;
 
@@ -716,7 +804,8 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<(Vec<u8>
     let mut new_characters: Vec<char> = Vec::new();
     for (_, _, text) in &changes {
         for char in crate::text::plain_characters(text) {
-            let redrawn = char.is_ascii() && !char.is_ascii_control();
+            // The game's own space is kept: it has no ink, so it goes with any font.
+            let redrawn = char.is_ascii_graphic();
             if (redrawn || !table.glyphs.contains_key(&char)) && !new_characters.contains(&char) {
                 new_characters.push(char);
             }
@@ -729,16 +818,17 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<(Vec<u8>
 
     let mut by_section: BTreeMap<&str, BTreeMap<usize, (usize, Vec<u8>)>> = BTreeMap::new();
     let original_bytes = original_strings(rom)?;
+    let widths = record_widths(nds::file_by_number(rom, FONT_RECORDS_FILE_NUMBER)?)?;
     for (section, number, text) in &changes {
-        let wrap = options.wrap && ADAPTER.kind_of(section).is_some_and(|kind| kind.wrap);
+        let wrapped = options.wrap && ADAPTER.kind_of(section).is_some_and(|kind| kind.wrap);
         let across = options.switches.contains(HORIZONTAL);
         let limit = match section.as_str() {
             _ if is_system(section) => SYSTEM_LINE,
             STORYTELLER if across => STORYTELLER_LINE,
             _ => DIALOGUE_LINE,
         };
-        let text = if wrap {
-            layout::wrap_lines(text, &|char| Ok(added.advance(char)), limit, &|_, _| 0, NEW_BOX)?
+        let text = if wrapped {
+            wrap(text, limit, &|char| added.advance(char), &|glyph| glyph_width(glyph, &widths, &added))?
         } else {
             text.clone()
         };
@@ -787,7 +877,10 @@ fn is_system(section: &str) -> bool {
 }
 
 /// What limits a string, for a translator; the same for both kinds.
-const LIMITS: &str = "a line of dialogue holds 20 Latin letters beside the speaker's face (10 of the game's own                       characters), a system message 28; the build breaks lines at spaces to fit, and a box shows three                       lines and scrolls up the rest; every Latin letter is drawn from Unifont, 8 dots wide";
+const LIMITS: &str = "a line of dialogue holds 20 Latin letters (10 of the game's own characters), a system message 28; \
+                      the build breaks lines at spaces to fit; a box shows three lines, and when a fourth comes the \
+                      game waits for a button and goes on in a cleared box; every Latin letter is drawn from Unifont, \
+                      8 dots wide";
 
 static KINDS: [TextKind; 2] = [
     TextKind {
