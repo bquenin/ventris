@@ -47,7 +47,10 @@ pub fn loaded(exe: &[u8]) -> Result<Range<u32>> {
     if HEADER + size as usize > exe.len() {
         return exe_error("the program's file is shorter than its header says");
     }
-    Ok(address..address + size)
+    match address.checked_add(size) {
+        Some(end) => Ok(address..end),
+        None => exe_error("the program's header loads it past the end of memory"),
+    }
 }
 
 /// The offset in the file of the byte loaded at `address`, through `length` bytes.
@@ -106,6 +109,14 @@ pub fn install(exe: &[u8], placement: &Placement, code: &[u8]) -> Result<Vec<(us
     let room_at = offset(exe, room.start, (room.end - room.start) as usize)?;
     if exe[room_at..room_at + (room.end - room.start) as usize].iter().any(|byte| *byte != 0) {
         return exe_error(format!("the program's bytes at ${:08X} to ${:08X} are not zero", room.start, room.end));
+    }
+    if room.end - room.start < LOADER_SIZE + FINISH_SIZE {
+        return exe_error(format!(
+            "the room at ${:08X} keeps {} bytes, and the loader and the end of the loading take {}",
+            room.start,
+            room.end - room.start,
+            LOADER_SIZE + FINISH_SIZE
+        ));
     }
     if code.len() as u32 > placement.capacity() {
         return exe_error(format!(
@@ -169,6 +180,7 @@ pub fn install(exe: &[u8], placement: &Placement, code: &[u8]) -> Result<Vec<(us
     assert!(kept.len() as u32 <= LOADER_SIZE, "the loader outgrew its room");
     kept.resize(LOADER_SIZE as usize, 0);
     kept.extend(payload);
+    assert!(kept.len() as u32 <= room.end - room.start, "what the room keeps outgrew it");
     let jal = (3u32 << 26 | (room.start >> 2 & 0x03FF_FFFF)).to_le_bytes().to_vec();
     Ok(vec![(hook_at, jal), (room_at, kept)])
 }
@@ -201,6 +213,10 @@ mod tests {
         assert!(offset(&exe, 0x8000_FFFC, 4).is_err());
         assert_eq!(code_patches(&exe, &[(0x8001_0020, vec![1, 2])]).unwrap(), [(0x820, vec![1, 2])]);
         assert_eq!(loaded(b"PS-X EXF").unwrap_err().to_string(), "the program is not a PS-X EXE");
+        // A header whose load would end past the last address is refused.
+        let mut past = program(0x1000);
+        past[0x18..0x1C].copy_from_slice(&0xFFFF_F800u32.to_le_bytes());
+        assert_eq!(loaded(&past).unwrap_err().to_string(), "the program's header loads it past the end of memory");
     }
 
     #[test]
@@ -232,6 +248,12 @@ mod tests {
         assert_eq!(
             install(&exe, &placement, &[0; 0x80]).unwrap_err().to_string(),
             "the code takes 128 bytes, and the room at $80010800 keeps 112"
+        );
+        // A room too small for the loader and the end of the loading, even with no code.
+        let small = Placement { room: 0x8001_0800..0x8001_0840, ..placement.clone() };
+        assert_eq!(
+            install(&exe, &small, &[]).unwrap_err().to_string(),
+            "the room at $80010800 keeps 64 bytes, and the loader and the end of the loading take 144"
         );
         let elsewhere = Placement { hook: 0x8001_0014, ..placement.clone() };
         assert_eq!(

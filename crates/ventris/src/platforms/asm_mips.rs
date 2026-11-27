@@ -326,6 +326,12 @@ impl Pass<'_> {
         evaluate(expression, &self.state, self.labels, self.last)
     }
 
+    /// A value that places what follows (`org`, `.align`, `.space`): it must be known on the first
+    /// pass, which places the labels by it.
+    fn layout(&self, expression: &str) -> Result<i64> {
+        evaluate(expression, &self.state, self.labels, true)
+    }
+
     /// A number that must fit 16 bits, signed or not.
     fn number(&self, expression: &str, signed: bool) -> Result<u32> {
         let value = self.value(expression)?;
@@ -373,9 +379,7 @@ impl Pass<'_> {
             Some((name, value.trim())).filter(|(_, value)| !value.is_empty())
         });
         if let Some((name, value)) = constant {
-            if !name.starts_with('.') {
-                self.state.scope = name.to_string();
-            }
+            // A constant leaves the scope of local labels as it was: only a plain label sets it.
             let full = qualified(name, &self.state);
             if !self.last {
                 let value = evaluate(&value.replace(' ', ""), &self.state, self.labels, true)?;
@@ -387,7 +391,7 @@ impl Pass<'_> {
         let mnemonic = word.to_ascii_lowercase();
         let operand = operand.replace([' ', '\t'], "");
         if mnemonic == "org" {
-            let address = self.value(&operand)?;
+            let address = self.layout(&operand)?;
             if !(0..=0xFFFF_FFFF).contains(&address) || address % 4 != 0 {
                 return assembly_error(format!("{operand} is not an address of a word"));
             }
@@ -417,18 +421,19 @@ impl Pass<'_> {
                 code
             }
             ".align" => {
-                let size = self.value(&operand)?;
+                let size = self.layout(&operand)?;
                 if size <= 0 {
                     return assembly_error(format!("cannot align to {operand}"));
                 }
-                self.before = None;
                 vec![0; ((size - address.rem_euclid(size)) % size) as usize]
             }
-            ".space" => {
-                self.before = None;
-                vec![0; usize::try_from(self.value(&operand)?).unwrap_or(0)]
-            }
+            ".space" => vec![0; usize::try_from(self.layout(&operand)?).unwrap_or(0)],
             _ => {
+                if address % 4 != 0 {
+                    return assembly_error(format!(
+                        "an instruction at {address:#x}, which is not the address of a word"
+                    ));
+                }
                 let words = self.instruction(&mnemonic, &items, address)?;
                 if self.last {
                     for word in &words {
@@ -438,6 +443,10 @@ impl Pass<'_> {
                 words.iter().flat_map(|word| word.to_le_bytes()).collect()
             }
         };
+        // Data ends a run of code; `.align` or `.space` that put nothing there do not.
+        if matches!(mnemonic.as_str(), ".align" | ".space") && !code.is_empty() {
+            self.before = None;
+        }
         self.state.address = Some(address + code.len() as i64);
         if self.last
             && let Some((_, segment)) = self.segments.last_mut()
@@ -768,5 +777,36 @@ mod tests {
         assert_eq!(refused("nop"), "line 1: code needs an org before it");
         assert_eq!(refused("org 0\n li a0, $12345"), "line 2: li takes a number of 16 bits: use la for $12345");
         assert_eq!(refused("org $0FFFFFF8\n j $10000000"), "line 2: 0x10000000 is out of a jump's reach");
+        // An instruction must be at the address of a word, whatever data comes before it.
+        assert_eq!(
+            refused("org 0\n .byte 1\n nop"),
+            "line 3: an instruction at 0x1, which is not the address of a word"
+        );
+        assert_eq!(words("org 0\n .byte 1\n .align 4\n nop"), [1, 0]);
+        // What places the code must be known before the labels are placed by it.
+        assert_eq!(refused("org BASE\n entry: j entry\n nop\n BASE = $1000"), "line 1: BASE is not defined");
+        assert_eq!(refused("org 0\n .space SIZE\n SIZE = 4"), "line 2: SIZE is not defined");
+        assert_eq!(refused("org 0\n .align SIZE\n SIZE = 4"), "line 2: SIZE is not defined");
+    }
+
+    #[test]
+    fn a_constant_leaves_local_labels_in_their_scope() {
+        let source = "org $1000
+            entry:
+            .loop: nop
+                limit = 4
+                b .loop
+                nop";
+        assert_eq!(words(source), [0, 0x1000_FFFE, 0]);
+    }
+
+    #[test]
+    fn a_directive_that_puts_nothing_keeps_the_load_delay_check() {
+        for directive in [".align 4", ".space 0"] {
+            let source = format!("org 0\n lw v0, 0(a0)\n {directive}\n addu a1, v0, zero");
+            assert_eq!(refused(&source).split(':').next(), Some("line 4"), "{directive}");
+        }
+        // One that puts data there ends the run of code.
+        assert_eq!(words("org 0\n lw v0, 0(a0)\n .space 4\n addu a1, v0, zero").len(), 3);
     }
 }
