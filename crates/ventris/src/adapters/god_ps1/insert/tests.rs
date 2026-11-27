@@ -491,3 +491,12 @@ fn an_area_the_game_leaves_no_room_for_cannot_grow() {
          game leaves 19636 at its own)"
     );
 }
+
+#[test]
+fn an_insert_written_by_its_byte_is_measured_as_under_its_name() {
+    // In a shop's line of 13 cells, a word the game fills in takes 8, however it is written.
+    assert_eq!(wrap_to("AAAA AAAA {WORD}", 13).unwrap(), "AAAA AAAA\n{WORD}");
+    assert_eq!(wrap_to("AAAA AAAA {0C:12}", 13).unwrap(), "AAAA AAAA\n{0C:12}");
+    assert_eq!(wrap_to("AAAA AAAA {0C:0D}", 13).unwrap(), "AAAA AAAA\n{0C:0D}");
+    assert_eq!(wrap_to("AAAA AAAA {0C:01}", 13).unwrap(), "AAAA AAAA\n{0C:01}");
+}

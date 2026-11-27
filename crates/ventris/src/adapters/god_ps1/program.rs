@@ -648,12 +648,13 @@ pub fn rooms(
         let (size, tail) = match next {
             Some(next) if !referred(end + 1..next) => {
                 let gap = &file[end + 1..next];
-                match gap.iter().rposition(|byte| *byte != 0) {
-                    None => (next - start, Vec::new()),
-                    Some(last) if gap[0] != 0 && last + 1 < gap.len() && reads_as_text(&gap[..last + 2], codes) => {
-                        (next - start, gap[..last + 2].to_vec())
+                if gap.iter().all(|byte| *byte == 0) {
+                    (next - start, Vec::new())
+                } else {
+                    match text_tail(gap, codes) {
+                        Some(length) if gap[0] != 0 => (next - start, gap[..length].to_vec()),
+                        _ => own,
                     }
-                    Some(_) => own,
                 }
             }
             _ => own,
@@ -667,20 +668,26 @@ pub fn rooms(
     rooms
 }
 
-/// Whether bytes are pieces of text, each ending in its zero byte, with zero bytes between them.
-fn reads_as_text(data: &[u8], codes: &ByteCodes) -> bool {
-    let mut at = 0;
-    while at < data.len() {
-        if data[at] == 0 {
+/// How long the text that follows a string is, read from the start of the gap after it: pieces of
+/// text each ending in its zero byte, with zero bytes between them, up to the last piece's zero byte;
+/// none if something in the gap is not text. Read forwards, so that a piece ending in a two-byte
+/// character whose second byte is zero is read whole.
+pub(super) fn text_tail(gap: &[u8], codes: &ByteCodes) -> Option<usize> {
+    let (mut at, mut end) = (0, None);
+    while at < gap.len() {
+        if gap[at] == 0 {
             at += 1;
             continue;
         }
-        match read_text(&data[at..], codes) {
-            Some((length, characters)) if characters > 0 => at += length + 1,
-            _ => return false,
+        match read_text(&gap[at..], codes) {
+            Some((length, characters)) if characters > 0 => {
+                at += length + 1;
+                end = Some(at);
+            }
+            _ => return None,
         }
     }
-    true
+    end
 }
 
 /// What writing the changed strings of section `program` back gave.

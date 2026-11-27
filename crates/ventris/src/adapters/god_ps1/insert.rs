@@ -444,7 +444,13 @@ fn wrap_to(text: &str, columns: usize) -> Result<String> {
             "NAME" => NAME_CELLS,
             "NUM" => NUMBER_CELLS,
             "WORD" => WORD_CELLS,
-            "0C" if value.is_some_and(|value| ["10", "18"].contains(&value)) => NUMBER_CELLS,
+            // An insert written by its byte takes the room the same insert takes under its name.
+            "0C" => match value.and_then(|value| u8::from_str_radix(value, 16).ok()) {
+                Some(value) if NAME_INSERTS.contains(&value) => NAME_CELLS,
+                Some(value) if NUMBER_INSERTS.contains(&value) => NUMBER_CELLS,
+                Some(WORD_INSERT) => WORD_CELLS,
+                _ => 0,
+            },
             "SAY" if !spoken => 1,
             "K" | "W" | "B" => 1,
             _ => 0,

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::adapter::declaration_faults;
 
 use super::battle::{ANSWERS, When, read_script};
-use super::program::{PARTS, SHOP_LINES};
+use super::program::{PARTS, SHOP_LINES, text_tail};
 use super::*;
 use crate::platforms::mips;
 
@@ -849,4 +849,15 @@ fn each_part_s_room_on_screen_is_what_the_game_s_own_strings_take() {
     assert_eq!(program::label_width(&file, 0xA_7D1C, labels), 8);
     assert_eq!(program::label_width(&file, 0xA_8244, labels), 11);
     assert_eq!(program::label_room(&file, 0xA_8244, labels, &references.referred), 34);
+}
+
+#[test]
+fn the_text_after_a_string_is_read_forwards_to_its_last_zero_byte() {
+    // A piece that ends in a two-byte character whose second byte is zero (02 00) is read whole.
+    assert_eq!(text_tail(&hex("02 00 00"), &codes()), Some(3));
+    assert_eq!(text_tail(&hex("A1 00 00 00"), &codes()), Some(2));
+    assert_eq!(text_tail(&hex("A1 00 00 A1 00 00"), &codes()), Some(5));
+    // Bytes that are no text, or a piece with no zero byte to end it, are no tail.
+    assert_eq!(text_tail(&hex("A1"), &codes()), None);
+    assert_eq!(text_tail(&hex("A1 00 FF"), &codes()), None);
 }
