@@ -75,7 +75,7 @@ use std::sync::Arc;
 
 use super::{ByteCodes, PROGRAM, every_character_known, read_text};
 use crate::error::{Result, text_error};
-use crate::placement::{Shared, pack_room, share_room};
+use crate::placement::{Shared, pack_room, pack_room_fewest_places_first, share_room};
 use crate::platforms::mips::{CodeUse, code_use, number, within_reach};
 use crate::platforms::ps1::Disc;
 use crate::script::string_name;
@@ -784,14 +784,19 @@ pub fn write_strings(
             None => groups.push((vec![index], reach.clone())),
         }
     }
-    // Each string brings its room; the first of each group needs room for them all.
-    let place = |groups: &[(Vec<usize>, Range<usize>)]| {
+    // Each string brings its room; the first of each group needs room for them all. With
+    // `fewest_places_first`, they are packed that way (see `pack_room_fewest_places_first`).
+    let place = |groups: &[(Vec<usize>, Range<usize>)], fewest_places_first: bool| {
         let mut needs: Vec<(usize, usize, usize, Range<usize>)> =
             moving.iter().map(|(offset, ..)| (*offset as usize, rooms[offset].size, 0, 0..usize::MAX)).collect();
         for (members, common) in groups {
             let (offset, data, _) = moving[members[0]];
             needs[members[0]].2 = need(offset, data);
             needs[members[0]].3 = common.clone();
+        }
+        if fewest_places_first {
+            let shared = pack_room_fewest_places_first(&needs, None);
+            return (needs, shared);
         }
         let mut shared = share_room(&needs, None);
         if groups.iter().any(|(members, _)| shared.1[members[0]].is_none()) {
@@ -800,10 +805,14 @@ pub fn write_strings(
         (needs, shared)
     };
     // A group may go only where its strings' reaches overlap, which may have no room free, and the
-    // copy a group shares may take the only room another string had. So the strings are placed three
+    // copy a group shares may take the only room another string had. So the strings are placed four
     // ways, and the first that gives every string a place is kept: those given the same text sharing
     // one copy; the groups that found no place written as one copy per string, each within its own
-    // reach; and every group written so. If none does, what is refused is the first.
+    // reach; every group written so; and every group written so with the strings that have the
+    // fewest places put first, for when a string put first in a room it fits takes the only room
+    // another can reach. Only a pack the first way cannot place goes on to the others, so a pack
+    // that is placed the first way is written the same whatever the others do. If none places every
+    // string, what is refused is the first.
     let placed = |groups: &[(Vec<usize>, Range<usize>)], shared: &Shared| {
         groups.iter().all(|(members, _)| shared.1[members[0]].is_some())
     };
@@ -814,11 +823,16 @@ pub fn write_strings(
         };
         groups.iter().flat_map(each).collect::<Vec<_>>()
     };
-    let (mut needs, mut shared) = place(&groups);
+    let (mut needs, mut shared) = place(&groups, false);
     if !placed(&groups, &shared) {
-        let tries = [apart(&groups, &|members| shared.1[members[0]].is_none()), apart(&groups, &|_| true)];
-        for other in tries.into_iter().filter(|other| *other != groups) {
-            let (other_needs, other_shared) = place(&other);
+        let tries = [
+            (apart(&groups, &|members| shared.1[members[0]].is_none()), false),
+            (apart(&groups, &|_| true), false),
+            (apart(&groups, &|_| true), true),
+        ];
+        // A way that would only place the same groups as the first, the same way, is not tried again.
+        for (other, fewest_places_first) in tries.into_iter().filter(|(other, fewest)| *fewest || *other != groups) {
+            let (other_needs, other_shared) = place(&other, fewest_places_first);
             if placed(&other, &other_shared) {
                 (groups, needs, shared) = (other, other_needs, other_shared);
                 break;

@@ -201,11 +201,43 @@ fn stretches_of(
 /// rooms of a few strings are used far better: three names, of 4, 6 and 7 bytes, give room to
 /// names of 7, 4 and 2 bytes this way, and not the other.
 pub fn pack_room(strings: &[(usize, usize, usize, Range<usize>)], spare: Option<Range<usize>>) -> Shared {
+    pack(strings, spare, false)
+}
+
+/// The same as `pack_room`, for when that too leaves a string without a place: the strings go in
+/// the order of how few stretches have a place for them, fewest first, and in `pack_room`'s order
+/// when as few do. Longest first, a string can take the only room another can reach while it had
+/// room elsewhere; this way the string with the fewest places goes first, and those with more
+/// take what is left. Strings A and B of 6 bytes may go in two rooms each, and C of 5 bytes only
+/// in A's: longest first, A takes its own room and C has none, while C first takes A's room and A
+/// goes in the other it may go in.
+pub fn pack_room_fewest_places_first(
+    strings: &[(usize, usize, usize, Range<usize>)],
+    spare: Option<Range<usize>>,
+) -> Shared {
+    pack(strings, spare, true)
+}
+
+/// `pack_room`, and with `fewest_places_first`, `pack_room_fewest_places_first`.
+fn pack(
+    strings: &[(usize, usize, usize, Range<usize>)],
+    spare: Option<Range<usize>>,
+    fewest_places_first: bool,
+) -> Shared {
     let (order, stretches, stretch_of) = stretches_of(strings, spare);
     let mut free = Free::new(&stretches);
     let mut places = vec![None; strings.len()];
     let mut by_need = order.clone();
     by_need.sort_by_key(|index| (Reverse(strings[*index].2), strings[*index].0));
+    if fewest_places_first {
+        // Counted in the free room before any string is put in it. The sort keeps the order of
+        // strings with as many places.
+        let count = |index: usize| {
+            let (need, may) = (strings[index].2, &strings[index].3);
+            (0..stretches.len()).filter(|stretch| free.starts(*stretch, need, may, true).next().is_some()).count()
+        };
+        by_need.sort_by_cached_key(|index| count(*index));
+    }
     for index in by_need {
         let (need, may) = (strings[index].2, &strings[index].3);
         if need == 0 {
@@ -278,6 +310,16 @@ mod tests {
         // Where a string may go is kept to.
         let strings = [(100, 8, 3, ANY), (200, 4, 3, 0..150)];
         assert_eq!(pack_room(&strings, None).1, [Some(200), Some(100)]);
+    }
+
+    #[test]
+    fn the_string_with_the_fewest_places_goes_first_when_longest_first_leaves_it_none() {
+        // Rooms of 7, 6, 2 and 8 bytes. A and B need 6 and may go in two rooms each, C needs 5 and
+        // may go only in A's, D needs 1 and may go anywhere.
+        let strings = [(200, 6, 6, 100..300), (400, 8, 6, 200..500), (300, 2, 5, 200..300), (100, 7, 1, ANY)];
+        assert_eq!(pack_room(&strings, None).1, [Some(200), Some(400), None, Some(300)]);
+        let (_, places, largest) = pack_room_fewest_places_first(&strings, None);
+        assert_eq!((places, largest), (vec![Some(100), Some(400), Some(200), Some(106)], 2));
     }
 
     #[test]

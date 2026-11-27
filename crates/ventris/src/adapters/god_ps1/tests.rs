@@ -765,6 +765,66 @@ fn strings_given_the_same_text_are_written_apart_when_their_copy_takes_another_s
 }
 
 #[test]
+fn a_string_with_one_place_goes_first_when_another_takes_it_while_it_could_go_elsewhere() {
+    // A's address is built by an `addiu` that reaches $A8800 to $B8800 of the file, B's by an `ori`
+    // that reaches $B0800 to $C0800, and C's by both, so C may go only where both reach. A and B are
+    // given the same 6 bytes, C 5 bytes that its room of 2 cannot hold, and D, which a table points
+    // at, is made empty and needs 1 byte of its 7. The only room of 5 bytes within C's reach is A's.
+    // Shared or written apart, longest first, A stays in its own room, which it fits, and C has
+    // none. Put by how few places each has, C goes first, into A's room; A goes into D's, which only
+    // A's reach of the others takes in; B stays in its room; and D takes the byte A leaves in its own.
+    let mut file = vec![0u8; 0xC_1000];
+    let (a, b, c, d) = (0xB_1000u32, 0xB_9000u32, 0xB_2000u32, 0xB_0000u32);
+    let address = |offset: u32| offset + program::PROGRAM_BASE;
+    let lui = |register: u32, offset: u32| {
+        let high = (address(offset) >> 16) + u32::from(address(offset) & 0x8000 != 0);
+        mips::LUI << 26 | register << 16 | high
+    };
+    let add = |operation: u32, register: u32, offset: u32| {
+        operation << 26 | register << 21 | register << 16 | (address(offset) & 0xFFFF)
+    };
+    let code = [
+        lui(4, a),
+        add(mips::ADDIU, 4, a),
+        mips::LUI << 26 | 5 << 16 | address(b) >> 16,
+        add(mips::ORI, 5, b),
+        lui(6, c),
+        add(mips::ADDIU, 6, c),
+        mips::LUI << 26 | 7 << 16 | address(c) >> 16,
+        add(mips::ORI, 7, c),
+    ];
+    for (index, word) in code.into_iter().enumerate() {
+        file[0x800 + 4 * index..][..4].copy_from_slice(&word.to_le_bytes());
+    }
+    let room = |size: usize, words: Vec<usize>, code: Vec<usize>| program::Room {
+        size,
+        tail: Vec::new(),
+        reached: Some(program::Reached { words, code }),
+        inside: None,
+    };
+    let rooms = BTreeMap::from([
+        (a, room(6, vec![], vec![0x804])),
+        (b, room(8, vec![], vec![0x80C])),
+        (c, room(2, vec![], vec![0x814, 0x81C])),
+        (d, room(7, vec![0x900], vec![])),
+    ]);
+    let changed = BTreeMap::from([(a, vec![0xA2; 5]), (b, vec![0xA2; 5]), (c, vec![0xA3; 4]), (d, vec![])]);
+    let written = program::write_strings(&file, &rooms, &changed).unwrap();
+    assert_eq!((written.moved, written.once), (3, 0));
+    let patches: BTreeMap<usize, Vec<u8>> = written.patches.into_iter().collect();
+    assert_eq!(patches[&(d as usize)], [&[0xA2; 5][..], &[0, 0]].concat());
+    assert_eq!(patches[&(a as usize)], [&[0xA3; 4][..], &[0, 0]].concat());
+    assert_eq!(patches[&(b as usize)], [&[0xA2; 5][..], &[0, 0, 0]].concat());
+    assert_eq!(patches[&(c as usize)], [0, 0]);
+    assert_eq!(patches[&0x804][..2], ((address(d) & 0xFFFF) as u16).to_le_bytes());
+    for at in [0x814, 0x81C] {
+        assert_eq!(patches[&at][..2], ((address(a) & 0xFFFF) as u16).to_le_bytes());
+    }
+    assert_eq!(patches[&0x900], address(d + 6).to_le_bytes());
+    assert!(!patches.contains_key(&0x80C));
+}
+
+#[test]
 fn a_label_has_its_slot_and_the_width_of_its_screen() {
     let mut file = vec![0u8; 0x200];
     let mut put = |at: usize, label: &str| file[at..at + small(label).len()].copy_from_slice(&small(label));
