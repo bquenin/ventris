@@ -125,8 +125,9 @@ look at the screen.
   or its buffers, give it new room rather than squeezing. Code and glyphs can go where they are only
   read: on the Super Famicom, a part of the ROM added by the build (Tales of Phantasia's renderer lives
   there); on a disc console, memory the game never uses, the executable made longer where the memory
-  after it is free, or a small hook that loads them from the disc's free room. Buffers the renderer
-  writes need memory it can write, on any console: RAM the game never uses. Choose on measured facts (how much memory the game uses at its busiest), say in
+  after it is free, or a small hook that loads them from the disc's free room into memory the game
+  never uses. Buffers the renderer writes need memory it can write, on any console: RAM the game never
+  uses, found and checked apart from any added ROM or free room on the disc. Choose on measured facts (how much memory the game uses at its busiest), say in
   the module comment where it went and why, and keep the placing under `platforms/` for the next game.
 - Choose sections and numbers before the first release: a string's address, `section.number`, never
   changes once released, and packs depend on it (`docs/adding-a-game.md`, "Addresses never change").
