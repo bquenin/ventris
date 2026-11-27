@@ -223,7 +223,7 @@ fn the_storyteller_is_written_across_left_page_first() {
 fn lines_are_measured_in_cells_of_8_dots() {
     let advance = |char: char| if char.is_ascii() { 8 } else { 16 };
     let width = |glyph: u16| if glyph == 0x5CA { 8 } else { 16 };
-    let wrapped = |text: &str| wrap(text, 160, &advance, &width).unwrap();
+    let wrapped = |text: &str| wrap(text, 160, PROMPT_CELLS, &advance, &width).unwrap();
     let letters = |count: usize| "a".repeat(count);
     // 17 letters, a space, then a letter and a wide character: the wide one would end past 160 dots.
     assert_eq!(wrapped(&format!("{} Bあ", letters(17))), format!("{}\nBあ", letters(17)));
@@ -244,6 +244,31 @@ fn lines_are_measured_in_cells_of_8_dots() {
     assert_eq!(wrapped(&text), text);
     let text = format!("{} {} c", letters(5), "b".repeat(15));
     assert_eq!(wrapped(&text), format!("{}\n{} c", letters(5), "b".repeat(15)));
+}
+
+#[test]
+fn the_last_line_of_a_box_leaves_room_for_the_prompt() {
+    let advance = |char: char| if char.is_ascii() { 8 } else { 16 };
+    let width = |_: u16| 16;
+    let wrapped = |text: &str, prompt: usize| wrap(text, 160, prompt, &advance, &width).unwrap();
+    let word = |letter: &str, count: usize| letter.repeat(count);
+    // Three lines of 19 letters: the third goes on in a fourth line, the first of the next box.
+    let text = format!("{} {} {} d", word("a", 19), word("b", 19), word("c", 17));
+    assert_eq!(wrapped(&text, 0), format!("{}\n{}\n{} d", word("a", 19), word("b", 19), word("c", 17)));
+    assert_eq!(wrapped(&text, PROMPT_CELLS), format!("{}\n{}\n{}\nd", word("a", 19), word("b", 19), word("c", 17)));
+    // 18 cells still fit on a third line.
+    let text = format!("{} {} {} d", word("a", 19), word("b", 19), word("c", 16));
+    assert_eq!(wrapped(&text, PROMPT_CELLS), text.replacen(' ', "\n", 2));
+    // The fourth line starts a box and holds 20 cells again; the sixth is that box's last.
+    let text = format!("a\nb\nc\n{} {} {} f", word("d", 19), word("e", 19), word("f", 17));
+    let expected = format!("a\nb\nc\n{}\n{}\n{}\nf", word("d", 19), word("e", 19), word("f", 17));
+    assert_eq!(wrapped(&text, PROMPT_CELLS), expected);
+    // The line instruction written as a tag starts a line as a line break does.
+    let text = format!("a{{06}}b{{06}}{} d", word("c", 17));
+    assert_eq!(wrapped(&text, PROMPT_CELLS), format!("a{{06}}b{{06}}{}\nd", word("c", 17)));
+    // A box started by {0A} on a third line counts its lines from there: its first holds 20 cells.
+    let text = format!("a\nb\nccc{{0D}}{{0A}}{} c", word("d", 18));
+    assert_eq!(wrapped(&text, PROMPT_CELLS), text);
 }
 
 #[test]
