@@ -100,8 +100,12 @@
 //! The storyteller's screens before each stage (`stage_demo`) are drawn in columns, top to bottom and
 //! right to left: the instruction 0x84 with the argument 1 makes the window being set up write so.
 //! The build option `horizontal-storyteller` sets it to 0 in that script, and the game then writes
-//! those pages across, 12 letters to a line of the book's page (`STORYTELLER_LINE`), with the lines
-//! as far apart as the columns were.
+//! those pages across, 12 letters to a line of the book's page (`STORYTELLER_LINE`). The instruction
+//! 0x88 sets how far apart the columns are: its second argument is 4 in that script, which leaves room
+//! for the readings beside each column and puts lines written across 49 dots apart, four to a page,
+//! the fourth behind the storyteller's figure. The option sets it to 1, which puts them 16 dots apart,
+//! as lines of the dialogue are. (2 puts the second line at the foot of the page; what the numbers
+//! stand for is not known beyond what was seen.)
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -700,14 +704,25 @@ pub const HORIZONTAL: &str = "horizontal-storyteller";
 /// The instruction that makes the text window being set up write in columns, top to bottom and right
 /// to left, with its argument 1; the storyteller's script gives it to both pages of the book.
 const VERTICAL: u8 = 0x84;
+/// The instruction that sets how far apart the window's columns are, by its second argument; the
+/// storyteller's script gives 4, and 1 puts lines written across 16 dots apart.
+const SPACING: u8 = 0x88;
+const SPACING_ACROSS: u16 = 1;
 
-/// A script file with each instruction `VERTICAL` set to write across: the same bytes, but for its argument.
+/// A script file with each instruction `VERTICAL` set to write across, and each `SPACING` of the
+/// storyteller's to put the lines 16 dots apart: the same bytes, but for those arguments.
 pub fn written_across(name: &str, data: &[u8]) -> Result<Vec<u8>> {
     let mut out = data.to_vec();
     for piece in pieces(name, data)? {
         for instruction in instructions(name, data, piece)? {
-            if instruction.op == VERTICAL && instruction.args == [1] {
-                out[instruction.offset + 2..instruction.offset + 4].copy_from_slice(&0u16.to_le_bytes());
+            let argument = match (instruction.op, instruction.args.as_slice()) {
+                (VERTICAL, [1]) => Some((0, 0)),
+                (SPACING, [0xFFFF, 4]) => Some((1, SPACING_ACROSS)),
+                _ => None,
+            };
+            if let Some((index, value)) = argument {
+                let at = instruction.offset + 2 + 2 * index;
+                out[at..at + 2].copy_from_slice(&value.to_le_bytes());
             }
         }
     }
