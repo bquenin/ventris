@@ -40,7 +40,8 @@ fn wrap(text: &str) -> Result<String> {
 /// The same, to lines of `columns` cells.
 fn wrap_to(text: &str, columns: usize) -> Result<String> {
     let (codes, none) = (codes(), HashMap::new());
-    super::wrap_to(text, columns * vwf::LARGE, &Writing { codes: &codes, drawn: &none, renderer: None }, Face::Large)
+    let writing = Writing { codes: &codes, drawn: &none, renderer: None };
+    super::wrap_to(text, columns * vwf::LARGE, LINE_CELLS, &writing, Face::Large)
 }
 
 /// What the game would show of a string written for it, as lines: `|` where it waits, `>` where it
@@ -557,6 +558,41 @@ fn the_renderer_s_characters_are_written_a_byte_each_in_runs() {
     // Without the renderer nothing changes: the font's full-width forms, a cell each.
     let full = Writing { renderer: None, ..writing };
     assert_eq!(encode_text("Aa", &full).unwrap(), hex("a3 a4"));
+    // A run the pack writes itself needs the renderer, and a character after each {RUN}; a byte
+    // written by itself does not.
+    let refused = encode_text("{RUN}{B:10}", &full).unwrap_err().to_string();
+    assert!(refused.contains("this build draws none"), "{refused}");
+    assert_eq!(encode_text("{B:10}", &full).unwrap(), [0x10]);
+    assert_eq!(encode_text("{RUN}{B:10}{RUN}あ", &writing).unwrap(), [0x0A, 0x10, 0x0A, 0xA2]);
+    for unfollowed in ["{RUN}{B:10}{RUN}", "{RUN}{B:10}{RUN}\nあ", "{RUN}{RUN}{B:10}", "{RUN}{WAIT}"] {
+        let refused = encode_text(unfollowed, &writing).unwrap_err().to_string();
+        assert!(refused.contains("not followed by a character"), "{unfollowed}: {refused}");
+    }
+}
+
+#[test]
+fn a_line_break_left_out_after_a_run_does_not_end_it() {
+    let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
+    let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
+    // A line of letters that ends at the window's edge exactly, after which the game starts the next
+    // line itself, so the line break is left out; it ended the run too.
+    let width = |char: char| renderer.width(char).unwrap();
+    let letter = ('a'..='z').find(|char| width(*char) >= 4 && WINDOW_WIDTH.is_multiple_of(width(*char))).unwrap();
+    let count = WINDOW_WIDTH / width(letter);
+    let full = letter.to_string().repeat(count);
+    let (run, a) =
+        ([&[vwf::RUN][..], &vec![renderer.byte(letter).unwrap(); count]].concat(), renderer.byte('a').unwrap());
+    for wrapping in [true, false] {
+        let laid = |text: &str| fit(&encode_text(text, &writing).unwrap(), &writing, wrapping).unwrap();
+        // The next line starts with a letter: the run goes on, and the letter is read in it.
+        let data = laid(&format!("{full}\na"));
+        assert_eq!(data, [&run[..], &[a]].concat());
+        assert_eq!(pieces(&data, &writing).last().unwrap().0, Piece::Glyph(renderer.code('a').unwrap()));
+        // With a character of the game's font, the run is ended before it.
+        assert_eq!(laid(&format!("{full}\nあ")), [&run[..], &[vwf::RUN, 0xA2]].concat());
+        // With a tag, which ends a run anyway, nothing is added.
+        assert_eq!(laid(&format!("{full}\n{{PAUSE:14}}a")), [&run[..], &[0x0F, 0x00, 0x14, vwf::RUN, a]].concat());
+    }
 }
 
 #[test]
@@ -590,6 +626,25 @@ fn lines_are_broken_where_the_next_word_would_run_past_the_window() {
     let late = super::wrap(&format!("　{{SAY}}{text}{{/SAY}}"), &writing).unwrap();
     let second = late.split('\n').nth(1).unwrap();
     assert!(width_of(second, &renderer) <= WINDOW_WIDTH - 28, "{late}");
+}
+
+#[test]
+fn a_line_is_broken_where_its_cells_run_out_and_a_spoken_line_moved_down_is_measured_again() {
+    let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
+    let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
+    // The narrowest letters fill a line's cells before its pixels: the line is broken at the space
+    // before the letter that would take a cell past them, as the game would start a new line there.
+    let narrow =
+        (' '..='~').filter(|char| !matches!(char, ' ' | '{' | '}')).min_by_key(|char| renderer.width(*char)).unwrap();
+    assert!(renderer.width(narrow).unwrap() * (LINE_CELLS + 1) + renderer.width(' ').unwrap() <= WINDOW_WIDTH);
+    let (first, second) = (narrow.to_string().repeat(LINE_CELLS / 2 + 1), narrow.to_string().repeat(LINE_CELLS / 2));
+    let broken = super::wrap(&format!("{first} {second}"), &writing).unwrap();
+    assert_eq!(broken, format!("{first}\n{second}"));
+    assert!(fit(&encode_text(&broken, &writing).unwrap(), &writing, true).is_ok());
+    // A spoken line that starts after the space the line is broken at draws its 「 at the start of
+    // the next line, and its own lines start under its first character from there.
+    let text = "AAAAAAAAAA {SAY}AAAAAA AAAAAAA{/SAY}";
+    assert_eq!(wrap(text).unwrap(), "AAAAAAAAAA\n{SAY}AAAAAA AAAAAAA{/SAY}");
 }
 
 #[test]

@@ -180,8 +180,8 @@ pub const LIMITS: &str = "the window shows 4 lines of 224 pixels, 210 in a spoke
                           as the game's heap has room for when the player goes through a door into or out of the \
                           area, loads one of its maps or fights in it: not at all for areas 105 and 107, a few \
                           thousand bytes for areas 131, 154, 157 and 179, and over 150,000 for half of the areas \
-                          (docs/packs.md lists the tightest); a letter drawn at its own width takes two bytes, a \
-                          kana one";
+                          (docs/packs.md lists the tightest); a letter drawn at its own width takes one byte, and \
+                          each run of them one more, a kana one";
 
 // --- characters ------------------------------------------------------------
 
@@ -360,7 +360,39 @@ impl Writing<'_> {
 /// Script text as the bytes of a string, without its zero byte. The renderer's characters are
 /// written a byte each, in runs (see `vwf`): `vwf::RUN` starts one, and ends it where a character of
 /// the game's font follows; a byte under $10 (a line break, a tag) ends it anyway.
+///
+/// A `{RUN}` the pack writes itself is refused where the build puts no renderer in, as the game
+/// would read it as the high half of a code its font does not have, and where what follows it is
+/// not a character written a byte from $10 up: the menus' screens read the byte after a `RUN` as a
+/// character's, even a zero byte that ends the string.
 fn encode_text(text: &str, writing: &Writing) -> Result<Vec<u8>> {
+    let run_tag = tokens(text).into_iter().find(|token| matches!(token, Token::Tag { name: "RUN", .. }));
+    if let Some(Token::Tag { raw, .. }) = run_tag {
+        if writing.renderer.is_none() {
+            return text_error(format!(
+                "it has {raw}, which starts or ends a run of the characters drawn at their own widths, and this \
+                 build draws none: leave it out"
+            ));
+        }
+        let out = encode_runs(text, writing)?;
+        let found = pieces(&out, writing);
+        let marker = |(piece, bytes): &(Piece, Vec<u8>)| *piece == Piece::Silent && bytes[..] == [vwf::RUN];
+        let unfollowed = (0..found.len())
+            .filter(|index| marker(&found[*index]))
+            .any(|index| !found.get(index + 1).is_some_and(|(_, next)| next.first().is_some_and(|byte| *byte >= 0x10)));
+        if unfollowed {
+            return text_error(format!(
+                "it has a {raw} that is not followed by a character written a byte from $10 up: the end of the \
+                 string, a line break, a tag or another {raw} after it would be read as a character's bytes"
+            ));
+        }
+        return Ok(out);
+    }
+    encode_runs(text, writing)
+}
+
+/// The same, without looking at the pack's own `{RUN}`s.
+fn encode_runs(text: &str, writing: &Writing) -> Result<Vec<u8>> {
     let encode = |text: &str| encode_with(text, writing.codes, &|char| writing.code(char));
     let Some(renderer) = writing.renderer else { return encode(text) };
     let (mut out, mut other, mut in_run) = (Vec::new(), String::new(), false);
@@ -551,13 +583,36 @@ impl Pen {
 /// Follow a string as the game draws it (`fit`). With `wrap`, a page that would scroll is reported;
 /// without it, a line longer than the window is. A character that would run past the window's edge
 /// is a line too long either way, since the game draws it there before it starts a new line.
+///
+/// A line break left out also no longer ends a run of the renderer's characters (see `encode_text`):
+/// the run goes on into the next line where another starts there, and is ended by `vwf::RUN` where a
+/// character of the game's font follows.
 fn lay(pieces: &[(Piece, Vec<u8>)], wrap: bool, writing: &Writing) -> Laid {
     let mut out = Vec::new();
     let mut pen = Pen { rows: 1, ..Pen::default() };
     let mut page = 0;
     let mut line = 1;
+    // Whether what is written so far ends in a run, and whether a line break left out ended one.
+    let (mut run, mut unended) = (false, false);
     for (at, (piece, bytes)) in pieces.iter().enumerate() {
         let overfull = Laid::Overfull { page, at };
+        let first = bytes.first().copied();
+        let marker = writing.renderer.is_some() && *piece == Piece::Silent && first == Some(vwf::RUN);
+        if std::mem::take(&mut unended) {
+            if marker {
+                // The next line starts a run: the one left open goes on instead.
+                continue;
+            }
+            if first.is_some_and(|byte| byte >= 0x10) {
+                out.push(vwf::RUN);
+                run = false;
+            }
+        }
+        match first {
+            Some(_) if marker => run = !run,
+            Some(byte) if byte < 0x10 && !(*piece == Piece::Break && pen.started) => run = false,
+            _ => {}
+        }
         let (width, cells) = match piece {
             Piece::Glyph(code) => {
                 out.extend(bytes);
@@ -581,6 +636,7 @@ fn lay(pieces: &[(Piece, Vec<u8>)], wrap: bool, writing: &Writing) -> Laid {
                 line += 1;
                 if pen.started {
                     pen.started = false;
+                    unended = run;
                 } else {
                     out.extend(bytes);
                     if pen.new_line() && wrap {
@@ -670,16 +726,16 @@ const NEW_LINE_TAGS: [&str; 2] = ["WAIT", "CLEAR"];
 /// A changed string's text broken at spaces to the window's width. Line breaks and waits already in
 /// it are kept.
 fn wrap(text: &str, writing: &Writing) -> Result<String> {
-    wrap_to(text, WINDOW_WIDTH, writing, Face::Large)
+    wrap_to(text, WINDOW_WIDTH, LINE_CELLS, writing, Face::Large)
 }
 
-/// The same, to lines `width` pixels wide in `font`, each character measured at the width it is
-/// drawn, and each cell of what the game fills in at a glyph's. A line starts where the game starts
-/// it: at the window's left edge, or, in a spoken line, under its first character, past the 「 that
-/// `{SAY}` draws wherever it is; a `{WAIT}` starts a new line there too, and a `{CLEAR}` at the
-/// left edge. A name, a number or a word the game fills in is part of the word it is in. A word wider
-/// than a line is left as it is, for `fit` to refuse.
-fn wrap_to(text: &str, width: usize, writing: &Writing, font: Face) -> Result<String> {
+/// The same, to lines `width` pixels wide and `line_cells` cells long in `font`, each character
+/// measured at the width it is drawn and taking a cell, and each cell of what the game fills in at a
+/// glyph's. A line starts where the game starts it: at the window's left edge, or, in a spoken line,
+/// under its first character, past the 「 that `{SAY}` draws wherever it is; a `{WAIT}` starts a new
+/// line there too, and a `{CLEAR}` at the left edge. A name, a number or a word the game fills in is
+/// part of the word it is in. A word wider than a line is left as it is, for `fit` to refuse.
+fn wrap_to(text: &str, width: usize, line_cells: usize, writing: &Writing, font: Face) -> Result<String> {
     let cells = |name: &str, value: Option<&str>| match name {
         "NAME" => NAME_CELLS,
         "NUM" => NUMBER_CELLS,
@@ -694,60 +750,80 @@ fn wrap_to(text: &str, width: usize, writing: &Writing, font: Face) -> Result<St
         "K" | "W" | "B" => 1,
         _ => 0,
     };
+    // What a character or a tag that is neither a space nor `{SAY}` takes of a line: pixels, cells.
+    let size = |token: &Token| match token {
+        Token::Char(char) => (writing.width(*char, font), 1),
+        Token::Tag { name, value, .. } => (cells(name, *value) * font.cell(), cells(name, *value)),
+    };
+    // Where a line starts, in pixels and cells: past the 「 of a spoken line, at the edge otherwise.
+    let start = |speaking: bool, indent: (usize, usize)| if speaking { indent } else { (0, 0) };
     let mut out = String::new();
-    let (mut speaking, mut indent) = (false, 0);
+    let (mut speaking, mut indent) = (false, (0, 0));
     for (number, line) in text.split('\n').enumerate() {
         if number > 0 {
             out.push('\n');
         }
-        let start = |speaking: bool, indent: usize| if speaking { indent } else { 0 };
-        let mut x = start(speaking, indent);
-        // Where the line's last space is in `out`, and how wide what follows it is.
-        let (mut space, mut after_space) = (None, 0);
+        let (mut x, mut used) = start(speaking, indent);
+        // Where the line's last space is in `out`, and whether a spoken line was open there, with its
+        // indent.
+        let mut space = None;
         for token in tokens(line) {
-            let step = match token {
+            match token {
                 Token::Char(' ') => {
                     let step = writing.width(' ', font);
-                    if x + step > width {
+                    if x + step > width || used + 1 > line_cells {
                         // The space falls off the end of the line: the next one starts here.
                         out.push('\n');
-                        (x, space, after_space) = (start(speaking, indent), None, 0);
+                        (x, used) = start(speaking, indent);
+                        space = None;
                     } else {
-                        (space, after_space) = (Some(out.len()), 0);
+                        space = Some((out.len(), speaking, indent));
                         out.push(' ');
-                        x += step;
+                        (x, used) = (x + step, used + 1);
                     }
                     continue;
                 }
-                Token::Char(char) => writing.width(char, font),
                 Token::Tag { name: "SAY" | "/SAY", raw, .. } => {
                     out.push_str(raw);
                     speaking = !speaking;
                     if speaking {
-                        x += font.cell();
-                        after_space += font.cell();
-                        indent = x;
+                        (x, used) = (x + font.cell(), used + 1);
+                        indent = (x, used);
                     }
                     continue;
                 }
                 Token::Tag { name, raw, .. } if NEW_LINE_TAGS.contains(&name) => {
                     out.push_str(raw);
-                    x = if name == "CLEAR" { 0 } else { start(speaking, indent) };
-                    (space, after_space) = (None, 0);
+                    (x, used) = if name == "CLEAR" { (0, 0) } else { start(speaking, indent) };
+                    space = None;
                     continue;
                 }
-                Token::Tag { name, value, .. } => cells(name, value) * font.cell(),
-            };
-            if x + step > width
-                && let Some(at) = space
+                _ => {}
+            }
+            let (step, step_cells) = size(&token);
+            if (x + step > width || used + step_cells > line_cells)
+                && let Some((at, was_speaking, was_indent)) = space.take()
             {
+                // What follows the space starts the next line, and is measured again from its start,
+                // where a `{SAY}` in it draws its 「 and sets the indent anew.
                 out.replace_range(at..at + 1, "\n");
-                x = start(speaking, indent) + after_space;
-                space = None;
+                (speaking, indent) = (was_speaking, was_indent);
+                (x, used) = start(speaking, indent);
+                for moved in tokens(&out[at + 1..]) {
+                    if let Token::Tag { name: "SAY" | "/SAY", .. } = moved {
+                        speaking = !speaking;
+                        if speaking {
+                            (x, used) = (x + font.cell(), used + 1);
+                            indent = (x, used);
+                        }
+                    } else {
+                        let (step, step_cells) = size(&moved);
+                        (x, used) = (x + step, used + step_cells);
+                    }
+                }
             }
             out.push_str(&token.text());
-            x += step;
-            after_space += step;
+            (x, used) = (x + step, used + step_cells);
         }
     }
     Ok(out)
@@ -1109,7 +1185,7 @@ fn program_string(text: &str, offset: u32, own: &[u8], writing: &Writing, wrap: 
     // Measured in the small font's pixels, which the part may be drawn in: a line that fits there
     // fits in the dialogue's font too, whose glyphs of the game's are wider and the others as wide.
     let pixels = width * vwf::SMALL;
-    let text = if wrap { wrap_to(text, pixels, writing, Face::Small)? } else { text.to_string() };
+    let text = if wrap { wrap_to(text, pixels, usize::MAX, writing, Face::Small)? } else { text.to_string() };
     let data = encode_text(&text, writing)?;
     let lines = line_widths(&data, writing, Face::Small);
     if let Some((line, wide)) = lines.iter().enumerate().find(|(_, wide)| **wide > pixels) {

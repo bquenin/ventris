@@ -411,8 +411,9 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   English has twice as many characters as the Japanese, and its text blocks came out 1.5 times the
   Japanese ones' bytes (11,796 bytes more over 23,612; two letters to a cell, as before the renderer,
   cost 11,092). A letter is a byte where a kana is one and a kanji two. So an area that cannot grow, such
-  as 105 (27,598 bytes of text for 17,258 Japanese characters), takes an English about 1.25 times as long
-  as its Japanese at most.
+  as 105 (27,598 bytes of text for 17,258 Japanese characters), takes an English of roughly 1.25 times as
+  many characters as its Japanese. That is an estimate: what counts is the bytes, which runs, tags and line
+  breaks change too, and the build says whether an area fits.
 - An area that grows past its place on the disc is moved to free room at the end of the disc; a build
   that needs more than that room is refused.
 - An area's code, which holds its text, must fit on the game's heap with everything else that is there
