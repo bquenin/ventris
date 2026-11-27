@@ -38,9 +38,10 @@
 //! uses. So the strings of section `program` that a pack changes share the room they had between
 //! them (see `rooms` and `write_strings`): they are written back one after another, and what refers
 //! to one that moved is given its new address, a 32-bit word the address and an instruction the new
-//! low half. Strings given the same text are written once, which matters here, since the game keeps
-//! many copies of the same text (the monster book's descriptions above all): the 3,303 strings have
-//! 70,402 bytes of room between them, of which a third are such copies. A pack that changes a few
+//! low half. Strings given the same text are written once, where one copy is within reach of all
+//! of them, which matters here, since the game keeps many copies of the same text (the monster
+//! book's descriptions above all): the 3,303 strings have 70,402 bytes of room between them, of
+//! which a third are such copies. A pack that changes a few
 //! scattered strings has only their room, and a string that finds no place is refused, with what
 //! each needs. The game was seen to show strings moved this way: the title screen's menu, a word of
 //! the status screen and the hero's name, each built by code, read from a table, or copied at a new
@@ -78,7 +79,7 @@ use crate::placement::{Shared, pack_room, share_room};
 use crate::platforms::mips::{CodeUse, code_use, number, within_reach};
 use crate::platforms::ps1::Disc;
 use crate::script::string_name;
-use crate::text::{Token, quoted, tag_at};
+use crate::text::{Token, quoted, tag_at, tokens};
 
 /// What is added to an offset in the program's file to get the address it is loaded at.
 pub const PROGRAM_BASE: u32 = 0x8000_F800;
@@ -107,7 +108,8 @@ pub const LIMITS: &str = "every character takes the same room, and a line takes 
                           6 characters and 15 bytes, in capitals; the strings a pack changes share the room they had \
                           between them, \
                           70,402 bytes if every one changes, where a letter, a digit, a space or a kana takes one byte \
-                          and a kanji two, and strings given the same text are written once";
+                          and a kanji two, and strings given the same text are written once, unless the code that \
+                          finds them cannot reach one place from all of them";
 
 /// What a translator is told about the menus' labels.
 pub const MENU_LIMITS: &str = "a label stays in its slot, and takes no more bytes than the game left for it there, the \
@@ -589,6 +591,10 @@ pub struct Room {
     pub tail: Vec<u8>,
     /// What refers to it, when that is known well enough for it to move.
     pub reached: Option<Reached>,
+    /// Where something refers to a place inside it, the first such place, as a count of bytes from
+    /// its start, and its bytes from there to its zero byte: whatever reads it there must still read
+    /// the same, so a change keeps those bytes, and keeps them where they are.
+    pub inside: Option<(usize, Vec<u8>)>,
 }
 
 /// Where each string of section `program` is, as a build sees it: `strings` are the section's.
@@ -652,7 +658,11 @@ pub fn rooms(
             }
             _ => own,
         };
-        rooms.insert(*offset, Room { size, tail, reached: followed.then_some(reached) });
+        let inside = references.referred.range(start + 1..end + 1).next().map(|at| {
+            let from = at - start;
+            (from, data[from..].to_vec())
+        });
+        rooms.insert(*offset, Room { size, tail, reached: followed.then_some(reached), inside });
     }
     rooms
 }
@@ -697,8 +707,9 @@ type Moving<'a> = (u32, &'a [u8], Range<usize>);
 /// is given the address; an instruction that adds the low half of it is given the new low half, and
 /// the instruction that gives the high half, which may serve other addresses, is left alone, so such
 /// a string stays within the 65,536 bytes that half reaches (see `within_reach`). Strings the pack
-/// gives the same text, without a tail, are written once, all of them referring to the one copy. A
-/// string that cannot move stays where it is, with the room it has there.
+/// gives the same text, without a tail, are written once, all of them referring to the one copy,
+/// where one copy can be within reach of them all. A string that cannot move stays where it is,
+/// with the room it has there, and keeps the bytes that something reads from inside it.
 ///
 /// What it cannot place, it says, in words a translator can act on.
 pub fn write_strings(
@@ -710,9 +721,20 @@ pub fn write_strings(
     let name = |offset: u32| string_name(PROGRAM_SECTION, offset);
     let need = |offset: u32, data: &[u8]| data.len() + 1 + rooms[&offset].tail.len();
     let mut too_long = Vec::new();
+    let mut kept_inside = Vec::new();
     let mut moving: Vec<Moving> = Vec::new();
     for (offset, data) in changed {
         let room = &rooms[offset];
+        if let Some((from, kept)) = &room.inside
+            && data.get(*from..) != Some(kept.as_slice())
+        {
+            kept_inside.push(format!(
+                "string {}: the program also reads it from {from} bytes in, so its first {from} bytes may change, \
+                 to as many bytes, and the rest must stay as it is",
+                name(*offset)
+            ));
+            continue;
+        }
         if let Some(reached) = &room.reached {
             moving.push((*offset, data, within_reach(file, PROGRAM_BASE, *offset as usize, &reached.code)));
             continue;
@@ -728,10 +750,13 @@ pub fn write_strings(
         written.patches.push((*offset as usize, bytes));
     }
     if !too_long.is_empty() {
-        return Err(format!(
+        kept_inside.push(format!(
             "{}: such a string stays where it is, since not all that refers to it is known, so shorten it",
             too_long.join("; ")
         ));
+    }
+    if !kept_inside.is_empty() {
+        return Err(kept_inside.join("\n"));
     }
 
     // The strings given the same text are written once, at a place within reach of all of them.
@@ -767,21 +792,30 @@ pub fn write_strings(
         }
         (needs, shared)
     };
-    let (mut needs, mut shared) = place(&groups);
-    // A group may go only where its strings' reaches overlap, which may have no room free. A group
-    // left without a place is then tried as one copy per string, each within its own reach; that is
-    // kept if every string then has a place, and otherwise what is refused is the first try.
-    let unplaced = |shared: &Shared, (members, _): &(Vec<usize>, Range<usize>)| {
-        members.len() > 1 && shared.1[members[0]].is_none()
+    // A group may go only where its strings' reaches overlap, which may have no room free, and the
+    // copy a group shares may take the only room another string had. So the strings are placed three
+    // ways, and the first that gives every string a place is kept: those given the same text sharing
+    // one copy; the groups that found no place written as one copy per string, each within its own
+    // reach; and every group written so. If none does, what is refused is the first.
+    let placed = |groups: &[(Vec<usize>, Range<usize>)], shared: &Shared| {
+        groups.iter().all(|(members, _)| shared.1[members[0]].is_some())
     };
-    if groups.iter().any(|group| unplaced(&shared, group)) {
-        let (split, mut apart): (Vec<_>, Vec<_>) = groups.iter().cloned().partition(|group| unplaced(&shared, group));
-        apart.extend(
-            split.into_iter().flat_map(|(members, _)| members).map(|member| (vec![member], moving[member].2.clone())),
-        );
-        let (apart_needs, apart_shared) = place(&apart);
-        if apart.iter().all(|(members, _)| apart_shared.1[members[0]].is_some()) {
-            (groups, needs, shared) = (apart, apart_needs, apart_shared);
+    let apart = |groups: &[(Vec<usize>, Range<usize>)], split: &dyn Fn(&[usize]) -> bool| {
+        let each = |(members, common): &(Vec<usize>, Range<usize>)| match members.len() > 1 && split(members) {
+            true => members.iter().map(|member| (vec![*member], moving[*member].2.clone())).collect(),
+            false => vec![(members.clone(), common.clone())],
+        };
+        groups.iter().flat_map(each).collect::<Vec<_>>()
+    };
+    let (mut needs, mut shared) = place(&groups);
+    if !placed(&groups, &shared) {
+        let tries = [apart(&groups, &|members| shared.1[members[0]].is_none()), apart(&groups, &|_| true)];
+        for other in tries.into_iter().filter(|other| *other != groups) {
+            let (other_needs, other_shared) = place(&other);
+            if placed(&other, &other_shared) {
+                (groups, needs, shared) = (other, other_needs, other_shared);
+                break;
+            }
         }
     }
     let (stretches, places, largest) = shared;
@@ -868,14 +902,19 @@ pub fn label_cells(label: &[u8]) -> usize {
 /// How many characters the label at `start` may draw: as many as the widest of the game's own
 /// labels in its run (see `menu_strings`), which are the labels of one screen. That is taken as the
 /// room its box or column has, without having been measured, so a label within it is not sure to
-/// show whole; the main menu's box was seen to show 8 characters. `labels` are the section's.
-pub fn label_width(start: u32, labels: &BTreeMap<u32, Vec<u8>>) -> usize {
+/// show whole; the main menu's box was seen to show 8 characters. `labels` are the section's, read
+/// from `file`, whose bytes between two labels tell whether the second goes on the run: only zero
+/// bytes do, as `menu_strings` has it.
+pub fn label_width(file: &[u8], start: u32, labels: &BTreeMap<u32, Vec<u8>>) -> usize {
     if MAIN_MENU.contains(&start) {
         return MAIN_MENU_WIDTH;
     }
     let listed: Vec<(usize, &Vec<u8>)> = labels.iter().map(|(offset, label)| (*offset as usize, label)).collect();
     // Whether the label after `index` is in the same run.
-    let runs_on = |index: usize| listed[index + 1].0 - (listed[index].0 + listed[index].1.len()) - 1 <= MENU_GAP;
+    let runs_on = |index: usize| {
+        let (end, next) = (listed[index].0 + listed[index].1.len(), listed[index + 1].0);
+        next - end - 1 <= MENU_GAP && file[end..next].iter().all(|byte| *byte == 0)
+    };
     let Some(at) = listed.iter().position(|(offset, _)| *offset == start as usize) else { return 0 };
     let mut first = at;
     while first > 0 && runs_on(first - 1) {
@@ -899,8 +938,18 @@ pub const OWN_WIDTH: [u32; 7] = [0xA_B371, 0xA_B378, 0xA_B380, 0xA_B38E, 0xA_BB0
 const NOT_SMALL: [char; 6] = ['\\', '^', '_', '`', '|', '~'];
 
 /// A pack's label as the bytes of a label of the small font: lowercase letters written as the
-/// capitals the font draws for them, and what the font does not have refused.
+/// capitals the font draws for them, and what the font does not have refused, a byte written as
+/// `{B:..}` among it, which the font has no character for.
 pub fn encode_label(text: &str) -> Result<Vec<u8>> {
+    let raw = tokens(text).into_iter().find_map(|token| match token {
+        Token::Tag { raw, name: "B", .. } => Some(raw),
+        _ => None,
+    });
+    if let Some(raw) = raw {
+        return text_error(format!(
+            "{raw} writes a byte the small font of the menus has no character for: write characters the font has"
+        ));
+    }
     if let Some(char) = text.chars().find(|char| NOT_SMALL.contains(char)) {
         return text_error(format!(
             "character {} is not in the small font of the menus, which has capitals, digits, the kana and \

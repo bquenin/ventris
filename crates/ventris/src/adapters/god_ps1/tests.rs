@@ -640,10 +640,10 @@ fn an_instruction_that_builds_two_addresses_keeps_its_string_where_it_is() {
 
 #[test]
 fn a_string_that_stays_is_told_the_room_its_tail_leaves_it() {
-    // Something points inside the second string, whose room of 7 bytes holds its zero byte and a
-    // piece of text of 2 bytes after it: 4 are left for its text.
+    // Nothing is found to refer to the second string once its pointer is gone, so it stays; its room
+    // of 7 bytes holds its zero byte and a piece of text of 2 bytes after it: 4 are left for its text.
     let (mut file, strings) = made_up_program();
-    file[0xA_0A20..0xA_0A24].copy_from_slice(&(0xA_0964 + program::PROGRAM_BASE).to_le_bytes());
+    file[0xA_0A04..0xA_0A08].fill(0);
     let references = program::references_in(&file);
     let rooms = program::rooms(&file, &strings, &references, &codes());
     assert_eq!((rooms[&0xA_0963].reached.as_ref(), rooms[&0xA_0963].size), (None, 7));
@@ -676,6 +676,7 @@ fn strings_given_the_same_text_are_written_apart_when_no_room_is_within_reach_of
         size: 8,
         tail: Vec::new(),
         reached: Some(program::Reached { words: Vec::new(), code: vec![code] }),
+        inside: None,
     };
     let rooms = BTreeMap::from([(first, room(0x804)), (second, room(0x80C))]);
     let changed = BTreeMap::from([(first, vec![0xA2; 5]), (second, vec![0xA2; 5])]);
@@ -684,6 +685,83 @@ fn strings_given_the_same_text_are_written_apart_when_no_room_is_within_reach_of
     let patches: BTreeMap<usize, Vec<u8>> = written.patches.into_iter().collect();
     let copy = [vec![0xA2; 5], vec![0; 3]].concat();
     assert_eq!((&patches[&(first as usize)], &patches[&(second as usize)]), (&copy, &copy));
+}
+
+#[test]
+fn a_string_something_reads_from_inside_keeps_that_part() {
+    // Something points at the second byte of the second string: that string stays, and its last two
+    // bytes stay as they are, where they are.
+    let (mut file, strings) = made_up_program();
+    file[0xA_0A20..0xA_0A24].copy_from_slice(&(0xA_0964 + program::PROGRAM_BASE).to_le_bytes());
+    let references = program::references_in(&file);
+    let rooms = program::rooms(&file, &strings, &references, &codes());
+    assert_eq!(rooms[&0xA_0963].inside, Some((1, vec![0xA2, 0xA2])));
+    assert_eq!(rooms[&0xA_0960].inside, None);
+    let changed = BTreeMap::from([(0xA_0963, vec![0xA3, 0xA2, 0xA2])]);
+    let written = program::write_strings(&file, &rooms, &changed).unwrap();
+    assert_eq!(written.patches, [(0xA_0963, vec![0xA3, 0xA2, 0xA2, 0, 0xA2, 0, 0])]);
+    for data in [vec![0xA2], vec![0xA3, 0xA3, 0xA2, 0xA2]] {
+        let changed = BTreeMap::from([(0xA_0963, data)]);
+        let refused = program::write_strings(&file, &rooms, &changed).unwrap_err();
+        assert_eq!(
+            refused,
+            "string program.657763: the program also reads it from 1 bytes in, so its first 1 bytes may change, to \
+             as many bytes, and the rest must stay as it is"
+        );
+    }
+}
+
+#[test]
+fn strings_given_the_same_text_are_written_apart_when_their_copy_takes_another_s_only_room() {
+    // A's address is built by an `addiu` that reaches $A8800 to $B8800 of the file, B's by an `ori`
+    // that reaches $B0800 to $C0800, and C's by both, so C may go only where both reach. A and B
+    // are given the same text, and their one copy would go where both reach: in what X, which a
+    // table points at and which is made empty, leaves of its room. That is C's only place, its own
+    // room being too small. Written apart, A and B stay in their rooms and C goes into X's.
+    let mut file = vec![0u8; 0xC_1000];
+    let (a, b, c, x) = (0xB_0000u32, 0xB_9000u32, 0xB_2000u32, 0xB_1000u32);
+    let address = |offset: u32| offset + program::PROGRAM_BASE;
+    let lui = |register: u32, offset: u32| {
+        let high = (address(offset) >> 16) + u32::from(address(offset) & 0x8000 != 0);
+        mips::LUI << 26 | register << 16 | high
+    };
+    let add = |operation: u32, register: u32, offset: u32| {
+        operation << 26 | register << 21 | register << 16 | (address(offset) & 0xFFFF)
+    };
+    let code = [
+        lui(4, a),
+        add(mips::ADDIU, 4, a),
+        mips::LUI << 26 | 5 << 16 | address(b) >> 16,
+        add(mips::ORI, 5, b),
+        lui(6, c),
+        add(mips::ADDIU, 6, c),
+        mips::LUI << 26 | 7 << 16 | address(c) >> 16,
+        add(mips::ORI, 7, c),
+    ];
+    for (index, word) in code.into_iter().enumerate() {
+        file[0x800 + 4 * index..][..4].copy_from_slice(&word.to_le_bytes());
+    }
+    let room = |size: usize, words: Vec<usize>, code: Vec<usize>| program::Room {
+        size,
+        tail: Vec::new(),
+        reached: Some(program::Reached { words, code }),
+        inside: None,
+    };
+    let rooms = BTreeMap::from([
+        (a, room(6, vec![], vec![0x804])),
+        (b, room(8, vec![], vec![0x80C])),
+        (c, room(2, vec![], vec![0x814, 0x81C])),
+        (x, room(8, vec![0x900], vec![])),
+    ]);
+    let changed = BTreeMap::from([(a, vec![0xA2; 5]), (b, vec![0xA2; 5]), (c, vec![0xA3; 5]), (x, vec![])]);
+    let written = program::write_strings(&file, &rooms, &changed).unwrap();
+    assert_eq!((written.moved, written.once), (1, 0));
+    let patches: BTreeMap<usize, Vec<u8>> = written.patches.into_iter().collect();
+    assert_eq!(patches[&(x as usize)], [&[0][..], &[0xA3; 5], &[0, 0]].concat());
+    let moved = address(x + 1) & 0xFFFF;
+    for at in [0x814, 0x81C] {
+        assert_eq!(patches[&at][..2], (moved as u16).to_le_bytes());
+    }
 }
 
 #[test]
@@ -703,14 +781,32 @@ fn a_label_has_its_slot_and_the_width_of_its_screen() {
     assert_eq!(program::label_room(&file, 0x90, &labels, &none), 7);
     assert_eq!(program::label_room(&file, 0x90, &labels, &BTreeSet::from([0x96])), 5);
     assert_eq!(program::label_cells(&small("@ﾄﾞｳｸﾞ")), 3);
-    assert_eq!(program::label_width(0x10, &labels), 5);
-    assert_eq!(program::label_width(0x90, &labels), 3);
+    assert_eq!(program::label_width(&file, 0x10, &labels), 5);
+    assert_eq!(program::label_width(&file, 0x90, &labels), 3);
     // A pack's lowercase letters are written as the capitals the font draws.
     assert_eq!(program::encode_label("Items").unwrap(), b"ITEMS");
     assert_eq!(program::encode_label("どうぐ").unwrap(), small("@ﾄﾞｳｸﾞ"));
     for text in ["a~b", "x_y", "a|b", "1^2", "`", "\\"] {
         assert!(program::encode_label(text).is_err(), "{text}");
     }
+    // A byte the font has no character for is not written, though the game's own may have one.
+    let refused = program::encode_label("A{B:01}").unwrap_err().to_string();
+    assert!(refused.starts_with("{B:01} writes a byte the small font of the menus has no character for"), "{refused}");
+    assert_eq!(program::encode_small("A{B:01}").unwrap(), [b'A', 1]);
+}
+
+#[test]
+fn a_label_s_width_is_that_of_the_run_it_was_found_in() {
+    // A label at $10, a byte that is no label at $14, and a label at $1A that the code points at: two
+    // runs, though the labels are close.
+    let mut file = vec![0u8; 0x40];
+    file[0x10..0x13].copy_from_slice(&small("ｱｲｳ"));
+    file[0x14] = 0x01;
+    file[0x1A..0x1F].copy_from_slice(&small("ｽﾃｰﾀｽ"));
+    let labels = program::menu_strings(&file, &BTreeSet::from([0x10, 0x1A]));
+    assert_eq!(labels.keys().copied().collect::<Vec<u32>>(), [0x10, 0x1A]);
+    assert_eq!(program::label_width(&file, 0x10, &labels), 3);
+    assert_eq!(program::label_width(&file, 0x1A, &labels), 5);
 }
 
 #[test]
@@ -750,7 +846,7 @@ fn each_part_s_room_on_screen_is_what_the_game_s_own_strings_take() {
     // settings.
     let labels = &text["menu"];
     assert_eq!(program::label_room(&file, 0xA_7D1C, labels, &references.referred), 9);
-    assert_eq!(program::label_width(0xA_7D1C, labels), 8);
-    assert_eq!(program::label_width(0xA_8244, labels), 11);
+    assert_eq!(program::label_width(&file, 0xA_7D1C, labels), 8);
+    assert_eq!(program::label_width(&file, 0xA_8244, labels), 11);
     assert_eq!(program::label_room(&file, 0xA_8244, labels, &references.referred), 34);
 }

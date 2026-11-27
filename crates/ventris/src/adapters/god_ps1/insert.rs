@@ -690,6 +690,22 @@ impl Done {
 /// with the zero byte that ends it.
 pub const NAME_BYTES: usize = 15;
 
+/// Whether the menus' small font draws a character of a party's name: a capital, a digit, a space,
+/// the punctuation it has (see `program::encode_label`), or a kana, also in the full width the
+/// game's own text writes them in.
+fn in_menu_font(char: char) -> bool {
+    let narrow = match char {
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(char as u32 - 0xFEE0).unwrap_or(char),
+        '\u{3000}' => ' ',
+        _ => char,
+    };
+    narrow.is_ascii_uppercase()
+        || narrow.is_ascii_digit()
+        || " !\"#$%&'()*+,-./:;<=>?[]".contains(narrow)
+        || matches!(narrow, '\u{3041}'..='\u{3096}' | '\u{309B}' | '\u{309C}' | '\u{30A1}'..='\u{30FC}')
+        || "。「」、".contains(narrow)
+}
+
 /// A changed string of the program's text as it is to be written, fitted to the room its part has
 /// on screen (see `program::PARTS`): with `wrap`, broken at spaces to the part's width, and without
 /// it, refused where a line is wider. A string with more lines than its part allows is refused, and
@@ -709,14 +725,6 @@ fn program_string(
         false => (part.width, "a line of this part"),
     };
     let names = (program_text::NAMES..program_text::NAMES_END).contains(&offset);
-    if names && let Some(char) = text.chars().find(|char| char.is_lowercase() || drawn.contains_key(char)) {
-        return text_error(format!(
-            "it has {}, and a name of the party is also shown in the menus, in a font of capitals, digits and \
-             kana that has no lowercase letters and none of the characters drawn into the game's font: write it in \
-             capitals",
-            quoted(&char.to_string())
-        ));
-    }
     // The record holds the name's characters alone: the menus' font draws no code of the dialogue.
     if names
         && let Some(Token::Tag { raw, .. }) = tokens(text).into_iter().find(|token| matches!(token, Token::Tag { .. }))
@@ -724,6 +732,14 @@ fn program_string(
         return text_error(format!(
             "it has the tag {raw}, and a name of the party is copied into a record that the menus draw as \
              characters, in a font that has no codes: write the name in characters alone"
+        ));
+    }
+    if names && let Some(char) = text.chars().find(|char| drawn.contains_key(char) || !in_menu_font(*char)) {
+        return text_error(format!(
+            "it has {}, and a name of the party is also shown in the menus, in a font of capitals, digits, kana \
+             and some punctuation that has no lowercase letters, no kanji and none of the characters drawn into \
+             the game's font: write it in capitals, digits and kana",
+            quoted(&char.to_string())
         ));
     }
     let text = if wrap { wrap_to(text, width)? } else { text.to_string() };
@@ -894,7 +910,7 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         let own_labels = &own_text[MENU_SECTION];
         for (section, number, text) in &labels {
             let room = program_text::label_room(&file, *number as usize, own_labels, &references.referred);
-            let width = program_text::label_width(*number, own_labels);
+            let width = program_text::label_width(&file, *number, own_labels);
             match program_text::encode_label(text) {
                 Ok(data) if program_text::label_cells(&data) > width => refusals.push(format!(
                     "string {}: it draws {} characters, and the labels of its screen have room for {width}, the most \

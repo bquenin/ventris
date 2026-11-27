@@ -80,10 +80,11 @@ pub type Shared = (Vec<Range<usize>>, Vec<Option<usize>>, usize);
 /// Where changed strings that can move are put, when the strings a pack changes share the room they
 /// had between them, as a program's own text does when the program cannot grow: `strings` gives
 /// each as its offset, the bytes that were its own there, the bytes it needs now, both counting the
-/// zero byte that ends it, and the offsets it may be put at. Rooms side by side make one stretch. Each string first goes into its
-/// own stretch, in the order they were in and with no gaps, so that what a stretch has left is in
-/// one piece at its end; a string its stretch has no place for then goes into the first stretch
-/// that has, the longest such string first.
+/// zero byte that ends it, and the offsets it may be put at. Rooms side by side make one stretch.
+/// Each string first goes into its own stretch, in the order they were in and with no gaps, so that
+/// what a stretch has left is in one piece at its end; a string its stretch has no place for then
+/// goes into the first stretch that has, the longest such string first (see `Free` for where in a
+/// stretch).
 ///
 /// `spare` is room that was no string's, such as what a module has past its end. It is one more
 /// stretch, the last, and is used when the others have no place.
@@ -92,41 +93,84 @@ pub type Shared = (Vec<Range<usize>>, Vec<Option<usize>>, usize);
 /// stretch has reached, and takes no room there.
 pub fn share_room(strings: &[(usize, usize, usize, Range<usize>)], spare: Option<Range<usize>>) -> Shared {
     let (order, stretches, stretch_of) = stretches_of(strings, spare);
-    let mut free: Vec<usize> = stretches.iter().map(|stretch| stretch.start).collect(); // where each is filled to
+    let mut free = Free::new(&stretches);
     let mut places = vec![None; strings.len()];
     let mut left = Vec::new();
     for index in &order {
-        let (need, stretch) = (strings[*index].2, stretch_of[*index]);
-        if free[stretch] + need <= stretches[stretch].end && strings[*index].3.contains(&free[stretch]) {
-            places[*index] = Some(free[stretch]);
-            free[stretch] += need;
-        } else {
-            left.push(*index);
+        let (need, may, stretch) = (strings[*index].2, &strings[*index].3, stretch_of[*index]);
+        let found = free.starts(stretch, need, may, false).next();
+        match found {
+            Some((piece, start)) => places[*index] = Some(free.take(stretch, piece, start, need)),
+            None => left.push(*index),
         }
     }
     left.sort_by_key(|index| (Reverse(strings[*index].2), strings[*index].0));
     for index in left {
         let (need, may) = (strings[index].2, &strings[index].3);
-        let at = |stretch: usize, gap: bool| start_in(&stretches[stretch], free[stretch], need, may, gap);
-        let found = [false, true]
-            .into_iter()
-            .find_map(|gap| (0..stretches.len()).find_map(|stretch| Some((stretch, at(stretch, gap)?))));
-        if let Some((stretch, start)) = found {
-            places[index] = Some(start);
-            free[stretch] = start + need;
+        let found = [false, true].into_iter().find_map(|gap| {
+            (0..stretches.len()).find_map(|stretch| Some((stretch, free.starts(stretch, need, may, gap).next()?)))
+        });
+        if let Some((stretch, (piece, start))) = found {
+            places[index] = Some(free.take(stretch, piece, start, need));
         }
     }
-    let largest = stretches.iter().zip(&free).map(|(stretch, free)| stretch.end - free).max().unwrap_or(0);
+    let largest = free.largest();
     (stretches, places, largest)
 }
 
-/// Where a string of `need` bytes that may start in `may` can go in `stretch`, which is filled up to
-/// `free`: at `free`, or, with `gap`, further on when it may not start that soon, the bytes between
-/// left unused. A place with no gap is looked for in every stretch first, so that a gap is left only
-/// where nothing else would do.
-fn start_in(stretch: &Range<usize>, free: usize, need: usize, may: &Range<usize>, gap: bool) -> Option<usize> {
-    let start = if gap { free.max(may.start) } else { free };
-    (may.contains(&start) && start + need <= stretch.end).then_some(start)
+/// The free room of each stretch, as pieces in the order of the file. A stretch starts as one
+/// piece, and a string is put at the start of a piece, so that while strings go in one after
+/// another a stretch keeps its free room in one piece at its end. A string that may not start that
+/// soon (its address built by code that reaches only so far) can be put further on in a piece, but
+/// only where no stretch has a place at the start of one: the bytes it skips stay free, a piece of
+/// their own, so that no free byte is lost.
+struct Free {
+    pieces: Vec<Vec<Range<usize>>>,
+    ends: Vec<usize>,
+}
+
+impl Free {
+    fn new(stretches: &[Range<usize>]) -> Self {
+        let pieces = stretches.iter().map(|stretch| vec![stretch.clone()]).collect();
+        Free { pieces, ends: stretches.iter().map(|stretch| stretch.end).collect() }
+    }
+
+    /// Where in `stretch` a string of `need` bytes that may start in `may` can go: each piece it fits
+    /// in, with the offset it would start at there, at the piece's start, or with `gap`, as soon in
+    /// the piece as it may start.
+    fn starts(
+        &self,
+        stretch: usize,
+        need: usize,
+        may: &Range<usize>,
+        gap: bool,
+    ) -> impl Iterator<Item = (usize, usize)> {
+        self.pieces[stretch].iter().enumerate().filter_map(move |(index, piece)| {
+            let start = if gap { piece.start.max(may.start) } else { piece.start };
+            (may.contains(&start) && start + need <= piece.end).then_some((index, start))
+        })
+    }
+
+    /// Take the `need` bytes from `start` in a piece of `stretch`, and give `start` back.
+    fn take(&mut self, stretch: usize, piece: usize, start: usize, need: usize) -> usize {
+        let pieces = &mut self.pieces[stretch];
+        let Range { start: first, end } = pieces[piece].clone();
+        let kept: Vec<Range<usize>> =
+            [first..start, start + need..end].into_iter().filter(|kept| !kept.is_empty()).collect();
+        pieces.splice(piece..piece + 1, kept);
+        start
+    }
+
+    /// Where `stretch` is filled to: the start of its last piece, if that reaches its end.
+    fn reached(&self, stretch: usize) -> usize {
+        let end = self.ends[stretch];
+        self.pieces[stretch].last().filter(|piece| piece.end == end).map_or(end, |piece| piece.start)
+    }
+
+    /// The size of the largest piece.
+    fn largest(&self) -> usize {
+        self.pieces.iter().flatten().map(|piece| piece.len()).max().unwrap_or(0)
+    }
 }
 
 /// The strings of `share_room` in the order of their offsets, the stretches their rooms make, the
@@ -152,33 +196,33 @@ fn stretches_of(
 }
 
 /// The same as `share_room`, packed tighter, for when that leaves a string without a place: the
-/// longest string first, each goes into the stretch it leaves the least room in. The strings no
+/// longest string first, each goes into the piece it leaves the least room in. The strings no
 /// longer keep their order, and a stretch's free room may end up in several pieces, but scattered
 /// rooms of a few strings are used far better: three names, of 4, 6 and 7 bytes, give room to
 /// names of 7, 4 and 2 bytes this way, and not the other.
 pub fn pack_room(strings: &[(usize, usize, usize, Range<usize>)], spare: Option<Range<usize>>) -> Shared {
     let (order, stretches, stretch_of) = stretches_of(strings, spare);
-    let mut free: Vec<usize> = stretches.iter().map(|stretch| stretch.start).collect();
+    let mut free = Free::new(&stretches);
     let mut places = vec![None; strings.len()];
     let mut by_need = order.clone();
     by_need.sort_by_key(|index| (Reverse(strings[*index].2), strings[*index].0));
     for index in by_need {
         let (need, may) = (strings[index].2, &strings[index].3);
         if need == 0 {
-            places[index] = Some(free[stretch_of[index]]);
+            places[index] = Some(free.reached(stretch_of[index]));
             continue;
         }
-        let at = |stretch: usize, gap: bool| start_in(&stretches[stretch], free[stretch], need, may, gap);
         let best = [false, true].into_iter().find_map(|gap| {
-            let starts = (0..stretches.len()).filter_map(|stretch| Some((stretch, at(stretch, gap)?)));
-            starts.min_by_key(|(stretch, start)| stretches[*stretch].end - start)
+            let starts = (0..stretches.len()).flat_map(|stretch| {
+                free.starts(stretch, need, may, gap).map(move |(piece, start)| (stretch, piece, start))
+            });
+            starts.min_by_key(|(stretch, piece, start)| free.pieces[*stretch][*piece].end - start)
         });
-        if let Some((stretch, start)) = best {
-            places[index] = Some(start);
-            free[stretch] = start + need;
+        if let Some((stretch, piece, start)) = best {
+            places[index] = Some(free.take(stretch, piece, start, need));
         }
     }
-    let largest = stretches.iter().zip(&free).map(|(stretch, free)| stretch.end - free).max().unwrap_or(0);
+    let largest = free.largest();
     (stretches, places, largest)
 }
 
@@ -243,9 +287,15 @@ mod tests {
         let strings = [(100, 8, 4, ANY), (108, 8, 8, 108..200)];
         assert_eq!(share_room(&strings, None).1, [Some(100), Some(108)]);
         let strings = [(100, 8, 8, 104..200), (108, 8, 4, ANY)];
-        assert_eq!(pack_room(&strings, None).1, [Some(104), Some(112)]);
+        assert_eq!(pack_room(&strings, None).1, [Some(104), Some(100)]);
         // A stretch it can go in with no gap comes first.
         let strings = [(100, 8, 4, ANY), (108, 8, 8, 108..300)];
         assert_eq!(share_room(&strings, Some(200..216)).1, [Some(100), Some(200)]);
+        // The bytes such a string skips stay free: the third string goes in the 7 bytes between the
+        // first and the second, its own room being too small.
+        let strings = [(100, 8, 1, ANY), (108, 8, 8, 108..300), (200, 2, 4, ANY)];
+        let (_, places, largest) = share_room(&strings, None);
+        assert_eq!((places, largest), (vec![Some(100), Some(108), Some(101)], 3));
+        assert_eq!(pack_room(&strings, None).1, [Some(200), Some(108), Some(100)]);
     }
 }

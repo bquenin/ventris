@@ -420,7 +420,9 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
 - The program cannot grow, so the strings of `program` a pack changes share the room they had between them:
   70,402 bytes if every one changes, a letter, a digit, a space or a kana taking one byte and a kanji two.
   One may be longer where others are shorter, and strings given the same text are written once, which
-  frees much room, since the game repeats many (the monster book's descriptions above all). A pack that
+  frees much room, since the game repeats many (the monster book's descriptions above all); but where the
+  code that finds such strings cannot reach one place from all of them, each is written apart, and needs
+  its own bytes. A pack that
   changes only a few strings has only their room; a string that finds no place is refused, with the bytes
   each needs.
 - The note on the first string of each part of `program` gives its width and lines: a line is no wider

@@ -144,6 +144,12 @@ fn program_written(text: &str, offset: u32, wrap: bool) -> std::result::Result<V
 fn a_name_of_the_party_has_characters_alone() {
     let names = program_text::NAMES;
     assert_eq!(program_written("AA", names, true).unwrap(), hex("a3 a3"));
+    // A kanji, or a mark the menus' font has not got, is refused, though the dialogue's font has it.
+    for (text, char) in [("A日", "日"), ("A~", "~"), ("Ab", "b")] {
+        let refused = program_written(text, names, true).unwrap_err();
+        assert!(refused.starts_with(&format!("it has '{char}', and a name of the party")), "{refused}");
+    }
+    assert_eq!(program_written("ＡＢ", names, true).unwrap(), hex("a3 01 1b"));
     let refused = program_written("A{HOLD}A", names, true).unwrap_err();
     assert!(refused.starts_with("it has the tag {HOLD}, and a name of the party"), "{refused}");
     assert!(refused.ends_with("write the name in characters alone"), "{refused}");
@@ -436,7 +442,7 @@ fn build_puts_the_program_s_text_and_the_menus_labels_in() {
     assert_eq!(lines.len(), 6, "{refused}");
     assert!(lines[0].starts_with("string program.657748: it has 3 lines, and a string of this part has room for 2"));
     assert!(lines[1].starts_with("string program.701264: it has 'e', and a name of the party"), "{refused}");
-    assert!(lines[1].ends_with("write it in capitals"));
+    assert!(lines[1].ends_with("write it in capitals, digits and kana"));
     assert_eq!(
         lines[2],
         "string program.701312: broken at spaces, it still has a line of 8 characters, and its box, as wide as the \
