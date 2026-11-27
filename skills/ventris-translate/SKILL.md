@@ -156,9 +156,10 @@ strings you changed, starting from power-on when the pack adds characters the ga
 saved state holds the old font. If you cannot, say so, and give the user a list of the changed strings by
 address with where in the game each is shown, so that they can look.
 
-Letters must look even. In a Latin alphabet every letter on screen is the same narrow size: a mix of
-wide and narrow letters is a fault of the build, never something to accept or to work around in the
-text. Tell the user and leave it for the adapter's authors.
+Letters must look even. In a Latin alphabet every letter on screen is the same size: narrow, which is
+preferred, or full-width throughout where the pack chose a build option that makes every letter
+full-width. A mix of wide and narrow letters is a fault of the build, never something to accept or to
+work around in the text. Tell the user and leave it for the adapter's authors.
 
 Report plainly: which strings were seen on screen, which were only built, and which were not built.
 
