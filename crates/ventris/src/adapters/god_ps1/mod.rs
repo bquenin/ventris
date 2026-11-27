@@ -805,6 +805,7 @@ impl Adapter for God {
     }
 }
 
+pub mod heap;
 pub mod insert;
 pub mod program;
 
