@@ -1,4 +1,5 @@
-//! Putting a changed script back into the game: the dialogue of the areas.
+//! Putting a changed script back into the game: the dialogue of the areas, and the program's own
+//! text and the menus' labels, whose room and placing are described in `program`.
 //!
 //! A new text block. An area's strings are all in its text block, and the game finds a string by
 //! its number in the block's table of offsets. So an area with a changed string gets a new text
@@ -67,7 +68,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use super::program::{self as program_text, MENU_SECTION, PROGRAM_SECTION};
+use super::program::{self as program_text, Lines, MENU_SECTION, PROGRAM_SECTION};
 use super::{
     ARCHIVE, AREA_HEADER, Area, ByteCodes, CONTENTS, Entry, FIRST_CODE, FONT_PAGES, GLYPH_SIZE, NAME_INSERTS, PROGRAM,
     WORD_INSERT, areas, code_of, decode, encode_with, member, program, text_block, word,
@@ -78,7 +79,7 @@ use crate::fonts::{self, CELL, Font, Glyph};
 use crate::layout;
 use crate::platforms::ps1::{self, Disc, tim};
 use crate::script::{Pack, changes_by_place, string_name};
-use crate::text::{Token, plain_characters, tokens};
+use crate::text::{Token, plain_characters, quoted, tokens};
 
 /// The largest area code the game has been seen to run with: area 096 grown to this size ran to the
 /// field, with about 660 KB of the heap still free there. It is 34 KB more than the largest area of
@@ -247,6 +248,26 @@ fn pieces(data: &[u8], codes: &ByteCodes) -> Vec<(Piece, Vec<u8>)> {
     found
 }
 
+/// How many cells each line of a string takes, counted as `pieces` counts them: a line ends at a
+/// line break, a wait that starts a new line, or the window cleared. The program's text is measured
+/// this way against the room its parts have (see `program`).
+pub fn line_cells(data: &[u8], codes: &ByteCodes) -> Vec<usize> {
+    let mut lines = vec![0];
+    let mut speaking = false;
+    for (piece, _) in pieces(data, codes) {
+        match piece {
+            Piece::Cells(count) => *lines.last_mut().unwrap() += count,
+            Piece::Break | Piece::Wait | Piece::Clear => lines.push(0),
+            Piece::Say => {
+                *lines.last_mut().unwrap() += usize::from(!speaking);
+                speaking = !speaking;
+            }
+            Piece::Hold | Piece::Silent => {}
+        }
+    }
+    lines
+}
+
 /// What laying a string out in the window gave.
 #[derive(Debug, PartialEq, Eq)]
 enum Laid {
@@ -401,11 +422,16 @@ const TAG_CELL: char = '\u{E000}';
 /// A changed string's text broken at spaces to the window's width: 15 characters in a spoken line,
 /// 16 otherwise. Line breaks and waits already in it are kept.
 fn wrap(text: &str) -> Result<String> {
+    wrap_to(text, COLUMNS)
+}
+
+/// The same, to lines of `columns` cells, one fewer in a spoken line.
+fn wrap_to(text: &str, columns: usize) -> Result<String> {
     let mut speaking = false;
     let mut lines = Vec::new();
     for line in text.split('\n') {
         let spoken = speaking || line.starts_with("{SAY}");
-        let limit = if spoken { COLUMNS - 1 } else { COLUMNS };
+        let limit = if spoken { columns - 1 } else { columns };
         let cells = |name: &str, value: Option<&str>| match name {
             "NAME" => NAME_CELLS,
             "NUM" => NUMBER_CELLS,
@@ -586,11 +612,30 @@ struct Done {
     /// The largest code of the areas that changed, and which area it is.
     largest: Option<(usize, String)>,
     new_characters: Vec<char>,
+    /// The strings of the program's text that changed, how many of them moved, and how many were
+    /// written once for several.
+    program_strings: usize,
+    program_moved: usize,
+    program_once: usize,
+    labels: usize,
 }
 
 impl Done {
     fn summary(&self) -> Vec<String> {
         let mut lines = vec![format!("dialogue:  {} strings changed in {} areas", self.strings, self.areas)];
+        if self.program_strings > 0 {
+            let once = match self.program_once {
+                0 => String::new(),
+                once => format!(", {once} of them the same text as another and written once"),
+            };
+            lines.push(format!(
+                "program:   {} strings changed, {} of them moved in the room they share{once}",
+                self.program_strings, self.program_moved
+            ));
+        }
+        if self.labels > 0 {
+            lines.push(format!("menu:      {} labels changed, each in its slot", self.labels));
+        }
         if !self.moved.is_empty() {
             lines.push(format!(
                 "moved:     area {} grew past its sectors and is now in the disc's free room ({SPARE_FILE})",
@@ -614,8 +659,76 @@ impl Done {
     }
 }
 
-/// Write to `output` the game with the pack's strings in it. Only the areas' dialogue can be
-/// changed; a pack that changes the program's text is refused.
+/// The most bytes a name of the party may take: a new game copies each into a record of 16 bytes,
+/// with the zero byte that ends it.
+pub const NAME_BYTES: usize = 15;
+
+/// A changed string of the program's text as it is to be written, fitted to the room its part has
+/// on screen (see `program::PARTS`): with `wrap`, broken at spaces to the part's width, and without
+/// it, refused where a line is wider. A string with more lines than its part allows is refused, and
+/// so is a name of the party too long for its record. `own` is the game's own string.
+fn program_string(
+    text: &str,
+    offset: u32,
+    own: &[u8],
+    codes: &ByteCodes,
+    drawn: &HashMap<char, u32>,
+    wrap: bool,
+) -> Result<Vec<u8>> {
+    let part = program_text::part_of(offset);
+    let own_cells = line_cells(own, codes);
+    let (width, whose) = match program_text::OWN_WIDTH.contains(&offset) {
+        true => (own_cells.iter().copied().max().unwrap_or(0), "its box, as wide as the game's own text,"),
+        false => (part.width, "a line of this part"),
+    };
+    let names = (program_text::NAMES..program_text::NAMES_END).contains(&offset);
+    if names && let Some(char) = text.chars().find(|char| char.is_lowercase() || drawn.contains_key(char)) {
+        return text_error(format!(
+            "it has {}, and a name of the party is also shown in the menus, in a font of capitals, digits and \
+             kana that has no lowercase letters and none of the characters drawn into the game's font: write it in \
+             capitals",
+            quoted(&char.to_string())
+        ));
+    }
+    let text = if wrap { wrap_to(text, width)? } else { text.to_string() };
+    let data = encode_with(&text, codes, &|char| pack_code(char, codes, drawn))?;
+    let lines = line_cells(&data, codes);
+    if let Some((line, cells)) = lines.iter().enumerate().find(|(_, cells)| **cells > width) {
+        return text_error(match wrap {
+            true => format!(
+                "broken at spaces, it still has a line of {cells} characters, and {whose} has room for {width}: \
+                 shorten its longest word"
+            ),
+            false => format!(
+                "its line {} takes {cells} characters, and {whose} has room for {width}: break it sooner, or build \
+                 with wrapping on",
+                line + 1
+            ),
+        });
+    }
+    let own_lines = own_cells.len();
+    let (most, why) = match part.lines {
+        Lines::Own => (own_lines, format!("the game's own has {own_lines}, and a string of this part takes no more")),
+        Lines::Running(_) if own_lines == 1 => {
+            (1, "the game's own has one, a title or an entry of a list, which stays on one line".to_string())
+        }
+        Lines::Most(most) | Lines::Running(most) => (most, format!("a string of this part has room for {most}")),
+    };
+    if lines.len() > most {
+        return text_error(format!("it has {} lines, and {why}", lines.len()));
+    }
+    if names && data.len() > NAME_BYTES {
+        return text_error(format!(
+            "it takes {} bytes, and a new game copies a name of the party into a record that has room for \
+             {NAME_BYTES}: a letter, a digit or a kana takes one byte, and a kanji two",
+            data.len()
+        ));
+    }
+    Ok(data)
+}
+
+/// Write to `output` the game with the pack's strings in it: the areas' dialogue, the program's
+/// own text and the menus' labels.
 pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) -> Result<Built> {
     let program = program(disc)?;
     let codes = &program.codes;
@@ -634,22 +747,20 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
     })?;
     let (dialogue, others): (Vec<_>, Vec<_>) =
         changes.into_iter().partition(|(section, ..)| by_section.contains_key(section));
-    if !others.is_empty() {
-        let names: Vec<String> =
-            others.iter().take(5).map(|(section, number, _)| string_name(section, *number)).collect();
-        let more =
-            if others.len() > names.len() { format!(" and {} more", others.len() - names.len()) } else { "".into() };
-        return text_error(format!(
-            "the pack changes the program's own text ({}{more}), which cannot be changed yet: only the dialogue of \
-             the areas, sections 096 to 188, can",
-            names.join(", ")
-        ));
-    }
-    let mut done = Done { strings: dialogue.len(), ..Done::default() };
+    let (program_changes, labels): (Vec<_>, Vec<_>) =
+        others.into_iter().partition(|(section, ..)| section == PROGRAM_SECTION);
+    let mut done = Done {
+        strings: dialogue.len(),
+        program_strings: program_changes.len(),
+        labels: labels.len(),
+        ..Done::default()
+    };
     let mut patches: Vec<(&str, u64, Vec<u8>)> = Vec::new();
 
-    // The characters the font lacks, drawn into its blank cells.
-    let used = plain_characters(&dialogue.iter().map(|(_, _, text)| text.as_str()).collect::<String>());
+    // The characters the font lacks, drawn into its blank cells. The program's text is drawn with
+    // the same font; the menus' labels are not.
+    let texts = dialogue.iter().chain(&program_changes).map(|(_, _, text)| text.as_str());
+    let used = plain_characters(&texts.collect::<String>());
     let none = HashMap::new();
     let new: Vec<char> = used.into_iter().filter(|char| pack_code(*char, codes, &none).is_none()).collect();
     let mut drawn = HashMap::new();
@@ -690,6 +801,64 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
             }
             Err(Error::Text(problem)) => refusals.push(format!("string {}: {problem}", string_name(section, *number))),
             Err(other) => return Err(other),
+        }
+    }
+
+    // The program's own text, each string fitted to the room its part has on screen, then all of
+    // them written back into the room they share; and the menus' labels, each in its slot.
+    if !program_changes.is_empty() || !labels.is_empty() {
+        let file = program_text::program_file(disc)?;
+        let references = program_text::references(disc)?;
+        let mut changed = BTreeMap::new();
+        for (section, number, text) in &program_changes {
+            let own = &own_text[PROGRAM_SECTION][number];
+            match program_string(text, *number, own, codes, &drawn, options.wrap) {
+                Ok(data) => {
+                    changed.insert(*number, data);
+                }
+                Err(Error::Text(problem)) => {
+                    refusals.push(format!("string {}: {problem}", string_name(section, *number)))
+                }
+                Err(other) => return Err(other),
+            }
+        }
+        if !changed.is_empty() {
+            let rooms = program_text::rooms(&file, &own_text[PROGRAM_SECTION], &references, codes);
+            match program_text::write_strings(&file, &rooms, &changed) {
+                Ok(written) => {
+                    (done.program_moved, done.program_once) = (written.moved, written.once);
+                    let to_program = written.patches.into_iter().map(|(at, data)| (PROGRAM, at as u64, data));
+                    patches.extend(to_program);
+                }
+                Err(problem) => refusals.push(problem),
+            }
+        }
+        let own_labels = &own_text[MENU_SECTION];
+        for (section, number, text) in &labels {
+            let room = program_text::label_room(&file, *number as usize, own_labels, &references.referred);
+            let width = program_text::label_width(*number, own_labels);
+            match program_text::encode_label(text) {
+                Ok(data) if program_text::label_cells(&data) > width => refusals.push(format!(
+                    "string {}: it draws {} characters, and the labels of its screen have room for {width}, the most \
+                     the game's own take there",
+                    string_name(section, *number),
+                    program_text::label_cells(&data)
+                )),
+                Ok(data) if data.len() > room => refusals.push(format!(
+                    "string {}: it takes {} bytes, and its slot has room for {room}: each letter, digit, space, kana \
+                     and mark takes one, and a kana with ﾞ or ﾟ takes two",
+                    string_name(section, *number),
+                    data.len()
+                )),
+                Ok(mut data) => {
+                    data.resize(room + 1, 0);
+                    patches.push((PROGRAM, u64::from(*number), data));
+                }
+                Err(Error::Text(problem)) => {
+                    refusals.push(format!("string {}: {problem}", string_name(section, *number)))
+                }
+                Err(other) => return Err(other),
+            }
         }
     }
 

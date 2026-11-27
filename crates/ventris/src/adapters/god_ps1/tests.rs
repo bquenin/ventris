@@ -41,7 +41,7 @@ fn the_adapter_declares_itself_properly() {
     assert_eq!(ADAPTER.kinds().len(), 3);
     assert!(ADAPTER.can_insert());
     let insertable: Vec<&str> = ADAPTER.kinds().iter().filter(|kind| kind.insert).map(|kind| kind.name).collect();
-    assert_eq!(insertable, ["dialogue"]);
+    assert_eq!(insertable, ["dialogue", "program", "menu"]);
 }
 
 #[test]
@@ -159,10 +159,14 @@ fn notes_say_what_each_part_of_the_program_s_text_is() {
     assert_eq!(line(0xA_0EC8), format!("A shopkeeper's line: {}.", SHOP_LINES[8].1));
     assert_eq!(line(0xA_0A51), format!("A shopkeeper's line: {}.", SHOP_LINES[1].1));
     assert!(line(0xA_0F4C).contains("monster book"));
+    // The first string of a part says the room its lines have; a choice, that its box is the game's own.
+    assert!(first.contains("Lines are at most 13 characters, and a string has at most 2 lines."), "{first}");
+    assert!(line(0xA_9088).ends_with("a string of one line stays one line, and one of several lines has at most 109."));
+    assert!(line(0xA_B380).ends_with("no line may be wider than the game's own widest."));
     assert_eq!(ADAPTER.note("program", Some(0xA_B354)), None);
     assert_eq!(ADAPTER.note("menu", Some(0xA_7D1C)), None);
     // The parts are in the order of the file.
-    assert!(PARTS.windows(2).all(|pair| pair[0].0 < pair[1].0));
+    assert!(PARTS.windows(2).all(|pair| pair[0].start < pair[1].start));
     assert!(SHOP_LINES.windows(2).all(|pair| pair[0].0 < pair[1].0));
 }
 
@@ -363,7 +367,7 @@ fn the_game_s_program_text_is_found() {
     assert!(strings.keys().all(in_text));
     assert!(!labels.keys().any(in_text));
     // Each part starts at a string.
-    for (start, _) in PARTS {
+    for program::Part { start, .. } in PARTS {
         assert!(strings.contains_key(&start), "{start:X}");
     }
     // The shops' records point at their lines, the nth of each record among the lines of the nth kind.
@@ -415,4 +419,166 @@ fn the_game_s_font_is_read() {
     assert_eq!(ADAPTER.glyph(&image, 0x4D7 - 0x100).unwrap(), blank);
     assert!(ADAPTER.glyph(&image, GLYPH_COUNT).is_err());
     assert_ne!(ADAPTER.glyph(&image, GLYPH_COUNT - 1).unwrap().len(), 0);
+}
+
+/// A program's file made up for the placing of its text: five strings of あ ($A2) in the first
+/// stretch of the shopkeepers' lines, a table that points at each, and code that builds the address
+/// of the third. The second has a piece of text after it that nothing points at; the third has zero
+/// bytes after it; and something points at the zero byte after the fourth.
+fn made_up_program() -> (Vec<u8>, BTreeMap<u32, Vec<u8>>) {
+    let mut file = vec![0u8; 0xA_1000];
+    let strings: BTreeMap<u32, Vec<u8>> = [(0xA_0960, 2), (0xA_0963, 3), (0xA_096A, 1), (0xA_0970, 2), (0xA_0974, 1)]
+        .into_iter()
+        .map(|(at, length)| (at, vec![0xA2; length]))
+        .collect();
+    for (at, data) in &strings {
+        file[*at as usize..*at as usize + data.len()].copy_from_slice(data);
+    }
+    file[0xA_0967] = 0xA2; // the piece of text after the second, ended by the zero byte at $A0968
+    let pointers = strings.keys().copied().chain([0xA_0973]);
+    for (index, at) in pointers.enumerate() {
+        let word = at + program::PROGRAM_BASE;
+        file[0xA_0A00 + 4 * index..][..4].copy_from_slice(&word.to_le_bytes());
+    }
+    let address = 0xA_096A + program::PROGRAM_BASE;
+    let code = [mips::LUI << 26 | 4 << 16 | address >> 16, mips::ADDIU << 26 | 4 << 21 | 4 << 16 | (address & 0xFFFF)];
+    for (index, word) in code.into_iter().chain([mips::RETURN, 0]).enumerate() {
+        file[0x800 + 4 * index..][..4].copy_from_slice(&word.to_le_bytes());
+    }
+    (file, strings)
+}
+
+#[test]
+fn a_string_s_room_is_its_bytes_the_zero_bytes_after_it_and_the_text_nothing_points_at() {
+    let (file, strings) = made_up_program();
+    let references = program::references_in(&file);
+    let rooms = program::rooms(&file, &strings, &references, &codes());
+    let sizes: Vec<usize> = rooms.values().map(|room| room.size).collect();
+    assert_eq!(sizes, [3, 7, 6, 3, 2]);
+    assert_eq!(rooms[&0xA_0963].tail, [0xA2, 0]);
+    assert!(rooms.values().filter(|room| room.tail.is_empty()).count() == 4);
+    assert_eq!(rooms[&0xA_0960].reached, Some(program::Reached { words: vec![0xA_0A00], code: vec![] }));
+    assert_eq!(rooms[&0xA_096A].reached, Some(program::Reached { words: vec![0xA_0A08], code: vec![0x804] }));
+    // Something that points inside a string keeps it where it is.
+    let mut file = file;
+    file[0xA_0A20..0xA_0A24].copy_from_slice(&(0xA_0961 + program::PROGRAM_BASE).to_le_bytes());
+    let references = program::references_in(&file);
+    let rooms = program::rooms(&file, &strings, &references, &codes());
+    assert_eq!(rooms[&0xA_0960].reached, None);
+}
+
+#[test]
+fn changed_strings_share_their_room_and_what_refers_to_them_follows() {
+    let (file, strings) = made_up_program();
+    let references = program::references_in(&file);
+    let rooms = program::rooms(&file, &strings, &references, &codes());
+    // The first grows past its room and the third shrinks: the first takes the third's room, which
+    // is the one that leaves least unused, and the third the first's.
+    let changed = BTreeMap::from([(0xA_0960, vec![0xA2; 4]), (0xA_096A, vec![0xA2])]);
+    let written = program::write_strings(&file, &rooms, &changed).unwrap();
+    assert_eq!((written.moved, written.once), (2, 0));
+    let mut out = file.clone();
+    for (at, data) in &written.patches {
+        out[*at..*at + data.len()].copy_from_slice(data);
+    }
+    assert_eq!(out[0xA_096A..0xA_0970], [0xA2, 0xA2, 0xA2, 0xA2, 0, 0]);
+    assert_eq!(out[0xA_0960..0xA_0963], [0xA2, 0, 0]);
+    assert_eq!(mips::number(&out, 0xA_0A00), Some(0xA_096A + program::PROGRAM_BASE));
+    let low = mips::number(&out, 0x804).unwrap();
+    assert_eq!(
+        (low >> 16, low & 0xFFFF),
+        (mips::ADDIU << 10 | 4 << 5 | 4, (0xA_0960 + program::PROGRAM_BASE) & 0xFFFF)
+    );
+    // The second and its piece of text are left alone.
+    assert_eq!(out[0xA_0963..0xA_096A], file[0xA_0963..0xA_096A]);
+
+    // Two strings given the same text are written once, and both point at the one copy.
+    let changed = BTreeMap::from([(0xA_0970, vec![0xA2]), (0xA_0974, vec![0xA2])]);
+    let written = program::write_strings(&file, &rooms, &changed).unwrap();
+    assert_eq!((written.moved, written.once), (1, 1));
+    let words: Vec<(usize, Vec<u8>)> = written.patches.into_iter().filter(|(at, _)| *at == 0xA_0A10).collect();
+    assert_eq!(words, [(0xA_0A10, (0xA_0970 + program::PROGRAM_BASE).to_le_bytes().to_vec())]);
+
+    // A string that moves takes its piece of text with it. The first and the third, both made empty,
+    // are written once, and the three rooms side by side make one stretch.
+    let changed = BTreeMap::from([(0xA_0963, vec![0xA2; 7]), (0xA_096A, vec![]), (0xA_0960, vec![])]);
+    let written = program::write_strings(&file, &rooms, &changed).unwrap();
+    assert_eq!((written.moved, written.once), (2, 1));
+    let stretch = written.patches.iter().find(|(at, _)| *at == 0xA_0960).unwrap();
+    assert_eq!(stretch.1, [&[0][..], &[0xA2; 7], &[0, 0xA2, 0], &[0; 5]].concat());
+    // What does not fit is refused, with what it needs.
+    let changed = BTreeMap::from([(0xA_0963, vec![0xA2; 13]), (0xA_096A, vec![]), (0xA_0960, vec![])]);
+    let refused = program::write_strings(&file, &rooms, &changed).unwrap_err();
+    assert!(refused.starts_with("string program.657760 found no place: "), "{refused}");
+    assert!(refused.contains("16 bytes here with the zero byte that ends each, and this pack's need 17"), "{refused}");
+    assert!(refused.ends_with("\n  program.657760 needs 1 byte"), "{refused}");
+}
+
+#[test]
+fn a_label_has_its_slot_and_the_width_of_its_screen() {
+    let mut file = vec![0u8; 0x200];
+    let mut put = |at: usize, label: &str| file[at..at + small(label).len()].copy_from_slice(&small(label));
+    put(0x10, "@ﾄﾞｳｸﾞ"); // 6 bytes, 3 characters
+    put(0x1A, "ｽﾃｰﾀｽ"); // 5 bytes, 5 characters, the last of its run
+    put(0x90, "ｾｰﾌﾞ");
+    let built = BTreeSet::from([0x10, 0x90]);
+    let labels = program::menu_strings(&file, &built);
+    assert_eq!(labels.len(), 3);
+    let none = BTreeSet::new();
+    // Up to the next label of the run; after the last, up to the next multiple of 4.
+    assert_eq!(program::label_room(&file, 0x10, &labels, &none), 9);
+    assert_eq!(program::label_room(&file, 0x1A, &labels, &none), 5);
+    assert_eq!(program::label_room(&file, 0x90, &labels, &none), 7);
+    assert_eq!(program::label_room(&file, 0x90, &labels, &BTreeSet::from([0x96])), 5);
+    assert_eq!(program::label_cells(&small("@ﾄﾞｳｸﾞ")), 3);
+    assert_eq!(program::label_width(0x10, &labels), 5);
+    assert_eq!(program::label_width(0x90, &labels), 3);
+    // A pack's lowercase letters are written as the capitals the font draws.
+    assert_eq!(program::encode_label("Items").unwrap(), b"ITEMS");
+    assert_eq!(program::encode_label("どうぐ").unwrap(), small("@ﾄﾞｳｸﾞ"));
+    for text in ["a~b", "x_y", "a|b", "1^2", "`", "\\"] {
+        assert!(program::encode_label(text).is_err(), "{text}");
+    }
+}
+
+#[test]
+fn each_part_s_room_on_screen_is_what_the_game_s_own_strings_take() {
+    let Some(image) = game() else { return };
+    let disc = image.ps1_disc().unwrap();
+    let codes = &super::program(disc).unwrap().codes;
+    let text = program::program_text(disc).unwrap();
+    let strings = &text["program"];
+    for (index, part) in PARTS.iter().enumerate() {
+        let end = PARTS.get(index + 1).map_or(u32::MAX, |next| next.start);
+        let lines: Vec<Vec<usize>> =
+            strings.range(part.start..end).map(|(_, data)| insert::line_cells(data, codes)).collect();
+        let widest = *lines.iter().flatten().max().unwrap();
+        let most = lines.iter().map(Vec::len).max().unwrap();
+        // The names of the party have the room the name entry gives, 6 characters.
+        let width = if part.start == program::NAMES { 6 } else { widest };
+        assert_eq!(part.width, width, "part {:X}", part.start);
+        if let program::Lines::Most(lines) | program::Lines::Running(lines) = part.lines {
+            assert_eq!(lines, most, "part {:X}", part.start);
+        }
+    }
+    assert!(program::OWN_WIDTH.iter().all(|offset| strings.contains_key(offset)));
+    assert!(strings.range(program::NAMES..program::NAMES_END).count() == 8);
+    // The room the strings have between them, as the kind's limits say; every string can move, and 63
+    // have a piece of text after them that goes with them.
+    let file = program::program_file(disc).unwrap();
+    let references = program::references(disc).unwrap();
+    let rooms = program::rooms(&file, strings, &references, codes);
+    assert_eq!(rooms.values().map(|room| room.size).sum::<usize>(), 70_402);
+    assert!(program::LIMITS.contains("70,402 bytes"));
+    assert!(rooms.values().all(|room| room.reached.is_some()));
+    assert_eq!(rooms.values().filter(|room| !room.tail.is_empty()).count(), 63);
+    // What a monster does, and its effect, which nothing points at: "a sting!" and "poisoned!".
+    assert_eq!(decode(&rooms[&0xB_775C].tail[..rooms[&0xB_775C].tail.len() - 1], codes), "ドクにおかされた！");
+    // The main menu's labels have their slots, and the configuration's the 11 characters before the
+    // settings.
+    let labels = &text["menu"];
+    assert_eq!(program::label_room(&file, 0xA_7D1C, labels, &references.referred), 9);
+    assert_eq!(program::label_width(0xA_7D1C, labels), 8);
+    assert_eq!(program::label_width(0xA_8244, labels), 11);
+    assert_eq!(program::label_room(&file, 0xA_8244, labels, &references.referred), 34);
 }

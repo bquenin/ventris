@@ -235,6 +235,26 @@ pub fn code_use(data: &[u8], code: Range<usize>, base: u32) -> CodeUse {
     found
 }
 
+/// The offsets in `data`, which is loaded at `base`, that the string at `offset` can be put at with
+/// the instructions at `code` still building its address. Each of them adds a low half to a high
+/// half that another instruction gives; that one may serve other addresses too and is left as it
+/// is, so the string stays within the 65,536 bytes its high half reaches.
+pub fn within_reach(data: &[u8], base: u32, offset: usize, code: &[usize]) -> Range<usize> {
+    let address = offset as i64 + i64::from(base);
+    let mut reach = 0..usize::MAX;
+    for at in code {
+        let word = number(data, *at).unwrap_or(0);
+        // `addiu` adds its half as a signed number, and so reaches 32,768 bytes to either side.
+        let first = match word >> 26 == ADDIU {
+            true => address - i64::from(word as u16 as i16) - 0x8000,
+            false => address & !0xFFFF,
+        };
+        let first = (first - i64::from(base)).max(0) as usize;
+        reach = reach.start.max(first)..reach.end.min(first + 0x10000);
+    }
+    reach
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

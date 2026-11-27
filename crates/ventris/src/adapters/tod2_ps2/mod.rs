@@ -268,8 +268,9 @@ use crate::codecs::lzss_ring;
 use crate::error::{Error, Result, text_error};
 use crate::fonts::{self, Bitmap, Font};
 use crate::layout;
+use crate::placement::share_room;
 use crate::platform::{Image, Platform};
-use crate::platforms::mips::{ADDIU, CodeUse, RETURN, code_use, number, pointed_at};
+use crate::platforms::mips::{CodeUse, RETURN, code_use, number, pointed_at, within_reach};
 use crate::platforms::ps2::{self, Disc, write_image};
 use crate::script::{self, Pack, Script, string_name};
 use crate::shift_jis;
@@ -1529,82 +1530,9 @@ fn module_reach(module: &[u8], about: &Module, strings: &Numbered) -> BTreeMap<u
     movable
 }
 
-/// The offsets in `data`, which is loaded at `base`, that the string at `offset` can be put at with
-/// the instructions at `code` still building its address. Each of them adds a low half to a high
-/// half that another instruction gives; that one may serve other addresses too and is left as it
-/// is, so the string stays within the 65,536 bytes its high half reaches.
-fn within_reach(data: &[u8], base: u32, offset: usize, code: &[usize]) -> Range<usize> {
-    let address = offset as i64 + i64::from(base);
-    let mut reach = 0..usize::MAX;
-    for at in code {
-        let word = number(data, *at).unwrap_or(0);
-        // `addiu` adds its half as a signed number, and so reaches 32,768 bytes to either side.
-        let first = match word >> 26 == ADDIU {
-            true => address - i64::from(word as u16 as i16) - 0x8000,
-            false => address & !0xFFFF,
-        };
-        let first = (first - i64::from(base)).max(0) as usize;
-        reach = reach.start.max(first)..reach.end.min(first + 0x10000);
-    }
-    reach
-}
-
 /// A changed string that waits for its place in the room it shares: its name, its offset, the
 /// bytes that were its own with the zero byte that ended it, and its new bytes.
 type Waiting = (String, usize, usize, Vec<u8>);
-
-/// What `share_room` answers: the stretches, the offset each string is put at, or None for one no
-/// stretch had a place for, and the size of the largest piece left unused.
-type Shared = (Vec<Range<usize>>, Vec<Option<usize>>, usize);
-
-/// Where the changed strings that can move are put, of the program's lists or of one menu. They
-/// share the room they had between them: `strings` gives each as its offset, the bytes that were
-/// its own there, the bytes it needs now, both counting the zero byte that ends it, and the
-/// offsets it may be put at. Rooms side by side make one stretch. Each string first goes into its
-/// own stretch, in the order they were in and with no gaps, so that what a stretch has left is in
-/// one piece at its end; a string its stretch has no place for then goes into the first stretch
-/// that has, the longest such string first.
-///
-/// `spare` is room that was no string's, which a menu's module has past its end. It is one more
-/// stretch, the last, and is used when the others have no place.
-fn share_room(strings: &[(usize, usize, usize, Range<usize>)], spare: Option<Range<usize>>) -> Shared {
-    let mut order: Vec<usize> = (0..strings.len()).collect();
-    order.sort_by_key(|index| strings[*index].0);
-    let mut stretches: Vec<Range<usize>> = Vec::new();
-    let mut stretch_of = vec![0; strings.len()];
-    for index in &order {
-        let (offset, room, ..) = strings[*index];
-        match stretches.last_mut() {
-            Some(stretch) if stretch.end == offset => stretch.end += room,
-            _ => stretches.push(offset..offset + room),
-        }
-        stretch_of[*index] = stretches.len() - 1;
-    }
-    stretches.extend(spare.filter(|spare| !spare.is_empty()));
-    let mut free: Vec<usize> = stretches.iter().map(|stretch| stretch.start).collect(); // where each is filled to
-    let mut places = vec![None; strings.len()];
-    let mut left = Vec::new();
-    for index in &order {
-        let (need, stretch) = (strings[*index].2, stretch_of[*index]);
-        if free[stretch] + need <= stretches[stretch].end && strings[*index].3.contains(&free[stretch]) {
-            places[*index] = Some(free[stretch]);
-            free[stretch] += need;
-        } else {
-            left.push(*index);
-        }
-    }
-    left.sort_by_key(|index| (Reverse(strings[*index].2), strings[*index].0));
-    for index in left {
-        let (need, may) = (strings[index].2, &strings[index].3);
-        let fits = |stretch: &usize| free[*stretch] + need <= stretches[*stretch].end && may.contains(&free[*stretch]);
-        if let Some(stretch) = (0..stretches.len()).find(fits) {
-            places[index] = Some(free[stretch]);
-            free[stretch] += need;
-        }
-    }
-    let largest = stretches.iter().zip(&free).map(|(stretch, free)| stretch.end - free).max().unwrap_or(0);
-    (stretches, places, largest)
-}
 
 /// The name a script has in a pack: its member number in the archive.
 pub fn section_name(index: usize) -> String {
