@@ -377,11 +377,12 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
 
 ### G.O.D pure (`god-ps1`)
 
-- Only the dialogue can be changed so far: the sections `096` to `188`, one for each area of the game. The
-  sections `program`, `menu` and `battle` can be extracted and read, and a pack that changes them is refused.
-  Section `battle` is what the bosses say in battle, and the messages that take the place of the battle's
-  own when such a battle starts, is won or is lost; it is shown in the battle's window, 4 lines of 18 smaller
-  cells, where the game goes on to the next line by itself when a line is full.
+- Three kinds of text can be changed: the dialogue, in the sections `096` to `188`, one for each area of the
+  game; the program's own text, in `program` (shops, help pages, the names of items, monsters and places,
+  battle messages); and the labels of the menus, in `menu`. Section `battle` can be extracted and read, and a
+  pack that changes it is refused. It is what the bosses say in battle, and the messages that take the place
+  of the battle's own when such a battle starts, is won or is lost; it is shown in the battle's window, 4
+  lines of 18 smaller cells, where the game goes on to the next line by itself when a line is full.
 - Every character takes the same room, a cell of 14 pixels, and the window shows 4 lines of 16 cells.
   After `{SAY}`, which starts a spoken line and draws its 「, the lines that follow are indented by one
   cell, so a spoken line holds 15. Changed lines are broken at spaces to fit, and a `{WAIT}` is put in
@@ -416,3 +417,23 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   Every other area can grow by more than 27,000 bytes, and half of them by more than 150,000. Two areas
   that lead to each other share their room: what one takes, the other cannot, and an area whose code
   grows past another's can make the door between them need the three copies.
+- The program cannot grow, so the strings of `program` a pack changes share the room they had between them:
+  70,402 bytes if every one changes, a letter, a digit, a space or a kana taking one byte and a kanji two.
+  One may be longer where others are shorter, and strings given the same text are written once, which
+  frees much room, since the game repeats many (the monster book's descriptions above all); but where the
+  code that finds such strings cannot reach one place from all of them, each is written apart, and needs
+  its own bytes. A pack that
+  changes only a few strings has only their room; a string that finds no place is refused, with the bytes
+  each needs.
+- The note on the first string of each part of `program` gives its width and lines: a line is no wider
+  than the widest of the game's own there, a name the game fills in counted as 6 cells, a number as 6 and
+  a word as 8, and changed lines are broken at spaces to fit. A string has no more lines than the game's
+  own, but a shopkeeper's line may have 2, a description in the monster book 5, and the help pages, the
+  chakra lessons and the diary run on. A choice (yes and no, the title screen's menu) stays as wide as the
+  game's own, its box being made for that. A party member's name takes at most 6 characters, as the name
+  entry allows, and 15 bytes, and is written in capitals, since the menus draw it in a font without
+  lowercase letters. The player can still rename the hero, in kana.
+- A label of `menu` stays in its slot: it takes no more bytes than the game left for it, and draws no more
+  characters than the widest label of its screen, 8 in the main menu; ﾞ and ﾟ take a byte but are drawn
+  over the letter before. The menus' font has capitals, digits, punctuation and the kana; lowercase
+  letters are written as capitals.

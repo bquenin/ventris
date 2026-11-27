@@ -1,7 +1,7 @@
 use sha1::{Digest, Sha1};
 
 use crate::adapter::declaration_faults;
-use crate::platforms::mips::{CALL, LUI, ORI};
+use crate::platforms::mips::{ADDIU, CALL, LUI, ORI};
 
 use super::*;
 

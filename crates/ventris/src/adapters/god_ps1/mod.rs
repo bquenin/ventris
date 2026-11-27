@@ -4,7 +4,9 @@
 //! program itself holds (its lists, help pages, battle messages and menus, see `program`), and what
 //! the bosses say in battle (see `battle`): where it is, how it is encoded, and how to write it out
 //! and read it back without loss. The dialogue can be changed, longer than the game's own and with
-//! characters its font lacks (see `insert`); the program's text cannot be yet.
+//! characters its font lacks (see `insert`), and so can the program's text, its strings sharing the
+//! room they had between them, and the menus' labels, each in its slot (see `program`). What the
+//! bosses say cannot be changed yet.
 //!
 //! Where things are. The disc holds one large archive, `GOD.DAT`, with no header of its own. Its
 //! table of contents is in the program the console starts, `SLPS_009.44`, at offset $86F64 of the
@@ -698,8 +700,25 @@ static KINDS: [TextKind; 4] = [
         trial: Some(("096.109", "096.110")),
         ..TextKind::new("dialogue", is_dialogue)
     },
-    TextKind { numbered_by_place: true, ..TextKind::new("program", is_program) },
-    TextKind { numbered_by_place: true, ..TextKind::new("menu", is_menu) },
+    TextKind {
+        insert: true,
+        grow: true,
+        new_characters: true,
+        wrap: true,
+        numbered_by_place: true,
+        limits: program::LIMITS,
+        // A shopkeeper's line, and a longer one of another shop that fits the room of the first.
+        trial: Some(("program.657758", "program.657988")),
+        ..TextKind::new("program", is_program)
+    },
+    TextKind {
+        insert: true,
+        numbered_by_place: true,
+        limits: program::MENU_LIMITS,
+        // The main menu's first label, and its sixth.
+        trial: Some(("menu.687388", "menu.687438")),
+        ..TextKind::new("menu", is_menu)
+    },
     TextKind { numbered_by_place: true, ..TextKind::new("battle", is_battle) },
 ];
 

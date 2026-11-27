@@ -127,6 +127,49 @@ fn wrapping_breaks_lines_at_spaces_and_waits_before_the_window_scrolls() {
     assert_eq!(shown(&written("A\nA\nA{WAIT}\nA\nA\nA", true).unwrap()), "A/A/A|A/A/A");
 }
 
+#[test]
+fn a_string_with_the_character_that_stands_for_a_tag_s_cells_is_refused() {
+    // Without the check, the line breaking took it for a tag's cells and found no tag behind it.
+    let refused = wrap("A\u{E000}A").unwrap_err().to_string();
+    assert!(refused.contains("U+E000"), "{refused}");
+    assert!(wrap("A {NAME:19}\u{E000}").is_err());
+}
+
+/// A changed string of the program's text at `offset` as it is written, the game's own being Ａ.
+fn program_written(text: &str, offset: u32, wrap: bool) -> std::result::Result<Vec<u8>, String> {
+    program_string(text, offset, &hex("a3"), &codes(), &HashMap::new(), wrap).map_err(|error| error.to_string())
+}
+
+#[test]
+fn a_name_of_the_party_has_characters_alone() {
+    let names = program_text::NAMES;
+    assert_eq!(program_written("AA", names, true).unwrap(), hex("a3 a3"));
+    // A kanji, or a mark the menus' font has not got, is refused, though the dialogue's font has it.
+    for (text, char) in [("A日", "日"), ("A~", "~"), ("Ab", "b")] {
+        let refused = program_written(text, names, true).unwrap_err();
+        assert!(refused.starts_with(&format!("it has '{char}', and a name of the party")), "{refused}");
+    }
+    assert_eq!(program_written("ＡＢ", names, true).unwrap(), hex("a3 01 1b"));
+    let refused = program_written("A{HOLD}A", names, true).unwrap_err();
+    assert!(refused.starts_with("it has the tag {HOLD}, and a name of the party"), "{refused}");
+    assert!(refused.ends_with("write the name in characters alone"), "{refused}");
+}
+
+#[test]
+fn a_string_with_too_many_lines_is_told_what_to_do() {
+    // A shopkeeper's line has 2 lines of 13 characters.
+    let shop = program_text::SHOP_LINES[0].0;
+    assert!(program_written("AAAA AAAA AAAA AAAA", shop, true).is_ok());
+    let refused = program_written("AAAA AAAA AAAA AAAA AAAA", shop, true).unwrap_err();
+    assert_eq!(
+        refused,
+        "it has 3 lines, and a string of this part has room for 2: shorten it until, broken at spaces, it has no \
+         more than 2"
+    );
+    let refused = program_written("AAAA\nAAAA\nAAAA", shop, false).unwrap_err();
+    assert!(refused.ends_with(": join its lines, or shorten it, until it has no more than 2"), "{refused}");
+}
+
 /// A text block like the game's: entry 0 a string, entry 1 the same, entry 2 a list of numbers,
 /// entry 3 a string with a byte left over after its zero byte, entry 4 a string, and four zero bytes.
 fn block() -> Vec<u8> {
@@ -313,18 +356,108 @@ fn build_puts_a_longer_line_in_and_moves_its_area_when_it_grows() {
         assert_eq!(text["096"][&110], original["096"][&110]);
         assert!(text["096"][&109].len() > 6000);
     }
-    // Too large for the heap, and the program's own text: refused, and nothing written.
+    // Too large for the heap, and the bosses' speeches in battle: refused, and nothing written.
     fs::remove_file(&out).unwrap();
     let huge = format!("{{SAY}}{}{{/SAY}}", "日".repeat(200_000));
     let refused = build(disc, &pack_of(&[(109, &huge)]), &out, &BuildOptions::default()).err().unwrap().to_string();
     assert!(refused.starts_with("area 096: going into it from area 097, the game would need "), "{refused}");
     assert!(refused.ends_with(" bytes more of its heap than it has room for: shorten some of its changed lines"));
-    let program_text = Pack::of(Script::from([("program".to_string(), BTreeMap::from([(701268, "x".to_string())]))]));
-    let refused = build(disc, &program_text, &out, &BuildOptions::default()).err().unwrap().to_string();
-    assert!(refused.starts_with("the pack changes the program's own text (program.701268)"), "{refused}");
     let speech = Pack::of(Script::from([("battle".to_string(), BTreeMap::from([(0x9_812A, "x".to_string())]))]));
     let refused = build(disc, &speech, &out, &BuildOptions::default()).err().unwrap().to_string();
-    assert!(refused.starts_with("the pack changes the program's own text (battle.622890)"), "{refused}");
+    assert!(refused.starts_with("the pack changes what the bosses say in battle (battle.622890)"), "{refused}");
+    assert!(!out.exists());
+}
+
+/// A pack of strings of the program's text and of the menus' labels.
+fn program_pack(strings: &[(u32, &str)], labels: &[(u32, &str)]) -> Pack {
+    let section = |strings: &[(u32, &str)]| strings.iter().map(|(number, text)| (*number, text.to_string())).collect();
+    Pack::of(Script::from([("program".to_string(), section(strings)), ("menu".to_string(), section(labels))]))
+}
+
+/// The string of the program's text a 32-bit word of the program points at, as script text.
+fn pointed_at(disc: &Disc, word: usize) -> String {
+    let file = program_text::program_file(disc).unwrap();
+    let at = (crate::platforms::mips::number(&file, word).unwrap() - program_text::PROGRAM_BASE) as usize;
+    let length = file[at..].iter().position(|byte| *byte == 0).unwrap();
+    decode(&file[at..at + length], &program(disc).unwrap().codes)
+}
+
+#[test]
+fn build_puts_the_program_s_text_and_the_menus_labels_in() {
+    let Some(image) = game() else { return };
+    let disc = image.ps1_disc().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let out = folder.path().join("built.bin");
+    // Three names of the party, the first longer than its room and the others shorter; the main
+    // menu's first label; a word of the status screen, which a table points at, longer than its room,
+    // and two more given the same text.
+    let pack = program_pack(
+        &[
+            (701264, "GENNAI"),
+            (701287, "DAN"),
+            (701278, "B"),
+            (701611, "Power"),
+            (701640, "Attack"),
+            (701716, "Attack"),
+        ],
+        &[(687388, "Items")],
+    );
+    let built = build(disc, &pack, &out, &BuildOptions::default()).unwrap();
+    assert_eq!(
+        built.summary[1..],
+        [
+            "program:   6 strings changed, 5 of them moved in the room they share, 1 of them the same text as another \
+             and written once",
+            "menu:      1 labels changed, each in its slot",
+        ]
+    );
+    {
+        let copy = Disc::open(&out).unwrap();
+        // The table of the status screen's words, in the program's code, points at the new ones.
+        assert_eq!(pointed_at(&copy, 0x1A40), "Ｐｏｗｅｒ");
+        assert_eq!(pointed_at(&copy, 0x1A40 + 4), pointed_at(disc, 0x1A44));
+        let text = extract(&copy).unwrap();
+        let strings: Vec<&String> = text["program"].values().collect();
+        assert!(strings.contains(&&"ＧＥＮＮＡＩ".to_string()) && strings.contains(&&"ＤＡＮ".to_string()));
+        assert_eq!(strings.iter().filter(|text| ***text == "Ａｔｔａｃｋ").count(), 1);
+        // A lowercase letter is written as the capital the menus' font draws, and the rest of the slot
+        // is zero bytes.
+        let file = program_text::program_file(&copy).unwrap();
+        assert_eq!(file[687388..687398], *b"ITEMS\0\0\0\0\0");
+        assert_eq!(file[687398..687460], program_text::program_file(disc).unwrap()[687398..687460]);
+    }
+    // What does not fit the screen or the room is refused, every string at once, and nothing written.
+    fs::remove_file(&out).unwrap();
+    let pack = program_pack(
+        &[
+            (701264, "Gennai"),                               // a name in lowercase letters
+            (701312, "New game\nContinue"),                   // the title screen's box is 5 characters wide
+            (657748, "Welcome to my humble shop, traveller"), // three lines of 13 where a shopkeeper has two
+            (713338, "Baseball cap"),                         // an item's name has 6 characters
+        ],
+        &[(687398, "Equipment"), (688708, "MESSAGE SPEED")],
+    );
+    let refused = build(disc, &pack, &out, &BuildOptions::default()).err().unwrap().to_string();
+    let lines: Vec<&str> = refused.lines().collect();
+    assert_eq!(lines.len(), 6, "{refused}");
+    assert!(lines[0].starts_with("string program.657748: it has 3 lines, and a string of this part has room for 2"));
+    assert!(lines[1].starts_with("string program.701264: it has 'e', and a name of the party"), "{refused}");
+    assert!(lines[1].ends_with("write it in capitals, digits and kana"));
+    assert_eq!(
+        lines[2],
+        "string program.701312: broken at spaces, it still has a line of 8 characters, and its box, as wide as the \
+         game's own text, has room for 5: shorten its longest word"
+    );
+    assert!(lines[3].starts_with("string program.713338: broken at spaces, it still has a line of 8 characters"));
+    assert_eq!(
+        lines[4],
+        "string menu.687398: it draws 9 characters, and the labels of its screen have room for 8, the most the \
+         game's own take there"
+    );
+    assert!(
+        lines[5]
+            .starts_with("string menu.688708: it draws 13 characters, and the labels of its screen have room for 11")
+    );
     assert!(!out.exists());
 }
 
@@ -357,4 +490,13 @@ fn an_area_the_game_leaves_no_room_for_cannot_grow() {
         "room:      19636 bytes of the heap free at the tightest moment, area 105, going into it from area 107 (the \
          game leaves 19636 at its own)"
     );
+}
+
+#[test]
+fn an_insert_written_by_its_byte_is_measured_as_under_its_name() {
+    // In a shop's line of 13 cells, a word the game fills in takes 8, however it is written.
+    assert_eq!(wrap_to("AAAA AAAA {WORD}", 13).unwrap(), "AAAA AAAA\n{WORD}");
+    assert_eq!(wrap_to("AAAA AAAA {0C:12}", 13).unwrap(), "AAAA AAAA\n{0C:12}");
+    assert_eq!(wrap_to("AAAA AAAA {0C:0D}", 13).unwrap(), "AAAA AAAA\n{0C:0D}");
+    assert_eq!(wrap_to("AAAA AAAA {0C:01}", 13).unwrap(), "AAAA AAAA\n{0C:01}");
 }
