@@ -501,8 +501,9 @@ fn units<'a>(text: &'a str, writing: &Writing) -> Vec<Unit<'a>> {
             let mut through = |last: usize| -> Vec<&'a str> {
                 std::iter::from_fn(|| tags.next_if(|(after, _)| *after <= last).map(|(_, raw)| raw)).collect()
             };
-            match right {
-                Some(right) if !has_cell((left, right)) => match through(2 * index) {
+            // Two spaces are the game's own blank whatever is between them, and take one cell.
+            match (right, Pairs::key(left, right)) {
+                (Some(right), Some(key)) if !has_cell(key) => match through(2 * index) {
                     between if between.is_empty() => out.push(Unit::Pair(left, Some(right))),
                     between => out.push(Unit::Apart(left, between, right)),
                 },

@@ -596,8 +596,12 @@ fn a_pause_inside_a_pair_with_no_cell_stays_between_its_characters() {
     assert_eq!(units("a{PAUSE:14}A{0F:03}", &writing), [Apart('a', vec!["{PAUSE:14}"], 'A'), Text("{0F:03}")]);
     assert_eq!(encode_text("a{PAUSE:14}A", &writing).unwrap(), [hex("a4"), pause.clone(), hex("a3")].concat());
     // A pause after the second character of such a pair is after both.
-    assert_eq!(encode_text("aA{PAUSE:14}", &writing).unwrap(), [hex("a4 a3"), pause].concat());
+    assert_eq!(encode_text("aA{PAUSE:14}", &writing).unwrap(), [hex("a4 a3"), pause.clone()].concat());
     assert_eq!(pairs.counts.borrow()[&('a', 'A')], 2);
+    // Two spaces are the game's blank, one cell with or without a pause between them.
+    assert_eq!(units(" {PAUSE:14} ", &writing), [Pair(' ', Some(' ')), Text("{PAUSE:14}")]);
+    let blank = encode_with(" ", &codes, &|char| writing.code(char)).unwrap();
+    assert_eq!(encode_text(" {PAUSE:14} ", &writing).unwrap(), [blank, pause].concat());
 }
 
 #[test]
