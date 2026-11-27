@@ -1151,12 +1151,10 @@ pub fn caption_cells(text: &str, widths: Option<&BTreeMap<char, usize>>) -> Resu
     let mut run: Vec<char> = Vec::new();
     let mut out = Vec::new();
     let flush = |run: &mut Vec<char>, out: &mut Vec<CaptionCell>| {
-        if run.len() % 2 == 1 {
-            run.push(' ');
-        }
-        for pair in run.chunks(2) {
+        // An odd one at the end of a run goes with a space.
+        for (left, right) in fonts::pair_up(run) {
             // Two spaces are the game's own blank glyph.
-            out.push(match (pair[0], pair[1]) {
+            out.push(match (left, right.unwrap_or(' ')) {
                 (' ', ' ') => CaptionCell::Value(CAPTION_GLYPH_BIAS),
                 (left, right) => CaptionCell::New(CaptionGlyph::Pair(left, right)),
             });
@@ -1251,7 +1249,7 @@ pub struct CaptionBuild {
 /// kanji, or a glyph the character table does not know, which only kanji are.
 fn is_spare_when_unused(glyph: usize) -> bool {
     match TABLE.characters.get(&code_of_glyph(glyph as u32)) {
-        Some(char) => matches!(*char, '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}'),
+        Some(char) => fonts::is_kanji(*char),
         None => true,
     }
 }

@@ -47,14 +47,15 @@
 //! the status screen and the hero's name, each built by code, read from a table, or copied at a new
 //! game.
 //!
-//! A changed string must also fit the screen. Each part of the section has a width, the widest line
-//! of the game's own there, and a number of lines (see `PARTS`); lines are broken at spaces to the
-//! width, and what still does not fit is refused. A few strings are in a box the game made as wide
-//! as its own text, and keep to that (see `OWN_WIDTH`). The party's names are copied into records of
-//! 16 bytes when a new game starts, and the menus draw them in a small font that has no lowercase
-//! letters, so a name has at most 15 bytes and is written in capitals; the name entry gives the
-//! player 6 characters, which the screens that show a name have room for, and which is what the
-//! dialogue counts for a name it fills in.
+//! A changed string must also fit the screen. Each part of the section has a width in cells, the
+//! widest line of the game's own there, and a number of lines (see `PARTS`); lines are broken at
+//! spaces to the width, and what still does not fit is refused. Latin letters go two to a cell here
+//! as in the dialogue (see `insert`). A few strings are in a box the game made as wide as its own
+//! text, and keep to that (see `OWN_WIDTH`). The party's names are copied into records of 16 bytes
+//! when a new game starts, and the menus draw them in a small font that has no lowercase letters,
+//! so a name has at most 15 bytes and is written in capitals, a character to a cell; the name entry
+//! gives the player 6 characters, which the screens that show a name have room for, and which is
+//! what the dialogue counts for a name it fills in.
 //!
 //! A label of the menus stays in its slot, since the code finds it a set number of bytes from the
 //! first of its screen (see `label_room`), and draws no more characters than the widest of the
@@ -98,18 +99,20 @@ const SWITCH: u8 = b'@';
 
 /// What a translator is told about the program's text. The room is what all the section's strings
 /// have between them (see `rooms`), counted by a test.
-pub const LIMITS: &str = "every character takes the same room, and a line takes no more than the note on the first \
-                          string of its part gives, the widest the game's own lines there take, counting a name the \
-                          game fills in as 6 characters, a number as 6 and a word as 8; lines are broken at spaces to \
-                          fit (with wrapping off, a wider one is refused); a string has no more lines than the game's \
-                          own, but a shopkeeper's line may have 2, a description in the monster book 5, and the help \
-                          pages, the chakra lessons and the diary may run on; a choice, such as yes and no, is no \
-                          wider than the game's own, its box being made for that; a name of the party takes at most \
-                          6 characters and 15 bytes, in capitals; the strings a pack changes share the room they had \
-                          between them, \
-                          70,402 bytes if every one changes, where a letter, a digit, a space or a kana takes one byte \
-                          and a kanji two, and strings given the same text are written once, unless the code that \
-                          finds them cannot reach one place from all of them";
+pub const LIMITS: &str = "a line takes no more cells than the note on the first string of its part gives, the widest \
+                          the game's own lines there take; Latin letters, digits, spaces and punctuation go two to a \
+                          cell (a cell each with the build option full-width), and a kana, a kanji or a mark of the \
+                          game's own font takes a cell, counting a name the game fills in as 6 cells, a number as 6 \
+                          and a word as 8; lines are broken at spaces to fit (with wrapping off, a wider one is \
+                          refused); a string has no more lines than the game's own, but a shopkeeper's line may have \
+                          2, a description in the monster book 5, and the help pages, the chakra lessons and the \
+                          diary may run on; a choice, such as yes and no, is no wider than the game's own, its box \
+                          being made for that; a name of the party takes at most 6 characters, a cell each, and 15 \
+                          bytes, in capitals; the strings a pack changes share the room they had between them, 70,402 \
+                          bytes if every one changes, where two letters in a cell take two bytes, as do a letter alone \
+                          in its cell and a kanji, and a kana, or a letter written a cell each, takes one, and strings \
+                          given the same text are written once, unless the code that finds them cannot reach one \
+                          place from all of them";
 
 /// What a translator is told about the menus' labels.
 pub const MENU_LIMITS: &str = "a label stays in its slot, and takes no more bytes than the game left for it there, the \
@@ -253,10 +256,14 @@ impl Part {
             }
         };
         let width = match self.width {
-            1 => "1 character".to_string(),
-            width => format!("{width} characters"),
+            1 => "1 cell".to_string(),
+            width => format!("{width} cells"),
         };
-        format!("Lines are at most {width}, and {lines}.")
+        let pairs = match self.start {
+            NAMES => ", each character taking a cell",
+            _ => ", two Latin letters, digits, spaces or marks to a cell",
+        };
+        format!("Lines are at most {width}{pairs}, and {lines}.")
     }
 }
 
@@ -990,7 +997,7 @@ pub fn note(section: &str, number: Option<u32>) -> Option<String> {
         (PROGRAM_SECTION, None) => Some(
             "The program's own text: what its lists and screens show, written as the dialogue is. A string is \
              named by where it is in the program's file, so the numbers have gaps. A note under the first string \
-             of each part says what the part is and how wide the game's own lines are."
+             of each part says what the part is and how wide the game's own lines are, in cells."
                 .to_string(),
         ),
         (PROGRAM_SECTION, Some(number)) => {
