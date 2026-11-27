@@ -490,8 +490,8 @@ fn build_puts_the_program_s_text_and_the_menus_labels_in() {
     assert_eq!(
         built.summary[1..],
         [
-            "program:   6 strings changed, 5 of them moved in the room they share, 1 of them the same text as another \
-             and written once",
+            "program:   6 strings changed, 5 of them moved in the room they share, taking 26 bytes of its 39, 1 of \
+             them the same text as another and written once",
             "menu:      1 labels changed, each in its slot",
         ]
     );
@@ -670,6 +670,76 @@ fn the_renderer_s_characters_are_written_a_byte_each_in_runs() {
         let refused = encode_text(unfollowed, &writing).unwrap_err().to_string();
         assert!(refused.contains("not followed by a character"), "{unfollowed}: {refused}");
     }
+}
+
+/// A string's bytes with each byte of a run that stands for a pair written as its two characters'.
+fn unpaired(data: &[u8], writing: &Writing, pairs: &Pairs) -> Vec<u8> {
+    let found = pieces(data, writing);
+    let mut out = Vec::new();
+    for ((piece, bytes), run) in found.iter().zip(run_states(&found)) {
+        match pairs.split(bytes[0]) {
+            Some((first, second)) if run && *piece == Piece::Silent => out.extend([first, second]),
+            _ => out.extend(bytes),
+        }
+    }
+    out
+}
+
+#[test]
+fn pairs_are_put_in_the_runs_of_a_string_laid_out_a_byte_a_character() {
+    let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
+    let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
+    let byte = |char: char| renderer.byte(char).unwrap();
+    // A line that ends at the window's edge, whose line break is left out, so its run goes on into
+    // the next line; a name, which ends a run; a kana, which a run's end comes before.
+    let width = |char: char| renderer.width(char).unwrap();
+    let letter = ('a'..='z').find(|char| width(*char) >= 4 && WINDOW_WIDTH.is_multiple_of(width(*char))).unwrap();
+    let full = letter.to_string().repeat(WINDOW_WIDTH / width(letter));
+    let text = format!("{full}\nthe then{{NAME:19}}the あ the");
+    let data = fit(&encode_text(&text, &writing).unwrap(), &writing, true).unwrap();
+    let runs: Vec<Vec<u8>> = run_stretches(&data, &writing).into_iter().map(|run| data[run].to_vec()).collect();
+    let the = [byte('t'), byte('h'), byte('e')];
+    assert_eq!(runs.len(), 3, "{runs:02X?}");
+    assert_eq!(runs[0][runs[0].len() - 8..], [&the[..], &[byte(' ')], &the[..], &[byte('n')]].concat());
+    assert_eq!(runs[1], [&the[..], &[byte(' ')]].concat());
+    assert_eq!(runs[2], [&[byte(' ')][..], &the[..]].concat());
+    let pairs = Pairs::choose(&renderer, &runs);
+    let written = paired(&data, &writing, &pairs);
+    assert!(written.len() < data.len(), "{written:02X?}");
+    // Everything but the runs' bytes is as it was, and each pair stands for its two characters.
+    assert_eq!(unpaired(&written, &writing, &pairs), data);
+    assert_eq!(written.iter().filter(|byte| **byte < 0x10).count(), data.iter().filter(|byte| **byte < 0x10).count());
+    // With no pairs, nothing changes.
+    assert_eq!(paired(&data, &writing, &Pairs::default()), data);
+}
+
+#[test]
+fn a_program_string_read_from_inside_is_not_paired() {
+    let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
+    let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
+    // Two program strings of the same letters; the program also reads the second from its line
+    // break on, so its bytes before it may change only to as many bytes, and the rest not at all.
+    let letters = encode_text("the then the", &writing).unwrap();
+    let kept = vec![0x0D, 0xA2];
+    let inside = [&letters[..], &kept].concat();
+    let room = |inside| program_text::Room { size: 64, tail: Vec::new(), reached: None, inside };
+    let rooms = BTreeMap::from([(0x100, room(None)), (0x200, room(Some((letters.len(), kept.clone()))))]);
+    // Pairs in the second would move what the program reads from inside it.
+    let pairs = Pairs::choose(&renderer, &[letters[1..].to_vec()]);
+    let moved = BTreeMap::from([(0x200, paired(&inside, &writing, &pairs))]);
+    let refused = program_text::write_strings(&[], &rooms, &moved).unwrap_err();
+    assert!(refused.contains("the rest must stay as it is"), "{refused}");
+    // So only the first is paired, and both are written.
+    let mut changed = BTreeMap::from([(0x100, letters.clone()), (0x200, inside.clone())]);
+    let pairs = put_pairs(&mut BTreeMap::new(), &mut changed, &rooms, &writing, &renderer);
+    assert!(!pairs.is_empty());
+    assert!(changed[&0x100].len() < letters.len(), "{:02X?}", changed[&0x100]);
+    assert_eq!(changed[&0x200], inside);
+    assert!(program_text::write_strings(&[], &rooms, &changed).is_ok());
+    // Its runs are not counted for the pairs either: alone, it gives none.
+    let mut alone = BTreeMap::from([(0x200, inside.clone())]);
+    assert_eq!(put_pairs(&mut BTreeMap::new(), &mut alone, &rooms, &writing, &renderer).len(), 0);
+    assert_eq!(alone[&0x200], inside);
 }
 
 #[test]
@@ -898,11 +968,14 @@ fn build_draws_each_character_at_its_own_width_and_installs_the_renderer() {
         "room:      105200 bytes of the heap free at the tightest moment, area 177, in a battle (the game leaves \
          19636 at its own)"
     );
+    let pairs: usize = built.summary[2].split(", and ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
+    assert!(pairs > 0);
     assert_eq!(
         built.summary[2..],
         [format!(
             "renderer:  {characters} characters drawn at their own widths, in cells of kanji no unchanged string \
-             uses, of 275; its code at $801F8000, loaded at start-up from the program's file"
+             uses, of 275, and {pairs} pairs of them written a byte each; its code at $801F8000, loaded at start-up \
+             from the program's file"
         )]
     );
     let copy = Disc::open(&out).unwrap();
@@ -915,13 +988,40 @@ fn build_draws_each_character_at_its_own_width_and_installs_the_renderer() {
     assert!(!line.iter().any(|byte| (0x01..=0x09).contains(byte)));
     let runs = line.iter().filter(|byte| **byte == 0x0A).count();
     assert_eq!(runs, 2 + line.iter().filter(|byte| **byte == 0x0D).count());
+    // Pairs of them a byte each, as the renderer's table in the program says: each byte of a run
+    // stands for a character's code, or two.
+    let (old, new) = (program_text::program_file(disc).unwrap(), program_text::program_file(&copy).unwrap());
+    let code = vwf::PLACEMENT.code_address();
+    let assembly = crate::platforms::asm_mips::assemble(include_str!("../vwf.asm"), &[("CODE", i64::from(code))]);
+    let run_codes = (assembly.unwrap().label("run_codes").unwrap() - code) as usize;
+    let table = exe::offset(&new, vwf::PLACEMENT.room.start, 4).unwrap()
+        + (exe::LOADER_SIZE + exe::FINISH_SIZE) as usize
+        + run_codes;
+    let stands_for = |byte: u8| {
+        let at = table + 4 * usize::from(byte);
+        let second = u16::from_le_bytes([new[at + 2], new[at + 3]]);
+        1 + usize::from(second != 0)
+    };
+    let (mut in_run, mut drawn_in_runs, mut run_bytes) = (false, 0, 0);
+    for (at, byte) in line.iter().enumerate() {
+        match *byte {
+            0x0A => in_run = !in_run,
+            byte if byte < 0x10 => in_run = false,
+            _ if line[at - 1] == 0x0C => {}
+            byte if in_run => (drawn_in_runs, run_bytes) = (drawn_in_runs + stands_for(byte), run_bytes + 1),
+            _ => {}
+        }
+    }
+    // A space became the line break.
     let letters = "Wake up, ".chars().count() + "! It's morning, élan.".chars().count();
-    assert_eq!(line.len(), 1 + runs + letters + 2 + 1);
+    let breaks = line.iter().filter(|byte| **byte == 0x0D).count();
+    assert_eq!(drawn_in_runs + breaks, letters);
+    assert!(run_bytes < drawn_in_runs);
+    assert_eq!(line.len(), 1 + runs + run_bytes + breaks + 2 + 1);
     // The next line is the game's own.
     let own = areas(disc).unwrap();
     assert_eq!(strings[&110], own.iter().find(|area| area.entry == 96).unwrap().strings()[&110]);
     // The program calls the loader from its start-up, and the loader and the code are in its room.
-    let (old, new) = (program_text::program_file(disc).unwrap(), program_text::program_file(&copy).unwrap());
     let at = |address: u32| exe::offset(&new, address, 4).unwrap();
     let word = |data: &[u8], address: u32| u32::from_le_bytes(data[at(address)..at(address) + 4].try_into().unwrap());
     let placement = &vwf::PLACEMENT;

@@ -35,7 +35,17 @@
 //! a window given a new string ($8002492C) is not; the menus' screens keep one for the string they
 //! draw. A letter takes a byte, and a run one more.
 //!
-//! Where the code is. The renderer's code and its tables, under 5 KB, go at $801F8000, the bottom
+//! Two characters a byte. A run's bytes the renderer's characters leave over, from the one after
+//! the last character's up to $FF, each stand for two characters that often follow one another
+//! (`Pairs`), chosen at each build from the runs of the text it writes (`byte_pairs::choose`), so
+//! the same pack always gets the same pairs. A reader that comes to such a byte takes its first
+//! character, notes that the second is to come, and reads the same byte again as the next
+//! character, taking the second (`run_code` in `vwf.asm`). So the two characters are drawn, and a
+//! line ends between them, exactly as if each had a byte of its own, and a build lays out and
+//! measures every string a byte a character before it puts the pairs in (see `insert`): only the
+//! number of bytes changes.
+//!
+//! Where the code is. The renderer's code and its tables, under 6 KB, go at $801F8000, the bottom
 //! of the 32 KB the game leaves for its stack above its heap (the heap ends at $801F8000, the stack
 //! starts at $801FFFF0). Measured in PCSX-Redux from power-on through the opening movie and the
 //! first dialogue, nothing the game runs wrote to $801F8000-$801FDFFF; only the BIOS's start-up,
@@ -48,9 +58,10 @@
 //! is 18 cells by 4, so the grids take at most `GRIDS` bytes more than the game's own while four
 //! windows are open, which the build counts at every moment of every area (see `heap`).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::insert::{Cell, draw_cell, eleven_rows, large_cell, small_cell};
+use crate::byte_pairs::{self, Unit};
 use crate::error::{Error, Result, text_error};
 use crate::fonts::{self, CELL, Glyph};
 use crate::platforms::asm_mips::assemble;
@@ -76,6 +87,8 @@ const OWN: u8 = (SMALL << 4 | LARGE) as u8;
 /// and the first byte a character of a run is written with: the bytes under it end a run.
 pub use super::RUN;
 const FIRST_BYTE: u8 = 0x10;
+/// The bytes of `run_codes` in `vwf.asm` for each byte of a run: two codes of two bytes.
+const RUN_ENTRY: usize = 4;
 
 /// The characters a build draws at their own widths: each one's code, its cell in both fonts, and
 /// its width in pixels, the same in both.
@@ -171,6 +184,11 @@ impl Renderer {
         Ok(())
     }
 
+    /// The bytes of a run that its characters leave over, for pairs.
+    fn spare_bytes(&self) -> Vec<u8> {
+        (usize::from(FIRST_BYTE) + self.len()..=usize::from(u8::MAX)).map(|byte| byte as u8).collect()
+    }
+
     /// The table of widths, by code (see `vwf.asm`).
     fn table(&self) -> Vec<u8> {
         let mut table = vec![OWN; TABLE_CODES];
@@ -180,9 +198,10 @@ impl Renderer {
         table
     }
 
-    /// The changes to the program's file that put the renderer in: its code and table, kept in the
-    /// file and loaded at start-up, and the hooks in the game's code, as offsets in the file.
-    pub fn install(&self, exe: &[u8]) -> Result<Vec<(usize, Vec<u8>)>> {
+    /// The changes to the program's file that put the renderer in, with `pairs`: its code and
+    /// tables, kept in the file and loaded at start-up, and the hooks in the game's code, as offsets
+    /// in the file.
+    pub fn install(&self, exe: &[u8], pairs: &Pairs) -> Result<Vec<(usize, Vec<u8>)>> {
         let code = PLACEMENT.code_address();
         let assembly = assemble(include_str!("vwf.asm"), &[("CODE", i64::from(code))])?;
         let widths = (assembly.label("widths")? - code) as usize;
@@ -192,9 +211,15 @@ impl Renderer {
             if *address == code {
                 let mut bytes = bytes.clone();
                 bytes[widths..widths + TABLE_CODES].copy_from_slice(&self.table());
-                for (byte, cell) in &self.byte_codes {
-                    let at = run_codes + 2 * usize::from(*byte);
-                    bytes[at..at + 2].copy_from_slice(&(*cell as u16).to_le_bytes());
+                let singles = self.byte_codes.iter().map(|(byte, code)| (*byte, *code, 0));
+                let doubles = pairs
+                    .bytes
+                    .iter()
+                    .map(|((first, second), byte)| (*byte, self.byte_codes[first], self.byte_codes[second]));
+                for (byte, first, second) in singles.chain(doubles) {
+                    let at = run_codes + RUN_ENTRY * usize::from(byte);
+                    bytes[at..at + 2].copy_from_slice(&(first as u16).to_le_bytes());
+                    bytes[at + 2..at + 4].copy_from_slice(&(second as u16).to_le_bytes());
                 }
                 patches.extend(exe::install(exe, &PLACEMENT, &bytes)?);
             } else {
@@ -202,6 +227,50 @@ impl Renderer {
             }
         }
         Ok(patches)
+    }
+}
+
+/// The pairs of the renderer's characters written a byte each in a run (see the module's comment).
+#[derive(Default)]
+pub struct Pairs {
+    /// The byte of each pair, by the bytes its two characters have alone.
+    bytes: BTreeMap<(u8, u8), u8>,
+    set: BTreeSet<(u8, u8)>,
+}
+
+impl Pairs {
+    /// The pairs that save the most bytes in `runs`, each run given as the bytes its characters have
+    /// alone, as many as the renderer leaves bytes for.
+    pub fn choose(renderer: &Renderer, runs: &[Vec<u8>]) -> Pairs {
+        let spare = renderer.spare_bytes();
+        let chosen = byte_pairs::choose(runs, spare.len());
+        let bytes: BTreeMap<(u8, u8), u8> = chosen.into_iter().zip(spare).collect();
+        let set = bytes.keys().copied().collect();
+        Pairs { bytes, set }
+    }
+
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// A run, given as the bytes its characters have alone, written with as few bytes as the pairs
+    /// allow.
+    pub fn write(&self, run: &[u8]) -> Vec<u8> {
+        let units = byte_pairs::write(run, &self.set);
+        let byte = |unit: Unit<u8>| match unit {
+            Unit::One(byte) => byte,
+            Unit::Two(first, second) => self.bytes[&(first, second)],
+        };
+        units.into_iter().map(byte).collect()
+    }
+
+    /// The two bytes a byte of a run stands for alone, if it is a pair's.
+    pub fn split(&self, byte: u8) -> Option<(u8, u8)> {
+        self.bytes.iter().find(|(_, pair)| **pair == byte).map(|(characters, _)| *characters)
     }
 }
 
@@ -243,6 +312,23 @@ mod tests {
     }
 
     #[test]
+    fn pairs_take_the_bytes_the_characters_leave_and_write_a_run_in_fewer() {
+        let glyphs = BTreeMap::from([('a', glyph([0; CELL])), ('b', glyph([0; CELL])), ('c', glyph([0; CELL]))]);
+        let renderer = Renderer::new(&glyphs, &[0x2F0, 0x2F1, 0x2F2]).unwrap();
+        let (a, b, c) = (0x10, 0x11, 0x12);
+        let pairs = Pairs::choose(&renderer, &[vec![a, b, a, b, c], vec![c, a]]);
+        // "ab" twice, then "ca"; "bc" lost its b to "ab".
+        assert_eq!(pairs.len(), 2);
+        assert_eq!((pairs.split(0x13), pairs.split(0x14), pairs.split(0x15)), (Some((a, b)), Some((c, a)), None));
+        assert_eq!(pairs.write(&[a, b, a, b, c]), [0x13, 0x13, c]);
+        assert_eq!(pairs.write(&[b, c, a]), [b, 0x14]);
+        // A renderer with as many characters as a run has bytes leaves none for pairs.
+        let all: BTreeMap<char, Glyph> = ('\u{100}'..).take(240).map(|char| (char, glyph([0; CELL]))).collect();
+        let full = Renderer::new(&all, &(0x100..0x1F0).collect::<Vec<u32>>()).unwrap();
+        assert!(Pairs::choose(&full, &[vec![a, b, a, b]]).is_empty());
+    }
+
+    #[test]
     fn a_pack_needing_more_cells_than_are_free_is_refused_with_both_counts() {
         let glyphs = BTreeMap::from([('a', glyph([0; CELL])), ('b', glyph([0; CELL]))]);
         let refused = Renderer::new(&glyphs, &[0x2F0]).err().unwrap().to_string();
@@ -259,11 +345,25 @@ mod tests {
         exe[0x1C..0x20].copy_from_slice(&0xD3000u32.to_le_bytes());
         let hook = exe::offset(&exe, PLACEMENT.hook, 4).unwrap();
         exe[hook..hook + 4].copy_from_slice(&0x0C00_AC13u32.to_le_bytes()); // jal $8002B04C
-        let renderer = Renderer::new(&BTreeMap::from([('a', glyph([0; CELL]))]), &[0x2F0]).unwrap();
-        let patches = renderer.install(&exe).unwrap();
+        let glyphs = BTreeMap::from([('a', glyph([0; CELL])), ('b', glyph([0; CELL]))]);
+        let renderer = Renderer::new(&glyphs, &[0x2F0, 0x2F1]).unwrap();
+        let pairs = Pairs::choose(&renderer, &[vec![0x10, 0x11, 0x11, 0x10]]);
+        let patches = renderer.install(&exe, &pairs).unwrap();
         let room = exe::offset(&exe, PLACEMENT.room.start, 4).unwrap();
         let (_, kept) = patches.iter().find(|(at, _)| *at == room).unwrap();
         assert!(kept.len() as u32 <= PLACEMENT.room.end - PLACEMENT.room.start);
+        // Each byte of a run stands for a character's code and 0, or for a pair's two codes.
+        let code = PLACEMENT.code_address();
+        let assembly = assemble(include_str!("vwf.asm"), &[("CODE", i64::from(code))]).unwrap();
+        let run_codes = (assembly.label("run_codes").unwrap() - code) as usize;
+        let at = |byte: usize| (exe::LOADER_SIZE + exe::FINISH_SIZE) as usize + run_codes + RUN_ENTRY * byte;
+        let entry = |byte: usize| kept[at(byte)..at(byte) + 4].to_vec();
+        assert_eq!(entry(0x10), [0xF0, 0x02, 0, 0]);
+        assert_eq!(entry(0x11), [0xF1, 0x02, 0, 0]);
+        let paired = pairs.write(&[0x10, 0x11]);
+        assert_eq!(paired.len(), 1);
+        assert_eq!(entry(usize::from(paired[0])), [0xF0, 0x02, 0xF1, 0x02]);
+        assert_eq!(entry(0x0F), [0; 4]);
         // The draw routine's move of the pen by 14 pixels is now a call.
         let draw = exe::offset(&exe, 0x8002_5DD0, 4).unwrap();
         let (_, call) = patches.iter().find(|(at, _)| *at == draw).unwrap();

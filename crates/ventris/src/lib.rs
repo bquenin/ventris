@@ -4,7 +4,8 @@
 //! game. `adapter` is the contract every game's code follows; `adapters` holds one module per game.
 //! `platform` is the contract for a console, and `platforms` holds one module per console. The
 //! rest is what adapters share: scripts as files, a pack's manifest, the tag language, fonts and
-//! the few that are built in, wrapping, placement, and under `codecs` the compression schemes games use.
+//! the few that are built in, wrapping, placement, byte pairs (two characters to a byte), and under
+//! `codecs` the compression schemes games use.
 //! `tasks` is what a user does with a game and a pack, for the command line and the app to share,
 //! `refusal` says why a file is not a game it can read, and `archive` reads a game out of the zip
 //! file a collection keeps it in.
@@ -18,6 +19,7 @@
 pub mod adapter;
 pub mod adapters;
 pub mod archive;
+pub mod byte_pairs;
 pub mod codecs;
 pub mod conformance;
 pub mod error;
