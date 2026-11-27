@@ -35,11 +35,19 @@
 ; letter after the name of each of several monsters of a kind goes in the name's run, after a space
 ; (`suffix`).
 ;
-; Given: CODE, where this code goes. Register conventions of the routines below are in their notes;
-; the game's registers that are live at each hook are kept.
+; What the game centres. A few boxes are placed by the number of characters of their text: the shop's
+; title, a name centred on a point, the caption that names an area, the memory card's messages, and
+; the window of event $4A. Text with a run is placed by how wide it is drawn instead (`measure`), and
+; the caption's text is centred in its window (`caption_cells`, `pen_dialogue`).
+;
+; Given: CODE, where this code goes, and CAPTION_GRID, where the caption's grid goes, past what the
+; room can hold. Register conventions of the routines below are in their notes; the game's registers
+; that are live at each hook are kept.
 
 POOL = $80110830        ; the records of the four windows the game opens, $28 bytes each
 POOL_END = $801108D0
+CAPTION = $801058C8     ; the record of the caption that names an area: one line of the dialogue's font
+CAPTION_BYTES = 128     ; its grid: 16 cells wide at most, each four, two bytes a cell
 COLUMNS = 4             ; record: the window's width in cells
 FLAGS = $26             ; record: $0800 for a window of the small font
 COLUMN = $0C            ; record: where the pen is, in cells
@@ -58,13 +66,13 @@ BUFFERS = 200           ; one for each of the four windows the game opens, and o
 
         org CODE
 
-; stride: v0 = how many cells a line of the window at a0 has: four times its width for the four
-; windows the game opens, its width for any other (the one-line window at $801058C8, whose grid
-; is not on the heap). Clobbers at, v1.
+; stride: v0 = how many cells a line of the window at a0 has: four times its width. The game's windows
+; are the four it opens and the caption, at CAPTION, below them, whose grid is ours (`caption_cells`),
+; so a window is taken to be one from CAPTION to POOL_END; any other keeps its width. Clobbers at, v1.
 stride:
         lhu   v0, COLUMNS(a0)
-        lui   at, %hi(POOL)
-        addiu at, at, %lo(POOL)
+        lui   at, %hi(CAPTION)
+        addiu at, at, %lo(CAPTION)
         sltu  at, a0, at
         bnez  at, .done
         lui   v1, %hi(POOL_END)
@@ -81,8 +89,8 @@ stride:
 ; hooks in the routine that starts a new line ($80024858) and the one that clears a window.
 stride_v1:
         lhu   v1, COLUMNS(s0)
-        lui   at, %hi(POOL)
-        addiu at, at, %lo(POOL)
+        lui   at, %hi(CAPTION)
+        addiu at, at, %lo(CAPTION)
         sltu  at, s0, at
         bnez  at, .done
         lui   at, %hi(POOL_END)
@@ -97,8 +105,8 @@ stride_v1:
 
 stride_a2:
         lhu   a2, COLUMNS(s0)
-        lui   at, %hi(POOL)
-        addiu at, at, %lo(POOL)
+        lui   at, %hi(CAPTION)
+        addiu at, at, %lo(CAPTION)
         sltu  at, s0, at
         bnez  at, .done
         lui   at, %hi(POOL_END)
@@ -837,6 +845,229 @@ menu_after:
         jr    ra
         lh    v1, %lo(menu_sum)(at)
 
+; --- what the game centres ---------------------------------------------------------------------
+
+; measure: v0 = how wide the text at a0 is drawn, in pixels of the dialogue's font (a1 = 0) or of the
+; small one: its widest line, a pair of a run as its two characters, and what a $0C puts in as
+; nothing. v0 = 0 for a text with no run, which the callers place by its count, as the game did.
+; Clobbers at, v1, a0, a2, a3, t0, t1, t3, t8.
+measure:
+        move  t8, ra
+        move  v0, zero          ; the widest line
+        move  a2, zero          ; this line
+        move  a3, zero          ; in a run
+        move  t3, zero          ; a run seen
+.next:
+        lbu   t0, 0(a0)
+        addiu a0, a0, 1
+        beqz  t0, .end
+        sltiu at, t0, $10
+        beqz  at, .character
+        xori  at, t0, RUN
+        bnez  at, .control
+        nop
+        xori  a3, a3, 1
+        b     .next
+        li    t3, 1
+.control:                       ; any byte under $10 but RUN ends a run
+        move  a3, zero
+        xori  at, t0, $0D
+        bnez  at, .code
+        sltu  at, v0, a2        ; a new line
+        beqz  at, .line
+        nop
+        move  v0, a2
+.line:
+        b     .next
+        move  a2, zero
+.code:
+        sltiu at, t0, RUN
+        beqz  at, .tag
+        nop
+        lbu   t1, 0(a0)         ; $01 to $09: a code of two bytes
+        addiu a0, a0, 1
+        sll   v1, t0, 8
+        b     .add
+        or    v1, v1, t1
+.tag:                           ; $0C and $0F take the byte after, $0F $00 one more
+        xori  at, t0, $0C
+        beqz  at, .skip
+        xori  at, t0, $0F
+        bnez  at, .next
+        nop
+        lbu   t1, 0(a0)
+        nop
+        bnez  t1, .skip
+        nop
+        addiu a0, a0, 1
+.skip:
+        b     .next
+        addiu a0, a0, 1
+.character:
+        bnez  a3, .run
+        sll   at, t0, 1
+        lui   v1, %hi(OWN_CODES)
+        addu  v1, v1, at
+        b     .add
+        lhu   v1, %lo(OWN_CODES)(v1)
+.run:
+        sll   at, t0, 2
+        lui   t1, %hi(run_codes)
+        addiu t1, t1, %lo(run_codes)
+        addu  t1, t1, at
+        lhu   v1, 2(t1)         ; a pair's second character
+        nop
+        beqz  v1, .first
+        nop
+        jal   .width
+        nop
+        addu  a2, a2, v1
+.first:
+        lhu   v1, 0(t1)
+.add:
+        jal   .width
+        nop
+        b     .next
+        addu  a2, a2, v1
+.end:
+        sltu  at, v0, a2
+        beqz  at, .seen
+        nop
+        move  v0, a2
+.seen:
+        bnez  t3, .done
+        nop
+        move  v0, zero
+.done:
+        jr    t8
+        nop
+.width:                         ; v1 = the width of code v1 in the font a1 says
+        bnez  a1, width_small
+        nop
+        j     width_large
+        nop
+
+; title_small: in place of the game's count of the characters of the text at a0 ($80057B48), where
+; the shop's title and a name centred on a point are placed by 12 pixels a character: v0 = how wide
+; it is drawn, 12 a character for a text with no run.
+title_small:
+        move  t9, ra
+        move  t7, a0
+        jal   measure
+        li    a1, 1
+        bnez  v0, .done
+        nop
+        jal   $80057B48
+        move  a0, t7
+        sll   v1, v0, 1
+        addu  v0, v1, v0
+        sll   v0, v0, 2
+.done:
+        jr    t9
+        nop
+
+; caption_cells: in place of the game's count of the characters of the caption at a0 ($8003340C),
+; which is the window's width in cells: for a text with a run, the cells of 14 pixels it is drawn in,
+; and `caption_pad` half of what it leaves of them, 0 for any other.
+caption_cells:
+        move  t9, ra
+        move  t7, a0
+        jal   measure
+        move  a1, zero
+        lui   at, %hi(caption_pad)
+        bnez  v0, .run
+        sb    zero, %lo(caption_pad)(at)
+        move  a0, t7
+        j     $8003340C
+        move  ra, t9
+.run:
+        addiu v1, v0, LARGE - 1
+        li    t0, LARGE
+        divu  v1, t0
+        mflo  v1
+        sll   t0, v1, 4         ; 14 pixels a cell
+        sll   t1, v1, 1
+        subu  t0, t0, t1
+        subu  t0, t0, v0
+        srl   t0, t0, 1
+        sb    t0, %lo(caption_pad)(at)
+        jr    t9
+        move  v0, v1
+
+; pen_dialogue, pen_zoom: the draw routines at the start of a line of the window at s0, the pen in a3
+; ($80025BFC) or t2 ($80025E30): the window's x, and for the caption `caption_pad` more. Clobber at,
+; v1, a2.
+pen_dialogue:
+        move  a2, ra
+        jal   pad
+        lhu   a3, 0(s0)
+        jr    a2
+        addu  a3, a3, v1
+
+pen_zoom:
+        move  a2, ra
+        jal   pad
+        lhu   t2, 0(s0)
+        jr    a2
+        addu  t2, t2, v1
+
+pad:
+        lui   at, %hi(CAPTION)
+        addiu at, at, %lo(CAPTION)
+        bne   s0, at, .done
+        move  v1, zero
+        lui   at, %hi(caption_pad)
+        lbu   v1, %lo(caption_pad)(at)
+.done:
+        jr    ra
+        nop
+
+; card_width: in place of the game's count of the characters of the longest line of the memory card's
+; message at a0 ($800715EC), which also writes at a1 how many lines it has: v0 = how wide that line
+; is drawn in the small font, 12 a character for a text with no run. The box is that and 16 pixels,
+; in steps of 8, and its sides come out even only for a multiple of 4, as 12 a character always is: so
+; a width is made one.
+card_width:
+        move  t9, ra
+        jal   $800715EC
+        move  t7, a0
+        move  t6, v0
+        move  a0, t7
+        jal   measure
+        li    a1, 1
+        beqz  v0, .own
+        sll   v1, t6, 1
+        addiu v0, v0, 3
+        li    at, -4
+        jr    t9
+        and   v0, v0, at
+.own:
+        addu  v0, v1, t6
+        jr    t9
+        sll   v0, v0, 2
+
+; choice_cells: event $4A ($8001E7EC) opens a window as many cells wide as the longest line of the
+; text at s3 has characters, its right side at a set place. For a text with a run: a2 = the cells of
+; 14 pixels its longest line is drawn in, a0 = 0, and on past the game's count, at $8001E934; for any
+; other, v0 = its first byte, and a0 and a2 = 0, as the game's count starts.
+choice_cells:
+        move  t9, ra
+        move  a0, s3
+        jal   measure
+        move  a1, zero
+        bnez  v0, .run
+        addiu v0, v0, LARGE - 1
+        lbu   v0, 0(s3)
+        move  a0, zero
+        jr    t9
+        move  a2, zero
+.run:
+        li    at, LARGE
+        divu  v0, at
+        mflo  a2
+        j     $8001E934
+        move  a0, zero
+
 menu_width:
         .byte SMALL
 menu_run:
@@ -849,6 +1080,9 @@ menu_sum:
         .align 4
 fmt_line:
         .word 0
+caption_pad:
+        .byte 0
+        .align 4
 
 ; What the build writes: the renderer's character that stands for each of the game's codes of the
 ; same character (a full-width letter, digit or mark), as pairs of codes ended by 0, lowest first;
@@ -989,3 +1223,51 @@ widths:
         nop
         org $80058EC8
         jal   menu_nested
+
+        org $800532F4           ; the shop's title, centred on the screen
+        jal   title_small
+        org $800532FC
+        move  v1, v0
+        nop
+        nop
+        org $800564EC           ; a name centred on a point
+        jal   title_small
+        org $800564F4
+        sra   a0, v0, 1
+        nop
+        nop
+        org $80031F18           ; the caption: its grid
+        lui   a0, %hi(CAPTION_GRID)
+        addiu a0, a0, %lo(CAPTION_GRID)
+        org $80031F28
+        li    a2, CAPTION_BYTES
+        org $80031F54           ; and its width
+        jal   caption_cells
+        org $80031F60
+        lui   v1, %hi(CAPTION_GRID)
+        addiu v1, v1, %lo(CAPTION_GRID)
+        org $80025C54           ; the draw routines: the pen at the start of a line
+        jal   pen_dialogue
+        org $80025F58
+        jal   pen_zoom
+        org $800716B8           ; the memory card's message
+        jal   card_width
+        org $800716C4
+        move  v0, s0
+        nop
+        nop
+        org $800716F0
+        move  v0, s0
+        nop
+        nop
+        org $80071710
+        move  a0, s0
+        nop
+        nop
+        org $80071784
+        move  v0, s0
+        nop
+        nop
+        org $8001E8D0           ; event $4A's window
+        jal   choice_cells
+        move  a2, zero
