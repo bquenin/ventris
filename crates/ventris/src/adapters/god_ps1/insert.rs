@@ -425,13 +425,18 @@ impl Pairs {
         }
     }
 
+    /// One more time a pair has been written.
+    fn count(&self, key: (char, char)) {
+        *self.counts.borrow_mut().entry(key).or_default() += 1;
+    }
+
     /// The bytes a pair is written with: its cell's code, or the characters one by one where it has
     /// no cell. Each pair written is counted.
     fn bytes(&self, left: char, right: Option<char>, writing: &Writing) -> Result<Vec<u8>> {
         let Some(key) = Self::key(left, right) else {
             return encode_with(" ", writing.codes, &|char| writing.code(char));
         };
-        *self.counts.borrow_mut().entry(key).or_default() += 1;
+        self.count(key);
         match &self.cells {
             None => Ok(code_bytes(COUNTING_CODE, writing.codes)),
             Some(cells) => match cells.get(&key) {
@@ -443,35 +448,67 @@ impl Pairs {
             },
         }
     }
+
+    /// The bytes of a pair that has no cell and tags between its two characters: each character in
+    /// a cell of its own and the tags between them, where the pack has them. The pair is counted.
+    fn bytes_apart(&self, left: char, between: &[&str], right: char, writing: &Writing) -> Result<Vec<u8>> {
+        self.count((left, right));
+        let text = format!("{left}{}{right}", between.concat());
+        encode_with(&text, writing.codes, &|char| writing.code(char))
+    }
+
+    /// The characters a pair is written with one to a cell, as `counts` has them: those of each
+    /// pair written that has no cell. The space a character alone at the end of its run is paired
+    /// with is not written, but a space has a code of the game's own anyway.
+    fn written_alone(&self) -> BTreeSet<char> {
+        let counts = self.counts.borrow();
+        let apart = counts.keys().filter(|key| !self.has_cell(**key));
+        apart.flat_map(|(left, right)| [*left, *right]).collect()
+    }
 }
 
-/// A piece of a changed string as pairs are written: text written as it is, or two narrow
-/// characters in a cell, the second absent where the first is alone at the end of its run.
+/// A piece of a changed string as pairs are written: text written as it is; two narrow characters in
+/// a cell, the second absent where the first is alone at the end of its run; or two narrow characters
+/// that have no cell, with tags between them that stay there (see `IN_RUN_TAGS`).
 #[derive(Debug, PartialEq, Eq)]
 enum Unit<'a> {
     Text(&'a str),
     Pair(char, Option<char>),
+    Apart(char, Vec<&'a str>, char),
 }
 
 /// The tags that take no room and leave the reading as it is: a pause and a sound. One of them inside
 /// a run of narrow characters does not end it, and is written after the cell of the character
 /// before it, so that a word with a pause in it ("Sum{PAUSE:14}mer") is not cut by a half-empty cell.
+/// Where two characters that would share a cell find none and are written one to a cell, a tag
+/// between them stays there.
 const IN_RUN_TAGS: [&str; 2] = ["PAUSE", "0F"];
 
 /// A string cut into units: each run of narrow characters paired from its start, and what is between
 /// the runs as text. Anything that is not a narrow character ends a run, but the tags of `IN_RUN_TAGS`.
 fn units<'a>(text: &'a str, writing: &Writing) -> Vec<Unit<'a>> {
     let mut out = Vec::new();
-    // The run's characters, and the tags within it, each after the character of that number.
+    // The run's characters, and the tags within it, each after the character of that number, in order.
     let mut run: Vec<char> = Vec::new();
     let mut within: Vec<(usize, &'a str)> = Vec::new();
     // Where the text not yet in a unit starts, and where the token being read does.
     let (mut start, mut at) = (0, 0);
+    let has_cell = |key: (char, char)| writing.pairs.is_none_or(|pairs| pairs.has_cell(key));
     let pair_up = |run: &mut Vec<char>, within: &mut Vec<(usize, &'a str)>, out: &mut Vec<Unit<'a>>| {
+        let mut tags = within.iter().copied().peekable();
         for (index, (left, right)) in fonts::pair_up(run).into_iter().enumerate() {
-            out.push(Unit::Pair(left, right));
-            let tags = within.iter().filter(|(after, _)| after / 2 == index);
-            out.extend(tags.map(|(_, raw)| Unit::Text(raw)));
+            // The tags after the pair's first character, then those after its second.
+            let mut through = |last: usize| -> Vec<&'a str> {
+                std::iter::from_fn(|| tags.next_if(|(after, _)| *after <= last).map(|(_, raw)| raw)).collect()
+            };
+            match right {
+                Some(right) if !has_cell((left, right)) => match through(2 * index) {
+                    between if between.is_empty() => out.push(Unit::Pair(left, Some(right))),
+                    between => out.push(Unit::Apart(left, between, right)),
+                },
+                _ => out.push(Unit::Pair(left, right)),
+            }
+            out.extend(through(2 * index + 1).into_iter().map(Unit::Text));
         }
         run.clear();
         within.clear();
@@ -516,6 +553,7 @@ fn encode_text(text: &str, writing: &Writing) -> Result<Vec<u8>> {
         match unit {
             Unit::Text(text) => out.extend(encode_with(text, writing.codes, &|char| writing.code(char))?),
             Unit::Pair(left, right) => out.extend(pairs.bytes(left, right, writing)?),
+            Unit::Apart(left, between, right) => out.extend(pairs.bytes_apart(left, &between, right, writing)?),
         }
     }
     Ok(out)
@@ -530,6 +568,7 @@ fn measured_cells(text: &str, writing: &Writing) -> usize {
     let unit_cells = |unit: &Unit| match unit {
         Unit::Text(text) => cells(text),
         Unit::Pair(left, right) => pairs.cells_of(*left, *right),
+        Unit::Apart(..) => 2,
     };
     units(text, writing).iter().map(unit_cells).sum()
 }
@@ -1336,7 +1375,12 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
 
     // The narrow characters, two to a cell (see the module's comment): those the game's font lacks
     // and the pack's font draws narrow, in the dialogue and the program's text but the party's names.
-    // Every changed string is written once to count the pairs it needs, as if each had a cell.
+    // Every changed string is written once to count the pairs it needs, as if each had a cell, and
+    // each character the font lacks as if it had been drawn, so that one a pack's font may not have
+    // does not stop the counting: the strings are refused for it when they are written.
+    let used = plain_characters(&all_texts.concat());
+    let lacking: Vec<char> = used.iter().copied().filter(|char| pack_code(*char, codes, &none).is_none()).collect();
+    let as_if_drawn: HashMap<char, u32> = lacking.iter().map(|char| (*char, COUNTING_CODE)).collect();
     let mut pairs = Pairs::default();
     let mut shapes = BTreeMap::new();
     if !options.switches.contains(FULL_WIDTH) {
@@ -1350,14 +1394,20 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         pairs.narrow = shapes.keys().copied().collect();
     }
     let mut pair_cells = BTreeMap::new();
-    if !pairs.narrow.is_empty() {
-        let writing = Writing { codes, drawn: &none, pairs: Some(&pairs) };
+    let mut free_count = None;
+    let write_all = |pairs: &Pairs| {
+        let writing = Writing { codes, drawn: &as_if_drawn, pairs: Some(pairs) };
         for (_, _, text) in &dialogue {
             let _ = write_dialogue(text, &writing);
         }
         for (_, number, text) in &program_changes {
             let _ = write_program(text, *number, &writing);
         }
+    };
+    // The narrow characters written one to a cell, in the pairs that find no cell.
+    let mut alone = BTreeSet::new();
+    if !pairs.narrow.is_empty() {
+        write_all(&pairs);
         let counts = pairs.counts.take();
         if !counts.is_empty() {
             let file = program_text::program_file(disc)?;
@@ -1371,19 +1421,24 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
             let free: Vec<usize> =
                 free_cells(&file, &kept, &all_texts, codes).into_iter().map(|code| code as usize).collect();
             pair_cells = fonts::assign_most_used(&counts, &free);
-            done.pairs = Some((pair_cells.len(), free.len(), counts.len() - pair_cells.len()));
+            free_count = Some(free.len());
         }
         pairs.cells = Some(pair_cells.iter().map(|(key, code)| (*key, *code as u32)).collect());
+        // Where some pairs find no cell, the strings are written again with the cells there are, as
+        // they will be: a pair with no cell takes two, so lines may break elsewhere and the pairs be
+        // others. Where every pair has a cell, the strings break as they did.
+        if counts.len() > pair_cells.len() {
+            write_all(&pairs);
+            alone = pairs.written_alone();
+            pairs.counts.take();
+        }
     }
-    let short = done.pairs.is_some_and(|(_, _, short)| short > 0);
 
     // The characters the font lacks and that are not paired, drawn into its blank cells. The
-    // program's text is drawn with the same font; the menus' labels are not. Where some pairs found
-    // no cell, a narrow character may be written alone too.
-    let used = plain_characters(&all_texts.concat());
-    let alone = |char: &char| !pairs.narrow.contains(char) || short;
+    // program's text is drawn with the same font; the menus' labels are not. A narrow character is
+    // drawn where a pair it is in has no cell.
     let new: Vec<char> =
-        used.into_iter().filter(|char| pack_code(*char, codes, &none).is_none()).filter(alone).collect();
+        lacking.into_iter().filter(|char| !pairs.narrow.contains(char) || alone.contains(char)).collect();
     let mut drawn = HashMap::new();
     let mut pages: Vec<Vec<u8>> = Vec::new();
     if !new.is_empty() || !pair_cells.is_empty() {
@@ -1475,6 +1530,12 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
                 Err(other) => return Err(other),
             }
         }
+    }
+
+    // How many pairs found a cell, and how many of those the strings were written with did not.
+    if let Some(free) = free_count {
+        let short = pairs.counts.borrow().keys().filter(|key| !pair_cells.contains_key(*key)).count();
+        done.pairs = Some((pair_cells.len(), free, short));
     }
 
     // Each changed area rebuilt, and put where it fits.

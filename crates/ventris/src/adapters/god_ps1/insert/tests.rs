@@ -582,6 +582,25 @@ fn a_pair_is_written_with_its_cell_s_code_or_else_a_character_to_a_cell() {
 }
 
 #[test]
+fn a_pause_inside_a_pair_with_no_cell_stays_between_its_characters() {
+    use Unit::{Apart, Pair, Text};
+    let (codes, none) = (codes(), HashMap::new());
+    let cells = HashMap::from([(('A', 'a'), 0x0384)]);
+    let pairs = Pairs { cells: Some(cells), ..counting() };
+    let writing = Writing { codes: &codes, drawn: &none, pairs: Some(&pairs) };
+    let pause = encode_with("{PAUSE:14}", &codes, &|_| None).unwrap();
+    // A pair with a cell is drawn whole, and the pause comes after it.
+    assert_eq!(units("A{PAUSE:14}a", &writing), [Pair('A', Some('a')), Text("{PAUSE:14}")]);
+    assert_eq!(encode_text("A{PAUSE:14}a", &writing).unwrap(), [hex("03 84"), pause.clone()].concat());
+    // A pair with none is written a character to a cell, the pause between them as the pack has it.
+    assert_eq!(units("a{PAUSE:14}A{0F:03}", &writing), [Apart('a', vec!["{PAUSE:14}"], 'A'), Text("{0F:03}")]);
+    assert_eq!(encode_text("a{PAUSE:14}A", &writing).unwrap(), [hex("a4"), pause.clone(), hex("a3")].concat());
+    // A pause after the second character of such a pair is after both.
+    assert_eq!(encode_text("aA{PAUSE:14}", &writing).unwrap(), [hex("a4 a3"), pause].concat());
+    assert_eq!(pairs.counts.borrow()[&('a', 'A')], 2);
+}
+
+#[test]
 fn with_pairs_a_line_holds_twice_as_many_narrow_characters() {
     // 16 cells hold 32 characters, 15 in a spoken line 30.
     let text = "aaaa bbbb cccc dddd eeee ffff gggg hhhh";
@@ -747,5 +766,75 @@ fn build_draws_two_characters_to_a_cell_in_both_fonts() {
         built.summary[2],
         "pairs:     275 pairs of characters drawn two to a cell, in the cells of kanji no unchanged string uses, of \
          275; 401 more, those written least, are written a character to a cell"
+    );
+}
+
+#[test]
+fn a_character_drawn_whole_does_not_stop_the_pairs_after_it_from_being_counted() {
+    let Some(image) = game() else { return };
+    let disc = image.ps1_disc().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let out = folder.path().join("built.bin");
+    // 한 is 16 pixels wide in unifont, so it is drawn into a blank cell; the two é after it are a pair,
+    // counted although 한 has no code while the pairs are counted.
+    let built = build(disc, &pack_of(&[(109, "{SAY}한éé{/SAY}")]), &out, &BuildOptions::default()).unwrap();
+    assert_eq!(
+        built.summary[2..],
+        [
+            "font:      1 new characters drawn into its blank cells, of 26: 한",
+            "pairs:     1 pairs of characters drawn two to a cell, in the cells of kanji no unchanged string uses, of \
+             275"
+        ]
+    );
+}
+
+/// The first `count` pairs of two capitals, each written twice, in one run: "AAAAABAB…".
+fn capital_pairs(count: usize) -> String {
+    let capitals: Vec<char> = ('A'..='Z').collect();
+    let keys = capitals.iter().flat_map(|one| capitals.iter().map(move |other| (*one, *other)));
+    keys.take(count).flat_map(|(one, other)| [one, other, one, other]).collect()
+}
+
+#[test]
+fn the_pairs_left_without_a_cell_are_counted_as_the_lines_are_broken() {
+    let Some(image) = game() else { return };
+    let disc = image.ps1_disc().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let out = folder.path().join("built.bin");
+    // 300 pairs of capitals, written twice, take every cell. The pairs of the second string, written
+    // once each, have none. Counted as if each had a cell, its words fit on one line and pair as "ab",
+    // " c", "d ", "ef" and so on, 15 pairs; written a character to a cell, they take two lines, the
+    // second starting at "kl", and pair as 14: the 25 pairs of capitals left over and those 14 are
+    // written a character to a cell.
+    let pack = pack_of(&[(109, &capital_pairs(300)), (110, "ab cd ef gh ij kl mn op qr st")]);
+    let built = build(disc, &pack, &out, &BuildOptions::default()).unwrap();
+    assert_eq!(
+        built.summary[2],
+        "pairs:     275 pairs of characters drawn two to a cell, in the cells of kanji no unchanged string uses, of \
+         275; 39 more, those written least, are written a character to a cell"
+    );
+    let copy = Disc::open(&out).unwrap();
+    let new_areas = areas(&copy).unwrap();
+    let strings = new_areas.iter().find(|area| area.entry == 96).unwrap().strings();
+    assert_eq!(strings[&110].iter().filter(|byte| **byte == 0x0D).count(), 1);
+}
+
+#[test]
+fn a_character_whose_pairs_all_have_cells_takes_no_blank_cell() {
+    let Some(image) = game() else { return };
+    let disc = image.ps1_disc().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let out = folder.path().join("built.bin");
+    // 27 accented letters, each in a pair written three times, take cells first, and pairs of capitals,
+    // written twice, the rest; those left over are written with the font's full-width capitals. No
+    // accented letter is written alone, so none needs one of the 26 blank cells.
+    let accented: String = "àáâãäåæçèéêëìíîïñòóôõöøùúûü".chars().flat_map(|char| [char; 6]).collect();
+    assert_eq!(accented.chars().count(), 27 * 6);
+    let pack = pack_of(&[(109, &capital_pairs(300)), (110, &accented)]);
+    let built = build(disc, &pack, &out, &BuildOptions::default()).unwrap();
+    assert_eq!(
+        built.summary[2..],
+        ["pairs:     275 pairs of characters drawn two to a cell, in the cells of kanji no unchanged string uses, of \
+          275; 52 more, those written least, are written a character to a cell"]
     );
 }
