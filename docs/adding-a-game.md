@@ -380,6 +380,13 @@ the menus, with their own 8x8 font, and the captions, a second text system with 
 handled each in their own way. It shows what it takes when the game's own way of drawing text cannot carry
 a translation.
 
+**G.O.D pure, PlayStation ([`god_ps1/mod.rs`](../crates/ventris/src/adapters/god_ps1/mod.rs)).** A game that
+draws each character as a textured quad from a grid of codes, 14 pixels a cell. Its Latin letters are drawn
+at their own widths by a renderer the build adds in MIPS assembly (`vwf.asm`, assembled by
+`platforms::asm_mips`), written a byte a letter in runs, and kept in a zero block of the program's file
+until a loader puts it in memory the game never uses (`platforms::ps1::exe`), which the next PlayStation
+game can reuse. It shows how to add code to a PlayStation program that has no free room and cannot grow.
+
 **Tales of Destiny 2, PlayStation 2 ([`tod2_ps2/mod.rs`](../crates/ventris/src/adapters/tod2_ps2/mod.rs)).** A disc
 with one large archive and many bodies of text inside it, each found and rebuilt its own way: story
 scripts and skits in compressed containers, menus as program modules where strings are found by what

@@ -52,7 +52,7 @@ fn a_door_needs_both_areas_and_three_copies_of_a_code_that_does_not_fit_where_th
     let world = area(0x149C0, 0x1E2FC, &[(0x4_0000, 0x4_0890)], &[155]);
     let large = area(0x248D8, 0x3_9400, &[(0x3000, 0x4_0890), (0x3390, 0x2_0448)], &[177]);
     let areas = BTreeMap::from([(177, world), (155, large)]);
-    let (shortfalls, least) = check(&areas, &BTreeSet::from([155]));
+    let (shortfalls, least) = check(&areas, &BTreeSet::from([155]), 0);
     assert!(shortfalls.is_empty());
     let read = block(0x149C0) + block(0x4_0000) + block(0x248D8);
     assert_eq!(least, Some((room - read, "area 155, going into it from area 177".to_string())));
@@ -61,21 +61,21 @@ fn a_door_needs_both_areas_and_three_copies_of_a_code_that_does_not_fit_where_th
     let small = area(0x8C14, 0x1_9CCC, &[(0x2A00, 0x1_0224)], &[154]);
     let next = area(0x2_0D88, 0x3_9894, &[(0x25F8, 0x4_0890)], &[]);
     let areas = BTreeMap::from([(153, small.clone()), (154, next.clone())]);
-    let (_, least) = check(&areas, &BTreeSet::from([154]));
+    let (_, least) = check(&areas, &BTreeSet::from([154]), 0);
     let three = block(0x8C14) + block(0x2A00) + 3 * block(0x2_0D88) + block(0x3_9894);
     let free = room - three;
     assert_eq!(least, Some((free, "area 154, going into it from area 153".to_string())));
     // Grown so that the copies come closer to the end of the heap than `SPARE`: three times the growth.
     let grow = (free - SPARE) / 3 / 4 * 4 + 4;
     let grown = BTreeMap::from([(153, small), (154, area(0x2_0D88 + grow, 0x3_9894, &next.maps, &[]))]);
-    let (shortfalls, _) = check(&grown, &BTreeSet::from([154]));
+    let (shortfalls, _) = check(&grown, &BTreeSet::from([154]), 0);
     let over = 3 * grow - (free - SPARE);
     assert_eq!(
         shortfalls,
         [Shortfall { area: 154, other: Some(153), moment: "going into it from area 153".into(), over }]
     );
     // Only the moments of the areas that changed are checked.
-    let (shortfalls, least) = check(&grown, &BTreeSet::new());
+    let (shortfalls, least) = check(&grown, &BTreeSet::new(), 0);
     assert!(shortfalls.is_empty() && least.is_none());
 }
 
@@ -85,7 +85,7 @@ fn an_area_the_test_room_alone_leads_to_is_checked_as_if_from_the_worst_area() {
     let test_room = area(0x2_5270, 0x2_C794, &[(0x738, 0)], &[123]);
     let hidden = area(0x1_0000, 0x2_0000, &[(0x1000, 0)], &[]);
     let areas = BTreeMap::from([(177, world), (TEST_ROOM, test_room), (123, hidden)]);
-    let (_, least) = check(&areas, &BTreeSet::from([123]));
+    let (_, least) = check(&areas, &BTreeSet::from([123]), 0);
     assert_eq!(least.unwrap().1, "area 123, going into it from area 177");
 }
 
@@ -97,7 +97,7 @@ fn with_no_door_known_into_an_area_the_worst_door_is_not_always_from_the_largest
     let small = area(0x8C14, 0x1_9CCC, &[(0x2A00, 0x1_0224)], &[]);
     let hidden = area(0x2_0000, 0x5_0000, &[(0x1000, 0)], &[]);
     let areas = BTreeMap::from([(177, world), (153, small), (123, hidden)]);
-    let (shortfalls, _) = check(&areas, &BTreeSet::from([123]));
+    let (shortfalls, _) = check(&areas, &BTreeSet::from([123]), 0);
     let used = block(0x8C14) + block(0x2A00) + 3 * block(0x2_0000) + block(0x5_0000);
     assert_eq!(
         shortfalls,
@@ -120,7 +120,7 @@ fn the_game_leaves_itself_the_least_room_going_into_area_105_from_area_107() {
     // As measured in the emulator, the three copies of area 105's code going into it from area 107
     // leave 19,636 bytes free; every other moment of every area leaves more.
     let every: BTreeSet<usize> = areas.keys().copied().collect();
-    let (shortfalls, least) = check(&areas, &every);
+    let (shortfalls, least) = check(&areas, &every, 0);
     assert!(shortfalls.is_empty(), "{shortfalls:?}");
     assert_eq!(least, Some((SPARE, "area 105, going into it from area 107".to_string())));
     assert_eq!(areas[&177].maps, [(0x4_0000, 0x4_0890)]);

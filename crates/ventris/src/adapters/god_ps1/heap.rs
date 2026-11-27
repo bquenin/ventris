@@ -244,10 +244,12 @@ fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Opt
 
 /// The moments of the areas in `changed` at which they would leave less of the heap free than
 /// `SPARE`, and the least that any of their moments leaves free, with what that moment is. `areas`
-/// is every area, by entry, as the build would have them.
+/// is every area, by entry, as the build would have them; `reserve` is what the build takes of the
+/// heap at every moment besides, such as the larger grids of the windows' text (see `vwf`).
 pub fn check(
     areas: &BTreeMap<usize, Footprint>,
     changed: &BTreeSet<usize>,
+    reserve: usize,
 ) -> (Vec<Shortfall>, Option<(usize, String)>) {
     let mut shortfalls = Vec::new();
     let mut least: Option<(usize, String)> = None;
@@ -256,6 +258,7 @@ pub fn check(
             continue;
         }
         for (moment, other, used) in moments(areas, entry) {
+            let used = used + reserve;
             let free = (ROOM + SPARE).saturating_sub(used);
             if least.as_ref().is_none_or(|(least, _)| free < *least) {
                 least = Some((free, format!("area {entry:03}, {moment}")));

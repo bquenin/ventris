@@ -25,20 +25,40 @@ pub fn wrap_lines(
 ) -> Result<String> {
     let mut pieces = Vec::new();
     for line in text.split('\n') {
-        wrap_line(line, advance, limit, tag_width, page_tags, &mut pieces)?;
+        wrap_line(line, advance, limit, tag_width, page_tags, false, &mut pieces)?;
     }
     Ok(pieces.join("\n"))
 }
 
-/// Break one line, adding what it becomes to `pieces`.
+/// The same, but a character goes on a line only where it ends within `limit`, for a game that draws
+/// a character wherever its pen is and starts a new line only once one is full, so that a character
+/// that does not fit would be drawn past the box's edge.
+pub fn wrap_lines_within(
+    text: &str,
+    advance: &dyn Fn(char) -> Result<usize>,
+    limit: usize,
+    tag_width: &dyn Fn(&str, Option<&str>) -> usize,
+    page_tags: &[&str],
+) -> Result<String> {
+    let mut pieces = Vec::new();
+    for line in text.split('\n') {
+        wrap_line(line, advance, limit, tag_width, page_tags, true, &mut pieces)?;
+    }
+    Ok(pieces.join("\n"))
+}
+
+/// Break one line, adding what it becomes to `pieces`. With `within`, a character must end within
+/// `limit`; without, it may start anywhere left of it.
 fn wrap_line<'a>(
     line: &'a str,
     advance: &dyn Fn(char) -> Result<usize>,
     limit: usize,
     tag_width: &dyn Fn(&str, Option<&str>) -> usize,
     page_tags: &[&str],
+    within: bool,
     pieces: &mut Vec<&'a str>,
 ) -> Result<()> {
+    let past = |width: usize, step: usize| if within { width + step > limit } else { width >= limit };
     let mut start = 0; // where the piece being measured begins
     let mut width = 0; // its width so far
     let mut space = None; // position of its last space, the place it can be broken
@@ -60,7 +80,8 @@ fn wrap_line<'a>(
             continue;
         }
         if char == ' ' {
-            if width >= limit {
+            let step = advance(char)?;
+            if past(width, step) {
                 // the space itself falls off the end: break here
                 pieces.push(&line[start..position]);
                 start = position + 1;
@@ -69,12 +90,13 @@ fn wrap_line<'a>(
             } else {
                 space = Some(position);
                 after_space = 0;
-                width += advance(char)?;
+                width += step;
             }
             position += 1;
             continue;
         }
-        if width >= limit
+        let step = advance(char)?;
+        if past(width, step)
             && let Some(at) = space
         {
             pieces.push(&line[start..at]);
@@ -82,7 +104,6 @@ fn wrap_line<'a>(
             width = after_space;
             space = None;
         }
-        let step = advance(char)?;
         width += step;
         after_space += step;
         position += char.len_utf8();
@@ -118,6 +139,22 @@ mod tests {
         assert_eq!(wrap("aa bb\n", 50, &[]), "aa bb\n");
         // Characters of more than one byte are measured one by one, like any other.
         assert_eq!(wrap("ああ いい うう ええ", 50, &[]), "ああ いい\nうう ええ");
+    }
+
+    #[test]
+    fn within_a_character_must_end_inside_the_line() {
+        let within = |text: &str, limit: usize, step: usize| {
+            wrap_lines_within(text, &|_| Ok(step), limit, &|_, _| 0, PAGE_TAGS).unwrap()
+        };
+        // Five characters of 10 end at 50 exactly, the line's end; a space after them falls off it.
+        assert_eq!(within("aaaaa bb", 50, 10), "aaaaa\nbb");
+        assert_eq!(within("aa bb cc", 50, 10), "aa bb\ncc");
+        // Characters of 12: four end at 48, and a fifth would end at 60, past the line's end, where
+        // without `within` it may start, at 48, and run past it.
+        assert_eq!(within("aaa a", 50, 12), "aaa\na");
+        assert_eq!(wrap_lines("aaa a", &|_| Ok(12), 50, &|_, _| 0, PAGE_TAGS).unwrap(), "aaa a");
+        // A line with no space in it is left alone, as without.
+        assert_eq!(within("aaaaaaa", 50, 10), "aaaaaaa");
     }
 
     #[test]

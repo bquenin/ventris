@@ -840,6 +840,7 @@ impl Platform for Ps1 {
     }
 }
 
+pub mod exe;
 pub mod tim;
 
 #[cfg(test)]

@@ -48,57 +48,49 @@
 //! much of the heap free as the game itself does at its tightest (see `heap`).
 //!
 //! How a string is fitted to the window (`fit`). The dialogue's window is 16 cells wide and 4 lines
-//! high, and every code takes one cell. A spoken line starts with 「 in the first cell, and the
-//! lines that follow it start one cell in, so they hold 15 cells. The game draws a character
-//! and, when that fills the line, starts the next line at once; when the window is full, a new line
+//! high, 224 pixels across, a glyph of the game's being 14. A spoken line starts with 「, and the lines
+//! that follow it start under its first character, 14 pixels in. The game draws a character and,
+//! when that fills the line, starts the next line at once; when the window is full, a new line
 //! scrolls the others up, without waiting. So a line that fills the window followed by a line break
 //! would leave an empty line, and the line break is left out; a `{WAIT}` there is written as
-//! `{HOLD}`, which waits without starting a line. With wrapping on, the text is broken at spaces to
-//! fit, and a `{WAIT}` is put where the window would scroll before the player has read it all: in
-//! place of the last line break before that point, or else before the character that would fill the
-//! window. With wrapping off a line longer than the window is refused. Strings the pack does not
-//! change keep the game's bytes, and are not fitted again.
+//! `{HOLD}`, which waits without starting a line. A line is measured in pixels, each character at the
+//! width it is drawn (see below), and a character that would run past the window's edge is refused,
+//! since the game would draw it there. With wrapping on, the text is broken at spaces to fit
+//! (`wrap_to`), and a `{WAIT}` is put where the window would scroll before the player has read it
+//! all: in place of the last line break before that point, or else before the character that would
+//! fill the window. With wrapping off a line wider than the window is refused. Strings the pack does
+//! not change keep the game's bytes, and are not fitted again.
 //!
-//! Two characters to a cell (`Pairs`). A cell is 16 pixels wide, of which the game draws 14, and a
-//! Latin letter needs half of that. So in the changed strings of the dialogue and of the program's
-//! text (but the party's names, which the menus draw too, from records of their own), the narrow
-//! characters, those the game's font lacks and the pack's font draws 8 pixels wide (letters, digits,
-//! a space, punctuation, accented letters), go two to a cell: every pair of them that the pack writes
-//! side by side is a glyph of its own, drawn from Unifont, each character in 7 of the cell's 14
-//! columns with its last one empty (`fonts::narrowed`), the narrowest marks set close to the letter
-//! before them (`CLOSE_UP`). A run of them is paired from its start, and ends at anything else: a
-//! tag, a line break, a character of the game's own font; but a pause or a sound inside a word does
-//! not end it, and is written after the cell of the character before it (`IN_RUN_TAGS`). An odd one
-//! at the end of a run has a cell to itself, drawn in its left half, and two spaces are the game's
-//! own blank. A pair's cell is written as a kanji is, in two bytes, so two letters take the bytes two
-//! full-width letters took, on half the screen.
+//! Characters at their own widths (see `vwf`). In the changed strings of the dialogue and of the
+//! program's text (but the party's names, which the menus draw too, from records of their own), the
+//! characters the game's font lacks and the pack's font draws 8 pixels wide (letters, digits, a space,
+//! punctuation, accented letters) are drawn each at its own width by a renderer the build puts into
+//! the game, a cell of the font each, from Unifont unless the build is given another font. They are
+//! written a byte each, in runs (`encode_text`): the byte $0A starts a run, and ends it where a
+//! character of the game's own font follows; a line break or a tag ends it anyway. So a letter takes
+//! one byte, and each run one more. The build switch `full-width` writes every character a cell,
+//! as the game's own text does, and puts no renderer in.
 //!
 //! The font is drawn twice: in glyphs of 16 by 16 pixels, members 0 and 1, which the dialogue's
 //! window draws, and in glyphs of 12 by 11, member 2, by the same codes, which the battle's window and
 //! the screens of the main menu draw the program's text with (see `FONT_MEMBERS`). A new glyph is drawn
-//! into both. In the small font each character of a pair has 6 columns and 11 rows, Unifont's 16 rows
-//! being brought down to them (`eleven_rows`).
+//! into both, Unifont's 16 rows brought down to 11 for the small one (`eleven_rows`).
 //!
-//! The cells pairs are drawn in are those of kanji that no string the pack leaves as it is uses
-//! (`free_cells`): not those of the game's other characters, kana, digits, Latin letters,
-//! punctuation, which the program also draws itself, the 「 of a spoken line, a number, a name. A
-//! full translation frees most of the font's 1,516 kanji, and the game's own text leaves 275 of them
-//! unused. If a pack needs more pairs than there are such cells, those it writes most get cells and
-//! the others are written a character to a cell, as without pairs; the build says how many. Since
-//! where a line breaks decides which characters are paired, lines are broken counting a narrow
-//! character as half a cell, then measured as they will be drawn, and broken narrower where a line
-//! comes out too wide. The build switch `full-width` writes every character a cell, as the game's own.
+//! The cells the renderer's characters are drawn in are those of kanji that no string the pack leaves
+//! as it is uses (`free_cells`): not those of the game's other characters, kana, digits, Latin
+//! letters, punctuation, which the program also draws itself, the 「 of a spoken line, a number, a
+//! name. A full translation frees most of the font's 1,516 kanji, and the game's own text leaves 275
+//! of them unused; a pack needs about a hundred. One that needs more than there are is refused.
 //!
-//! Characters. Without pairs, a pack's letters, digits and punctuation in ASCII are written with the
-//! font's full-width forms of them, which are what the game uses (Ａ, ａ, ０, ！, ？, ．…), and a space
-//! with the blank the game puts between words. A character the font does not have, and that is not
-//! paired, is drawn into one of the font's 26 blank cells (`BLANK_CODES`), from Unifont unless the
-//! build is given another font: each cell is one bit of the 4-bit pictures that are the font (see the
-//! module above), so only that bit of its pixels is written, and the other three fonts are left as
-//! they were. A pair is drawn the same way, over the kanji that was in its cell. The font is loaded
-//! when the game starts.
+//! Characters. Without the renderer, a pack's letters, digits and punctuation in ASCII are written
+//! with the font's full-width forms of them, which are what the game uses (Ａ, ａ, ０, ！, ？, ．…), and
+//! a space with the blank the game puts between words. A character the font does not have, and that
+//! the renderer does not draw (one 16 pixels wide in the pack's font), is drawn into one of the font's
+//! 26 blank cells (`BLANK_CODES`): each cell is one bit of the 4-bit pictures that are the font (see
+//! the module above), so only that bit of its pixels is written, and the other three fonts are left
+//! as they were. The renderer's characters are drawn the same way, over the kanji that was in their
+//! cells. The font is loaded when the game starts.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
@@ -106,15 +98,14 @@ use std::sync::Arc;
 use super::battle::{BATTLE_SECTION, BattleText, battle_text};
 use super::heap::{self, Footprint, SPARE, Shortfall};
 use super::program::{self as program_text, Lines, MENU_SECTION, PROGRAM_SECTION, ProgramText};
+use super::vwf::{self, Renderer};
 use super::{
     ARCHIVE, AREA_HEADER, AREAS, Area, ByteCodes, CONTENTS, Entry, FIRST_CODE, FONT_PAGES, GLYPH_COUNT, GLYPH_SIZE,
-    NAME_INSERTS, PROGRAM, TABLE, WORD_INSERT, areas, code_bytes, code_of, decode, encode_with, member, program,
-    text_block, word,
+    NAME_INSERTS, PROGRAM, TABLE, WORD_INSERT, areas, code_of, decode, encode_with, member, program, text_block, word,
 };
 use crate::adapter::{BuildOptions, Built};
 use crate::error::{Error, Result, text_error};
 use crate::fonts::{self, CELL, Font, Glyph};
-use crate::layout;
 use crate::platforms::ps1::{self, Disc, tim};
 use crate::script::{Pack, changes_by_place, string_name};
 use crate::text::{Token, from_hex, plain_characters, quoted, tokens};
@@ -131,6 +122,10 @@ const SECTOR: usize = ps1::SECTOR as usize;
 /// The dialogue's window: cells across, lines down.
 pub const COLUMNS: usize = 16;
 pub const ROWS: usize = 4;
+/// Its width in pixels, a glyph of the game's being 14 wide, and the cells a line of its grid has
+/// with the renderer (see `vwf`); without it, a line is full at 16 glyphs, before that many.
+pub const WINDOW_WIDTH: usize = COLUMNS * vwf::LARGE;
+const LINE_CELLS: usize = COLUMNS * vwf::CELLS_PER_COLUMN;
 /// The cells counted, when fitting a line, for what the game fills in: a name, a number, a word from
 /// its list. The longest name the game lets the player give was not measured; those it gives are at
 /// most 5 characters long.
@@ -152,8 +147,6 @@ pub const FONTS: &[&str] = &["unifont"];
 /// The game draws 14 columns and 15 rows of a glyph's cell. A glyph 8 pixels wide is put this far
 /// in, so that it is in the middle of what is drawn, as the game's own letters are.
 const NARROW_LEFT: usize = 3;
-/// The columns of a cell each of two narrow characters takes: half of the 14 the game draws.
-const HALF: usize = 7;
 /// The font is drawn twice. Members 0 and 1 are its glyphs of 16 by 16 pixels, which the dialogue's
 /// window draws; member 2 holds the same glyphs, by the same codes, in 12 by 11 pixels, for the
 /// battle's window and the screens of the main menu, which draw the program's text with it. So a
@@ -173,23 +166,22 @@ pub const FULL_WIDTH: &str = "full-width";
 pub const SWITCHES: [(&str, &str); 1] = [(
     FULL_WIDTH,
     "write Latin letters, digits and punctuation a cell each, with the font's full-width glyphs as the game's own \
-     text does, instead of two to a cell",
+     text does, instead of each at its own width",
 )];
-/// What a pair is written with while the pairs a pack needs are counted: a code of two bytes, as
-/// the pair's own will be.
-const COUNTING_CODE: u32 = 0x08FF;
 
 /// What a translator is told about the dialogue.
-pub const LIMITS: &str = "the window shows 4 lines of 16 cells, 15 in a spoken line ({SAY}); Latin letters, digits, \
-                          spaces and punctuation go two to a cell, so a line holds about 30 of them (a cell each with \
-                          the build option full-width), and a kana, a kanji or a mark of the game's own font takes a \
-                          cell; lines are broken at spaces, and a {WAIT} is put in where the window would fill, \
-                          counting a name the game fills in as 6 cells, a number as 6 and a word as 8 (with wrapping \
-                          off, a line longer than the window is refused); an area's code, its text included, can \
-                          grow only as far as the game's heap has room for when the player goes through a door into \
-                          or out of the area, loads one of its maps or fights in it: not at all for areas 105 and \
-                          107, a few thousand bytes for areas 131, 154, 157 and 179, and over 150,000 for half of the \
-                          areas (docs/packs.md lists the tightest)";
+pub const LIMITS: &str = "the window shows 4 lines of 224 pixels, 210 in a spoken line ({SAY}); Latin letters, \
+                          digits, spaces and punctuation are each drawn at their own width, from 2 to 9 pixels and 4 \
+                          for a space, so a line holds about 35 of them (14 pixels each with the build option \
+                          full-width), and a kana, a kanji or a mark of the game's own font takes 14; lines are \
+                          broken at spaces, and a {WAIT} is put in where the window would fill, counting a name the \
+                          game fills in as 84 pixels, a number as 84 and a word as 112 (with wrapping off, a line \
+                          wider than the window is refused); an area's code, its text included, can grow only as far \
+                          as the game's heap has room for when the player goes through a door into or out of the \
+                          area, loads one of its maps or fights in it: not at all for areas 105 and 107, a few \
+                          thousand bytes for areas 131, 154, 157 and 179, and over 150,000 for half of the areas \
+                          (docs/packs.md lists the tightest); a letter drawn at its own width takes two bytes, a \
+                          kana one";
 
 // --- characters ------------------------------------------------------------
 
@@ -217,7 +209,7 @@ fn pack_code(char: char, codes: &ByteCodes, drawn: &HashMap<char, u32>) -> Optio
 /// Where a code's glyph is in one of the font's pictures: which picture of `pages` (see
 /// `FONT_MEMBERS`), the bit of each pixel that is its font, and its cell's top left corner and size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Cell {
+pub(super) struct Cell {
     page: usize,
     plane: usize,
     x: usize,
@@ -227,7 +219,7 @@ struct Cell {
 }
 
 /// A code's cell in the font of 16 by 16 pixels, members 0 and 1 (see the module above).
-fn large_cell(code: u32) -> Cell {
+pub(super) fn large_cell(code: u32) -> Cell {
     let index = (code - FIRST_CODE) as usize;
     let (plane, column, row) = ((index >> 8) & 3, index & 0xF, (index >> 4) & 0xF);
     Cell { page: index / 0x400, plane, x: column * GLYPH_SIZE, y: row * GLYPH_SIZE, width: CELL, height: CELL }
@@ -236,7 +228,7 @@ fn large_cell(code: u32) -> Cell {
 /// A code's cell in the font of 12 by 11 pixels, member 2, if it has one: glyph `n` of it, `n` being
 /// the code less $100, is in the bit `n / 483`, and at place `r = n % 483` of that bit's picture, 21
 /// cells to a row (the routine at $80058828 works it out so).
-fn small_cell(code: u32) -> Option<Cell> {
+pub(super) fn small_cell(code: u32) -> Option<Cell> {
     let index = (code - FIRST_CODE) as usize;
     let (plane, place) = (index / SMALL_PER_PLANE, index % SMALL_PER_PLANE);
     let (x, y) = (place % SMALL_COLUMNS * SMALL_WIDTH, place / SMALL_COLUMNS * SMALL_HEIGHT);
@@ -247,7 +239,7 @@ fn small_cell(code: u32) -> Option<Cell> {
 /// the archive has them), in the bit of each pixel that is the cell's font: the other three fonts
 /// in the same pixels are left as they were. With `over`, what the cell held is cleared first;
 /// without, it fails if the cell is not blank, so that no glyph of the game is drawn over unasked.
-fn draw_cell(pages: &mut [Vec<u8>], cell: Cell, rows: &[u16], over: bool, code: u32) -> Result<()> {
+pub(super) fn draw_cell(pages: &mut [Vec<u8>], cell: Cell, rows: &[u16], over: bool, code: u32) -> Result<()> {
     let page = &mut pages[cell.page];
     let picture = tim::read(page)?;
     if picture.depth != 4 || picture.width < 16 * GLYPH_SIZE || picture.height < 16 * GLYPH_SIZE {
@@ -292,64 +284,12 @@ fn draw_glyph(pages: &mut [Vec<u8>], code: u32, glyph: &Glyph) -> Result<()> {
     Ok(())
 }
 
-/// Draw a pair of narrow characters into the cells of a code in both fonts, over the kanji there.
-fn draw_pair(pages: &mut [Vec<u8>], code: u32, left: char, right: char, shapes: &BTreeMap<char, Glyph>) -> Result<()> {
-    draw_cell(pages, large_cell(code), &pair_rows(left, right, shapes), true, code)?;
-    if let Some(cell) = small_cell(code) {
-        draw_cell(pages, cell, &small_pair_rows(left, right, shapes), true, code)?;
-    }
-    Ok(())
-}
-
-/// A narrow character fitted to `width` columns (`fonts::narrowed`), its narrowest marks moved to
-/// the left (see `CLOSE_UP`).
-fn fitted(char: char, glyph: &Glyph, width: usize) -> [u16; CELL] {
-    let rows = fonts::narrowed(glyph, width);
-    let ink = rows.iter().fold(0, |ink, row| ink | row);
-    match CLOSE_UP.contains(char) && ink.leading_zeros() > 1 {
-        true => rows.map(|row| row << (ink.leading_zeros() - 1)),
-        false => rows,
-    }
-}
-
-/// The rows of a narrow character in half a cell of the large font, `HALF` columns wide at the left
-/// (`fitted`), and one row up, since the game leaves a cell's bottom row out and Unifont's two bottom
-/// rows hold descenders. The first empty row goes, which is the top one for most letters and, for a
-/// capital with an accent in the top row (É), the one between the accent and the letter, so that
-/// every letter stands on the same line.
-fn half_rows(char: char, glyph: &Glyph) -> [u16; CELL] {
-    let rows = fitted(char, glyph, HALF);
-    let Some(empty) = rows.iter().position(|row| *row == 0) else { return rows };
-    std::array::from_fn(|y| if y < empty { rows[y] } else { rows.get(y + 1).copied().unwrap_or(0) })
-}
-
-/// Unifont puts its narrowest marks in the middle of their cell, which at this size reads as a space
-/// before them ("time ."); these start one column in, close to the letter before.
-const CLOSE_UP: &str = ".,:;!";
-
-/// The glyph of a pair in the large font: the first character in the left half of the 14 columns
-/// the game draws, the second in the right half. `shapes` are the narrow characters' glyphs.
-fn pair_rows(left: char, right: char, shapes: &BTreeMap<char, Glyph>) -> [u16; CELL] {
-    let half = |char: char| shapes.get(&char).map_or([0; CELL], |glyph| half_rows(char, glyph));
-    let (left, right) = (half(left), half(right));
-    std::array::from_fn(|y| left[y] | right[y] >> HALF)
-}
-
-/// The glyph of a pair in the small font: each character in 6 of the 12 columns, and in 11 rows.
-fn small_pair_rows(left: char, right: char, shapes: &BTreeMap<char, Glyph>) -> [u16; SMALL_HEIGHT] {
-    let half = |char: char| {
-        shapes.get(&char).map_or([0; SMALL_HEIGHT], |glyph| eleven_rows(&fitted(char, glyph, SMALL_WIDTH / 2)))
-    };
-    let (left, right) = (half(left), half(right));
-    std::array::from_fn(|y| left[y] | right[y] >> (SMALL_WIDTH / 2))
-}
-
 /// A Unifont glyph's 16 rows brought down to the small font's 11, keeping where letters stand and
 /// how tall the small letters are the same in every glyph: of the rows above the small letters
 /// (0 to 5) four go, and of theirs (6 to 13) one; the two rows of descenders stay. In each part the
 /// rows that go are the empty ones first, from the top, then those the same as the row below, the
 /// middlemost first, so that what a letter is made of stays: its crossbar, its bowl, its dots.
-fn eleven_rows(rows: &[u16; CELL]) -> [u16; SMALL_HEIGHT] {
+pub(super) fn eleven_rows(rows: &[u16; CELL]) -> [u16; SMALL_HEIGHT] {
     let gone = |range: std::ops::Range<usize>, count: usize| -> Vec<usize> {
         let middle = (range.start + range.end - 1) as f64 / 2.0;
         let mut by_middle: Vec<usize> = range.clone().collect();
@@ -370,7 +310,25 @@ fn eleven_rows(rows: &[u16; CELL]) -> [u16; SMALL_HEIGHT] {
     std::array::from_fn(|_| kept.next().unwrap_or(0))
 }
 
-// --- two characters to a cell ----------------------------------------------
+// --- how characters are written and measured --------------------------------
+
+/// Which of the game's two fonts a piece of text is measured for: the dialogue's, whose glyphs are
+/// 14 pixels wide, or the small one, whose glyphs are 12.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Face {
+    Large,
+    Small,
+}
+
+impl Face {
+    /// The width of a glyph of the game's own, and of a cell the game fills in.
+    pub(super) fn cell(self) -> usize {
+        match self {
+            Face::Large => vwf::LARGE,
+            Face::Small => vwf::SMALL,
+        }
+    }
+}
 
 /// How the characters of a changed string are written.
 #[derive(Clone, Copy)]
@@ -378,200 +336,62 @@ pub(super) struct Writing<'a> {
     pub codes: &'a ByteCodes,
     /// The characters drawn into the font's blank cells, a character to a cell, by code.
     pub drawn: &'a HashMap<char, u32>,
-    /// The narrow characters two to a cell, or none where every character takes a cell.
-    pub pairs: Option<&'a Pairs>,
+    /// The characters drawn at their own widths, or none where every character takes a cell.
+    pub renderer: Option<&'a Renderer>,
 }
 
 impl Writing<'_> {
-    /// The code a character is written with alone.
+    /// The code a character is written with.
     fn code(&self, char: char) -> Option<u32> {
-        pack_code(char, self.codes, self.drawn)
+        self.renderer.and_then(|renderer| renderer.code(char)).or_else(|| pack_code(char, self.codes, self.drawn))
     }
 
-    fn is_narrow(&self, char: char) -> bool {
-        self.pairs.is_some_and(|pairs| pairs.narrow.contains(&char))
+    /// How wide a character is drawn, in pixels: its own width, or a glyph's of the game.
+    fn width(&self, char: char, font: Face) -> usize {
+        self.renderer.and_then(|renderer| renderer.width(char)).unwrap_or(font.cell())
+    }
+
+    /// How wide a code is drawn, in pixels.
+    fn code_width(&self, code: u32, font: Face) -> usize {
+        self.renderer.and_then(|renderer| renderer.code_width(code)).unwrap_or(font.cell())
     }
 }
 
-/// The pairs of narrow characters a build draws (see the module's comment).
-#[derive(Default)]
-pub(super) struct Pairs {
-    /// The characters that go two to a cell.
-    pub narrow: BTreeSet<char>,
-    /// The code of each pair's cell, by its two characters, the second a space for one alone. None
-    /// while the pairs a pack needs are counted: every pair is then taken to have a cell.
-    pub cells: Option<HashMap<(char, char), u32>>,
-    /// How many times each pair has been written.
-    pub counts: RefCell<BTreeMap<(char, char), usize>>,
-}
-
-impl Pairs {
-    /// The glyph two characters are drawn as, the second a space where the first is alone, or none
-    /// for two spaces, which are the game's own blank.
-    fn key(left: char, right: Option<char>) -> Option<(char, char)> {
-        let key = (left, right.unwrap_or(' '));
-        (key != (' ', ' ')).then_some(key)
-    }
-
-    fn has_cell(&self, key: (char, char)) -> bool {
-        self.cells.as_ref().is_none_or(|cells| cells.contains_key(&key))
-    }
-
-    /// How many cells a pair takes: one, or a cell for each character where it has no cell of its own.
-    fn cells_of(&self, left: char, right: Option<char>) -> usize {
-        match Self::key(left, right) {
-            Some(key) if !self.has_cell(key) => 1 + usize::from(right.is_some()),
-            _ => 1,
+/// Script text as the bytes of a string, without its zero byte. The renderer's characters are
+/// written a byte each, in runs (see `vwf`): `vwf::RUN` starts one, and ends it where a character of
+/// the game's font follows; a byte under $10 (a line break, a tag) ends it anyway.
+fn encode_text(text: &str, writing: &Writing) -> Result<Vec<u8>> {
+    let encode = |text: &str| encode_with(text, writing.codes, &|char| writing.code(char));
+    let Some(renderer) = writing.renderer else { return encode(text) };
+    let (mut out, mut other, mut in_run) = (Vec::new(), String::new(), false);
+    let flush = |other: &mut String, out: &mut Vec<u8>, in_run: &mut bool| -> Result<()> {
+        if other.is_empty() {
+            return Ok(());
         }
-    }
-
-    /// One more time a pair has been written.
-    fn count(&self, key: (char, char)) {
-        *self.counts.borrow_mut().entry(key).or_default() += 1;
-    }
-
-    /// The bytes a pair is written with: its cell's code, or the characters one by one where it has
-    /// no cell. Each pair written is counted.
-    fn bytes(&self, left: char, right: Option<char>, writing: &Writing) -> Result<Vec<u8>> {
-        let Some(key) = Self::key(left, right) else {
-            return encode_with(" ", writing.codes, &|char| writing.code(char));
-        };
-        self.count(key);
-        match &self.cells {
-            None => Ok(code_bytes(COUNTING_CODE, writing.codes)),
-            Some(cells) => match cells.get(&key) {
-                Some(code) => Ok(code_bytes(*code, writing.codes)),
-                None => {
-                    let alone: String = [Some(left), right].into_iter().flatten().collect();
-                    encode_with(&alone, writing.codes, &|char| writing.code(char))
-                }
-            },
+        let bytes = encode(other)?;
+        if *in_run && bytes.first().is_some_and(|byte| *byte >= 0x10) {
+            out.push(vwf::RUN);
         }
-    }
-
-    /// The bytes of a pair that has no cell and tags between its two characters: each character in
-    /// a cell of its own and the tags between them, where the pack has them. The pair is counted.
-    fn bytes_apart(&self, left: char, between: &[&str], right: char, writing: &Writing) -> Result<Vec<u8>> {
-        self.count((left, right));
-        let text = format!("{left}{}{right}", between.concat());
-        encode_with(&text, writing.codes, &|char| writing.code(char))
-    }
-
-    /// The characters a pair is written with one to a cell, as `counts` has them: those of each
-    /// pair written that has no cell. The space a character alone at the end of its run is paired
-    /// with is not written, but a space has a code of the game's own anyway.
-    fn written_alone(&self) -> BTreeSet<char> {
-        let counts = self.counts.borrow();
-        let apart = counts.keys().filter(|key| !self.has_cell(**key));
-        apart.flat_map(|(left, right)| [*left, *right]).collect()
-    }
-}
-
-/// A piece of a changed string as pairs are written: text written as it is; two narrow characters in
-/// a cell, the second absent where the first is alone at the end of its run; or two narrow characters
-/// that have no cell, with tags between them that stay there (see `IN_RUN_TAGS`).
-#[derive(Debug, PartialEq, Eq)]
-enum Unit<'a> {
-    Text(&'a str),
-    Pair(char, Option<char>),
-    Apart(char, Vec<&'a str>, char),
-}
-
-/// The tags that take no room and leave the reading as it is: a pause and a sound. One of them inside
-/// a run of narrow characters does not end it, and is written after the cell of the character
-/// before it, so that a word with a pause in it ("Sum{PAUSE:14}mer") is not cut by a half-empty cell.
-/// Where two characters that would share a cell find none and are written one to a cell, a tag
-/// between them stays there.
-const IN_RUN_TAGS: [&str; 2] = ["PAUSE", "0F"];
-
-/// A string cut into units: each run of narrow characters paired from its start, and what is between
-/// the runs as text. Anything that is not a narrow character ends a run, but the tags of `IN_RUN_TAGS`.
-fn units<'a>(text: &'a str, writing: &Writing) -> Vec<Unit<'a>> {
-    let mut out = Vec::new();
-    // The run's characters, and the tags within it, each after the character of that number, in order.
-    let mut run: Vec<char> = Vec::new();
-    let mut within: Vec<(usize, &'a str)> = Vec::new();
-    // Where the text not yet in a unit starts, and where the token being read does.
-    let (mut start, mut at) = (0, 0);
-    let has_cell = |key: (char, char)| writing.pairs.is_none_or(|pairs| pairs.has_cell(key));
-    let pair_up = |run: &mut Vec<char>, within: &mut Vec<(usize, &'a str)>, out: &mut Vec<Unit<'a>>| {
-        let mut tags = within.iter().copied().peekable();
-        for (index, (left, right)) in fonts::pair_up(run).into_iter().enumerate() {
-            // The tags after the pair's first character, then those after its second.
-            let mut through = |last: usize| -> Vec<&'a str> {
-                std::iter::from_fn(|| tags.next_if(|(after, _)| *after <= last).map(|(_, raw)| raw)).collect()
-            };
-            // Two spaces are the game's own blank whatever is between them, and take one cell.
-            match (right, Pairs::key(left, right)) {
-                (Some(right), Some(key)) if !has_cell(key) => match through(2 * index) {
-                    between if between.is_empty() => out.push(Unit::Pair(left, Some(right))),
-                    between => out.push(Unit::Apart(left, between, right)),
-                },
-                _ => out.push(Unit::Pair(left, right)),
-            }
-            out.extend(through(2 * index + 1).into_iter().map(Unit::Text));
-        }
-        run.clear();
-        within.clear();
+        *in_run = false;
+        out.extend(bytes);
+        other.clear();
+        Ok(())
     };
     for token in tokens(text) {
-        let length = match token {
-            Token::Char(char) => char.len_utf8(),
-            Token::Tag { raw, .. } => raw.len(),
-        };
         match token {
-            Token::Char(char) if writing.is_narrow(char) => {
-                if start < at {
-                    out.push(Unit::Text(&text[start..at]));
+            Token::Char(char) if renderer.byte(char).is_some() => {
+                flush(&mut other, &mut out, &mut in_run)?;
+                if !in_run {
+                    out.push(vwf::RUN);
+                    in_run = true;
                 }
-                run.push(char);
-                start = at + length;
+                out.extend(renderer.byte(char));
             }
-            Token::Tag { raw, name, .. } if !run.is_empty() && IN_RUN_TAGS.contains(&name) => {
-                within.push((run.len() - 1, raw));
-                start = at + length;
-            }
-            _ if !run.is_empty() => pair_up(&mut run, &mut within, &mut out),
-            _ => {}
-        }
-        at += length;
-    }
-    pair_up(&mut run, &mut within, &mut out);
-    if start < at {
-        out.push(Unit::Text(&text[start..]));
-    }
-    out
-}
-
-/// Script text as the bytes of a string, without its zero byte, with the narrow characters two to a
-/// cell where there are pairs.
-fn encode_text(text: &str, writing: &Writing) -> Result<Vec<u8>> {
-    let Some(pairs) = writing.pairs else {
-        return encode_with(text, writing.codes, &|char| writing.code(char));
-    };
-    let mut out = Vec::new();
-    for unit in units(text, writing) {
-        match unit {
-            Unit::Text(text) => out.extend(encode_with(text, writing.codes, &|char| writing.code(char))?),
-            Unit::Pair(left, right) => out.extend(pairs.bytes(left, right, writing)?),
-            Unit::Apart(left, between, right) => out.extend(pairs.bytes_apart(left, &between, right, writing)?),
+            other_token => other.push_str(&other_token.text()),
         }
     }
+    flush(&mut other, &mut out, &mut in_run)?;
     Ok(out)
-}
-
-/// How many cells a piece of a line takes, as `wrap_to` measures it: each character a cell, but
-/// narrow characters, which go two to a cell where there are pairs; tags take none, since those that
-/// take room stand there as characters.
-fn measured_cells(text: &str, writing: &Writing) -> usize {
-    let cells = |text: &str| tokens(text).iter().filter(|token| matches!(token, Token::Char(_))).count();
-    let Some(pairs) = writing.pairs else { return cells(text) };
-    let unit_cells = |unit: &Unit| match unit {
-        Unit::Text(text) => cells(text),
-        Unit::Pair(left, right) => pairs.cells_of(*left, *right),
-        Unit::Apart(..) => 2,
-    };
-    units(text, writing).iter().map(unit_cells).sum()
 }
 
 // --- fitting a string to the window ----------------------------------------
@@ -579,7 +399,9 @@ fn measured_cells(text: &str, writing: &Writing) -> usize {
 /// What a piece of a string does to the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Piece {
-    /// Takes this many cells: a character, or what the game fills in.
+    /// A character, by its code.
+    Glyph(u32),
+    /// What the game fills in, taking this many cells: a name, a number, a word.
     Cells(usize),
     /// $0D, a new line.
     Break,
@@ -595,14 +417,24 @@ enum Piece {
     Silent,
 }
 
-/// A string's bytes, piece by piece.
-fn pieces(data: &[u8], codes: &ByteCodes) -> Vec<(Piece, Vec<u8>)> {
+/// A string's bytes, piece by piece, with the runs of the renderer's characters read as they are
+/// written (see `encode_text`).
+fn pieces(data: &[u8], writing: &Writing) -> Vec<(Piece, Vec<u8>)> {
+    let codes = writing.codes;
     let mut found = Vec::new();
-    let mut at = 0;
+    let (mut at, mut run) = (0, false);
     while at < data.len() {
         let next = data.get(at + 1).copied();
+        let in_run = writing.renderer.filter(|_| run).and_then(|renderer| renderer.byte_code(data[at]));
+        run = match data[at] {
+            vwf::RUN => !run,
+            0x00..=0x0F => false,
+            _ => run,
+        };
         let (piece, length) = match data[at] {
-            0x01..=0x0A => (Piece::Cells(1), 2),
+            _ if in_run.is_some() => (Piece::Glyph(in_run.unwrap_or_default()), 1),
+            vwf::RUN if writing.renderer.is_some() => (Piece::Silent, 1),
+            high @ 0x01..=0x0A => (Piece::Glyph(u32::from(high) << 8 | u32::from(next.unwrap_or(0))), 2),
             0x0B => (Piece::Wait, 1),
             0x0C => {
                 let cells = match next {
@@ -621,7 +453,7 @@ fn pieces(data: &[u8], codes: &ByteCodes) -> Vec<(Piece, Vec<u8>)> {
                 Some(2) => (Piece::Clear, 2),
                 _ => (Piece::Silent, 2),
             },
-            byte if byte >= 0x10 && codes.code(byte) != 0 => (Piece::Cells(1), 1),
+            byte if byte >= 0x10 && codes.code(byte) != 0 => (Piece::Glyph(codes.code(byte)), 1),
             _ => (Piece::Silent, 1),
         };
         let end = (at + length).min(data.len());
@@ -631,24 +463,34 @@ fn pieces(data: &[u8], codes: &ByteCodes) -> Vec<(Piece, Vec<u8>)> {
     found
 }
 
-/// How many cells each line of a string takes, counted as `pieces` counts them: a line ends at a
+/// How wide each line of a string is, in pixels, as the game draws it in `font`: a line ends at a
 /// line break, a wait that starts a new line, or the window cleared. The program's text is measured
 /// this way against the room its parts have (see `program`).
-pub fn line_cells(data: &[u8], codes: &ByteCodes) -> Vec<usize> {
+fn line_widths(data: &[u8], writing: &Writing, font: Face) -> Vec<usize> {
     let mut lines = vec![0];
     let mut speaking = false;
-    for (piece, _) in pieces(data, codes) {
+    for (piece, _) in pieces(data, writing) {
+        let line = lines.last_mut().unwrap();
         match piece {
-            Piece::Cells(count) => *lines.last_mut().unwrap() += count,
+            Piece::Glyph(code) => *line += writing.code_width(code, font),
+            Piece::Cells(count) => *line += count * font.cell(),
             Piece::Break | Piece::Wait | Piece::Clear => lines.push(0),
             Piece::Say => {
-                *lines.last_mut().unwrap() += usize::from(!speaking);
+                *line += if speaking { 0 } else { font.cell() };
                 speaking = !speaking;
             }
             Piece::Hold | Piece::Silent => {}
         }
     }
     lines
+}
+
+/// How many cells each line of a string of the game's takes, every character a cell: what the game's
+/// own lines take, which is the room a part of the program's text has (see `program::PARTS`).
+pub fn line_cells(data: &[u8], codes: &ByteCodes) -> Vec<usize> {
+    let none = HashMap::new();
+    let writing = Writing { codes, drawn: &none, renderer: None };
+    line_widths(data, &writing, Face::Large).into_iter().map(|width| width / vwf::LARGE).collect()
 }
 
 /// What laying a string out in the window gave.
@@ -663,12 +505,14 @@ enum Laid {
     TooLong { line: usize },
 }
 
-/// Where the game's pen is in the window, as it draws a string.
+/// Where the game's pen is in the window, as it draws a string: in pixels from the line's start, and
+/// in cells of the window's grid.
 #[derive(Default)]
 struct Pen {
-    column: usize,
-    /// Where a new line starts: one cell in, in a spoken line.
-    indent: usize,
+    x: usize,
+    cells: usize,
+    /// Where a new line starts: past the 「 of a spoken line.
+    indent: (usize, usize),
     /// Lines shown since the last wait, this one included.
     rows: usize,
     /// The last character filled its line, and the game started the next.
@@ -679,16 +523,19 @@ impl Pen {
     /// A new line. It returns whether the window has now scrolled past what was shown at the last
     /// wait.
     fn new_line(&mut self) -> bool {
-        self.column = self.indent;
+        (self.x, self.cells) = self.indent;
         self.rows += 1;
         self.rows > ROWS
     }
 
-    /// A character, which starts a new line when it fills one: as `new_line`.
-    fn character(&mut self) -> bool {
+    /// A character `width` pixels wide taking `cells` cells, which starts a new line when it fills
+    /// one, as the game's writers do: when the pen reaches the window's width, or the line's cells
+    /// run out. It returns what `new_line` does.
+    fn character(&mut self, width: usize, cells: usize) -> bool {
         self.started = false;
-        self.column += 1;
-        if self.column < COLUMNS {
+        self.x += width;
+        self.cells += cells;
+        if self.x < WINDOW_WIDTH && self.cells < LINE_CELLS {
             return false;
         }
         self.started = true;
@@ -702,27 +549,32 @@ impl Pen {
 }
 
 /// Follow a string as the game draws it (`fit`). With `wrap`, a page that would scroll is reported;
-/// without it, a line longer than the window is.
-fn lay(pieces: &[(Piece, Vec<u8>)], wrap: bool) -> Laid {
+/// without it, a line longer than the window is. A character that would run past the window's edge
+/// is a line too long either way, since the game draws it there before it starts a new line.
+fn lay(pieces: &[(Piece, Vec<u8>)], wrap: bool, writing: &Writing) -> Laid {
     let mut out = Vec::new();
     let mut pen = Pen { rows: 1, ..Pen::default() };
     let mut page = 0;
     let mut line = 1;
     for (at, (piece, bytes)) in pieces.iter().enumerate() {
         let overfull = Laid::Overfull { page, at };
-        let mut cells = 0;
-        match piece {
+        let (width, cells) = match piece {
+            Piece::Glyph(code) => {
+                out.extend(bytes);
+                (writing.code_width(*code, Face::Large), 1)
+            }
             Piece::Cells(count) => {
                 out.extend(bytes);
-                cells = *count;
+                (count * vwf::LARGE, *count)
             }
             Piece::Say => {
                 out.extend(bytes);
-                if pen.indent == 0 {
-                    pen.indent = pen.column + 1;
-                    cells = 1;
+                if pen.indent == (0, 0) {
+                    pen.indent = (pen.x + vwf::LARGE, pen.cells + 1);
+                    (vwf::LARGE, 1)
                 } else {
-                    pen.indent = 0;
+                    pen.indent = (0, 0);
+                    (0, 0)
                 }
             }
             Piece::Break => {
@@ -735,6 +587,7 @@ fn lay(pieces: &[(Piece, Vec<u8>)], wrap: bool) -> Laid {
                         return overfull;
                     }
                 }
+                (0, 0)
             }
             Piece::Wait => {
                 line += 1;
@@ -745,28 +598,35 @@ fn lay(pieces: &[(Piece, Vec<u8>)], wrap: bool) -> Laid {
                 pen.started = false;
                 pen.waited();
                 page = at + 1;
+                (0, 0)
             }
             Piece::Hold => {
                 out.extend(bytes);
                 pen.waited();
                 page = at + 1;
+                (0, 0)
             }
             Piece::Clear => {
                 line += 1;
                 out.extend(bytes);
-                (pen.column, pen.started) = (0, false);
+                (pen.x, pen.cells, pen.started) = (0, 0, false);
                 pen.waited();
                 page = at + 1;
+                (0, 0)
             }
-            Piece::Silent => out.extend(bytes),
+            Piece::Silent => {
+                out.extend(bytes);
+                (0, 0)
+            }
+        };
+        if cells == 0 {
+            continue;
         }
-        for _ in 0..cells {
-            if pen.started && !wrap {
-                return Laid::TooLong { line };
-            }
-            if pen.character() && wrap {
-                return overfull;
-            }
+        if (pen.started && !wrap) || pen.x + width > WINDOW_WIDTH {
+            return Laid::TooLong { line };
+        }
+        if pen.character(width, cells) && wrap {
+            return overfull;
         }
     }
     Laid::Fits(out)
@@ -775,17 +635,24 @@ fn lay(pieces: &[(Piece, Vec<u8>)], wrap: bool) -> Laid {
 /// A changed string's bytes as they are to be written, fitted to the window (see the module's
 /// comment): with `wrap`, waits are put in where the window would scroll unread; without it, a line
 /// longer than the window is refused.
-fn fit(data: &[u8], codes: &ByteCodes, wrap: bool) -> Result<Vec<u8>> {
-    let mut pieces = pieces(data, codes);
+fn fit(data: &[u8], writing: &Writing, wrap: bool) -> Result<Vec<u8>> {
+    let mut pieces = pieces(data, writing);
     // Each round moves a page's end to an earlier piece or puts one in, so this many is never reached.
     for _ in 0..=2 * pieces.len() + 1 {
-        match lay(&pieces, wrap) {
+        match lay(&pieces, wrap, writing) {
             Laid::Fits(out) => return Ok(out),
+            Laid::TooLong { line } if wrap => {
+                return text_error(format!(
+                    "broken at spaces, its line {line} is still wider than the window, {WINDOW_WIDTH} pixels, {} in \
+                     a spoken line: shorten its longest word",
+                    WINDOW_WIDTH - vwf::LARGE
+                ));
+            }
             Laid::TooLong { line } => {
                 return text_error(format!(
-                    "its line {line} is longer than the window, which holds {COLUMNS} cells a line, {} in a spoken \
-                     line: break it sooner, or build with wrapping on",
-                    COLUMNS - 1
+                    "its line {line} is wider than the window, {WINDOW_WIDTH} pixels, {} in a spoken line: break it \
+                     sooner, or build with wrapping on",
+                    WINDOW_WIDTH - vwf::LARGE
                 ));
             }
             Laid::Overfull { page, at } => match (page..=at).rev().find(|index| pieces[*index].0 == Piece::Break) {
@@ -797,116 +664,93 @@ fn fit(data: &[u8], codes: &ByteCodes, wrap: bool) -> Result<Vec<u8>> {
     text_error("it cannot be laid out in the window")
 }
 
-/// Stands for one cell of a tag that takes room on screen while a line is broken: the shared
-/// `layout::wrap_lines` lets a tag start while the line has room and run past its end, but here a
-/// name, a number or a word that would not fit must go to the next line whole, as a word does.
-const TAG_CELL: char = '\u{E000}';
-
-/// A changed string's text broken at spaces to the window's width: 15 cells in a spoken line, 16
-/// otherwise. Line breaks and waits already in it are kept.
-fn wrap(text: &str, writing: &Writing) -> Result<String> {
-    wrap_to(text, COLUMNS, writing)
-}
-
 /// The tags after which the game goes on at the start of a new line, as a line break does.
 const NEW_LINE_TAGS: [&str; 2] = ["WAIT", "CLEAR"];
 
-/// The pieces of a broken text that the game draws on lines of their own: its lines, each cut where
-/// a wait or a clearing of the window starts a new one.
-fn drawn_lines(text: &str) -> Vec<String> {
-    let mut found = vec![String::new()];
-    for token in tokens(text) {
-        match token {
-            Token::Char('\n') => found.push(String::new()),
-            Token::Tag { name, .. } if NEW_LINE_TAGS.contains(&name) => found.push(String::new()),
-            other => found.last_mut().unwrap().push_str(&other.text()),
-        }
-    }
-    found
+/// A changed string's text broken at spaces to the window's width. Line breaks and waits already in
+/// it are kept.
+fn wrap(text: &str, writing: &Writing) -> Result<String> {
+    wrap_to(text, WINDOW_WIDTH, writing, Face::Large)
 }
 
-/// The same, to lines of `columns` cells, one fewer in a spoken line.
-///
-/// Lines are measured in half cells: a narrow character that goes in a pair takes one, everything
-/// else two. A line can still come out wider than that measure, as a run of narrow characters with
-/// an odd count leaves half a cell empty; so each line, once broken, is measured as it will be drawn
-/// (`measured_cells`), and where one that could be broken further is too wide, the whole of the
-/// script's line is broken again half a cell narrower.
-fn wrap_to(text: &str, columns: usize, writing: &Writing) -> Result<String> {
-    // The line breaking stands for a tag's cells with this character, so a string cannot have it.
-    if text.contains(TAG_CELL) {
-        return text_error(format!(
-            "it has the character U+{:04X}, which the breaking of lines uses for itself: remove it",
-            TAG_CELL as u32
-        ));
-    }
-    let mut speaking = false;
-    let mut lines = Vec::new();
-    for line in text.split('\n') {
-        let spoken = speaking || line.starts_with("{SAY}");
-        let limit = if spoken { columns - 1 } else { columns };
-        let cells = |name: &str, value: Option<&str>| match name {
-            "NAME" => NAME_CELLS,
-            "NUM" => NUMBER_CELLS,
-            "WORD" => WORD_CELLS,
-            // An insert written by its byte takes the room the same insert takes under its name.
-            "0C" => match value.and_then(|value| u8::from_str_radix(value, 16).ok()) {
-                Some(value) if NAME_INSERTS.contains(&value) => NAME_CELLS,
-                Some(value) if NUMBER_INSERTS.contains(&value) => NUMBER_CELLS,
-                Some(WORD_INSERT) => WORD_CELLS,
-                _ => 0,
-            },
-            "SAY" if !spoken => 1,
-            "K" | "W" | "B" => 1,
+/// The same, to lines `width` pixels wide in `font`, each character measured at the width it is
+/// drawn, and each cell of what the game fills in at a glyph's. A line starts where the game starts
+/// it: at the window's left edge, or, in a spoken line, under its first character, past the 「 that
+/// `{SAY}` draws wherever it is; a `{WAIT}` starts a new line there too, and a `{CLEAR}` at the
+/// left edge. A name, a number or a word the game fills in is part of the word it is in. A word wider
+/// than a line is left as it is, for `fit` to refuse.
+fn wrap_to(text: &str, width: usize, writing: &Writing, font: Face) -> Result<String> {
+    let cells = |name: &str, value: Option<&str>| match name {
+        "NAME" => NAME_CELLS,
+        "NUM" => NUMBER_CELLS,
+        "WORD" => WORD_CELLS,
+        // An insert written by its byte takes the room the same insert takes under its name.
+        "0C" => match value.and_then(|value| u8::from_str_radix(value, 16).ok()) {
+            Some(value) if NAME_INSERTS.contains(&value) => NAME_CELLS,
+            Some(value) if NUMBER_INSERTS.contains(&value) => NUMBER_CELLS,
+            Some(WORD_INSERT) => WORD_CELLS,
             _ => 0,
-        };
-        // Each tag that takes room is measured as that many cells of a word with no space in it,
-        // and put back once the line is broken.
-        let mut sized = Vec::new();
-        let mut measured = String::new();
+        },
+        "K" | "W" | "B" => 1,
+        _ => 0,
+    };
+    let mut out = String::new();
+    let (mut speaking, mut indent) = (false, 0);
+    for (number, line) in text.split('\n').enumerate() {
+        if number > 0 {
+            out.push('\n');
+        }
+        let start = |speaking: bool, indent: usize| if speaking { indent } else { 0 };
+        let mut x = start(speaking, indent);
+        // Where the line's last space is in `out`, and how wide what follows it is.
+        let (mut space, mut after_space) = (None, 0);
         for token in tokens(line) {
-            match token {
-                Token::Tag { raw, name, value } if cells(name, value) > 0 => {
-                    let width = cells(name, value);
-                    measured.extend(std::iter::repeat_n(TAG_CELL, width));
-                    sized.push((raw, width));
+            let step = match token {
+                Token::Char(' ') => {
+                    let step = writing.width(' ', font);
+                    if x + step > width {
+                        // The space falls off the end of the line: the next one starts here.
+                        out.push('\n');
+                        (x, space, after_space) = (start(speaking, indent), None, 0);
+                    } else {
+                        (space, after_space) = (Some(out.len()), 0);
+                        out.push(' ');
+                        x += step;
+                    }
+                    continue;
                 }
-                other => measured.push_str(&other.text()),
+                Token::Char(char) => writing.width(char, font),
+                Token::Tag { name: "SAY" | "/SAY", raw, .. } => {
+                    out.push_str(raw);
+                    speaking = !speaking;
+                    if speaking {
+                        x += font.cell();
+                        after_space += font.cell();
+                        indent = x;
+                    }
+                    continue;
+                }
+                Token::Tag { name, raw, .. } if NEW_LINE_TAGS.contains(&name) => {
+                    out.push_str(raw);
+                    x = if name == "CLEAR" { 0 } else { start(speaking, indent) };
+                    (space, after_space) = (None, 0);
+                    continue;
+                }
+                Token::Tag { name, value, .. } => cells(name, value) * font.cell(),
+            };
+            if x + step > width
+                && let Some(at) = space
+            {
+                out.replace_range(at..at + 1, "\n");
+                x = start(speaking, indent) + after_space;
+                space = None;
             }
-        }
-        let halves = |char: char| Ok(if writing.is_narrow(char) { 1 } else { 2 });
-        let too_wide = |line: &String| line.contains(' ') && measured_cells(line, writing) > limit;
-        let mut room = 2 * limit;
-        let broken = loop {
-            let broken = layout::wrap_lines(&measured, &halves, room, &|_, _| 0, &NEW_LINE_TAGS)?;
-            if writing.pairs.is_none() || room <= 2 || !drawn_lines(&broken).iter().any(too_wide) {
-                break broken;
-            }
-            room -= 1;
-        };
-        let mut restored = String::new();
-        let (mut sized, mut chars) = (sized.into_iter(), broken.chars());
-        while let Some(char) = chars.next() {
-            if char != TAG_CELL {
-                restored.push(char);
-                continue;
-            }
-            let (raw, width) = sized.next().expect("each run of tag cells stands for a tag");
-            restored.push_str(raw);
-            for _ in 1..width {
-                chars.next();
-            }
-        }
-        lines.push(restored);
-        for token in tokens(line) {
-            match token {
-                Token::Tag { name: "SAY", .. } => speaking = true,
-                Token::Tag { name: "/SAY", .. } => speaking = false,
-                _ => {}
-            }
+            out.push_str(&token.text());
+            x += step;
+            after_space += step;
         }
     }
-    Ok(lines.join("\n"))
+    Ok(out)
 }
 
 // --- rebuilding an area's member -------------------------------------------
@@ -1047,7 +891,7 @@ pub fn text_block_with(area: &Area, strings: &BTreeMap<u32, Vec<u8>>) -> Vec<u8>
     out
 }
 
-// --- the cells pairs may take ----------------------------------------------
+// --- the cells the renderer's characters take ------------------------------
 
 /// Add to `found` the codes some bytes of the game draw, read as the game reads a string: a code of
 /// two bytes, or a byte from $10 up. It reads on past a zero byte, so it can be given what lies
@@ -1084,7 +928,7 @@ struct Kept<'a> {
     program_strings: BTreeSet<u32>,
 }
 
-/// The cells of the font a pair of characters may be drawn in: those of the kanji that no string
+/// The cells of the font a character drawn at its own width may take: those of the kanji that no string
 /// the pack leaves as it is draws, in any kind of text drawn from this font (the dialogue, the
 /// program's text, the bosses' speeches), nor any of the bytes between the program's strings,
 /// which hold pieces of text nothing points at, nor the pack's own text. The game's other
@@ -1149,9 +993,8 @@ struct Done {
     /// The least of the heap that a moment of the changed areas leaves free, and which moment it is.
     least: Option<(usize, String)>,
     new_characters: Vec<char>,
-    /// The pairs of characters drawn into the font, the cells free for them, and the pairs left to be
-    /// written a character to a cell for want of cells.
-    pairs: Option<(usize, usize, usize)>,
+    /// The characters drawn at their own widths, and the cells free for them.
+    renderer: Option<(usize, usize)>,
     /// The strings of the program's text that changed, how many of them moved, and how many were
     /// written once for several.
     program_strings: usize,
@@ -1195,14 +1038,11 @@ impl Done {
                 BLANK_CODES.len()
             ));
         }
-        if let Some((drawn, free, short)) = self.pairs {
-            let short = match short {
-                0 => String::new(),
-                short => format!("; {short} more, those written least, are written a character to a cell"),
-            };
+        if let Some((drawn, free)) = self.renderer {
             lines.push(format!(
-                "pairs:     {drawn} pairs of characters drawn two to a cell, in the cells of kanji no unchanged string \
-                 uses, of {free}{short}"
+                "renderer:  {drawn} characters drawn at their own widths, in cells of kanji no unchanged string \
+                 uses, of {free}; its code at ${:08X}, loaded at start-up from the program's file",
+                vwf::PLACEMENT.destination
             ));
         }
         lines
@@ -1242,7 +1082,7 @@ fn is_name(offset: u32) -> bool {
 fn program_string(text: &str, offset: u32, own: &[u8], writing: &Writing, wrap: bool) -> Result<Vec<u8>> {
     let (codes, drawn) = (writing.codes, writing.drawn);
     let names = is_name(offset);
-    let writing = &Writing { pairs: if names { None } else { writing.pairs }, ..*writing };
+    let writing = &Writing { renderer: if names { None } else { writing.renderer }, ..*writing };
     let part = program_text::part_of(offset);
     let own_cells = line_cells(own, codes);
     let (width, whose) = match program_text::OWN_WIDTH.contains(&offset) {
@@ -1266,18 +1106,21 @@ fn program_string(text: &str, offset: u32, own: &[u8], writing: &Writing, wrap: 
             quoted(&char.to_string())
         ));
     }
-    let text = if wrap { wrap_to(text, width, writing)? } else { text.to_string() };
+    // Measured in the small font's pixels, which the part may be drawn in: a line that fits there
+    // fits in the dialogue's font too, whose glyphs of the game's are wider and the others as wide.
+    let pixels = width * vwf::SMALL;
+    let text = if wrap { wrap_to(text, pixels, writing, Face::Small)? } else { text.to_string() };
     let data = encode_text(&text, writing)?;
-    let lines = line_cells(&data, codes);
-    if let Some((line, cells)) = lines.iter().enumerate().find(|(_, cells)| **cells > width) {
+    let lines = line_widths(&data, writing, Face::Small);
+    if let Some((line, wide)) = lines.iter().enumerate().find(|(_, wide)| **wide > pixels) {
         return text_error(match wrap {
             true => format!(
-                "broken at spaces, it still has a line of {cells} cells, and {whose} has room for {width}: \
-                 shorten its longest word"
+                "broken at spaces, it still has a line {wide} pixels wide, and {whose} has room for {pixels} ({width} \
+                 cells of 12 pixels): shorten its longest word"
             ),
             false => format!(
-                "its line {} takes {cells} cells, and {whose} has room for {width}: break it sooner, or build \
-                 with wrapping on",
+                "its line {} is {wide} pixels wide, and {whose} has room for {pixels} ({width} cells of 12 pixels): \
+                 break it sooner, or build with wrapping on",
                 line + 1
             ),
         });
@@ -1367,50 +1210,28 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
     let all_texts: Vec<&str> = dialogue.iter().chain(&program_changes).map(|(_, _, text)| text.as_str()).collect();
     let write_dialogue = |text: &str, writing: &Writing| {
         let text = if options.wrap { wrap(text, writing)? } else { text.to_string() };
-        fit(&encode_text(&text, writing)?, codes, options.wrap)
+        fit(&encode_text(&text, writing)?, writing, options.wrap)
     };
     let write_program = |text: &str, number: u32, writing: &Writing| match own_text[PROGRAM_SECTION].get(&number) {
         Some(own) => program_string(text, number, own, writing, options.wrap),
         None => text_error("the game has no such string"),
     };
 
-    // The narrow characters, two to a cell (see the module's comment): those the game's font lacks
-    // and the pack's font draws narrow, in the dialogue and the program's text but the party's names.
-    // Every changed string is written once to count the pairs it needs, as if each had a cell, and
-    // each character the font lacks as if it had been drawn, so that one a pack's font may not have
-    // does not stop the counting: the strings are refused for it when they are written.
+    // The characters drawn at their own widths (see `vwf`): those the game's font lacks and the
+    // pack's font draws narrow, in the dialogue and the program's text but the party's names, each in
+    // a cell of a kanji no string left as it is uses.
     let used = plain_characters(&all_texts.concat());
     let lacking: Vec<char> = used.iter().copied().filter(|char| pack_code(*char, codes, &none).is_none()).collect();
-    let as_if_drawn: HashMap<char, u32> = lacking.iter().map(|char| (*char, COUNTING_CODE)).collect();
-    let mut pairs = Pairs::default();
-    let mut shapes = BTreeMap::new();
+    let mut renderer = Renderer::default();
     if !options.switches.contains(FULL_WIDTH) {
-        let pairable = dialogue.iter().chain(program_changes.iter().filter(|(_, number, _)| !is_name(*number)));
-        let pairable: String = pairable.map(|(_, _, text)| text.as_str()).collect();
-        let lacking: Vec<char> = plain_characters(&pairable)
+        let drawn_narrow = dialogue.iter().chain(program_changes.iter().filter(|(_, number, _)| !is_name(*number)));
+        let drawn_narrow: String = drawn_narrow.map(|(_, _, text)| text.as_str()).collect();
+        let narrow: Vec<char> = plain_characters(&drawn_narrow)
             .into_iter()
-            .filter(|char| !matches!(char, '{' | '}' | '\n') && code_of(*char, codes).is_none())
+            .filter(|char| !matches!(char, '{' | '}') && code_of(*char, codes).is_none())
             .collect();
-        shapes = fonts::narrow_glyphs(sources, &lacking)?;
-        pairs.narrow = shapes.keys().copied().collect();
-    }
-    let mut pair_cells = BTreeMap::new();
-    let mut free_count = None;
-    let write_all = |pairs: &Pairs| {
-        let writing = Writing { codes, drawn: &as_if_drawn, pairs: Some(pairs) };
-        for (_, _, text) in &dialogue {
-            let _ = write_dialogue(text, &writing);
-        }
-        for (_, number, text) in &program_changes {
-            let _ = write_program(text, *number, &writing);
-        }
-    };
-    // The narrow characters written one to a cell, in the pairs that find no cell.
-    let mut alone = BTreeSet::new();
-    if !pairs.narrow.is_empty() {
-        write_all(&pairs);
-        let counts = pairs.counts.take();
-        if !counts.is_empty() {
+        let glyphs = fonts::narrow_glyphs(sources, &narrow)?;
+        if !glyphs.is_empty() {
             let file = program_text::program_file(disc)?;
             let kept = Kept {
                 areas: &areas,
@@ -1419,30 +1240,18 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
                 dialogue: dialogue.iter().map(|(section, number, _)| (section.as_str(), *number)).collect(),
                 program_strings: program_changes.iter().map(|(_, number, _)| *number).collect(),
             };
-            let free: Vec<usize> =
-                free_cells(&file, &kept, &all_texts, codes).into_iter().map(|code| code as usize).collect();
-            pair_cells = fonts::assign_most_used(&counts, &free);
-            free_count = Some(free.len());
-        }
-        pairs.cells = Some(pair_cells.iter().map(|(key, code)| (*key, *code as u32)).collect());
-        // Where some pairs find no cell, the strings are written again with the cells there are, as
-        // they will be: a pair with no cell takes two, so lines may break elsewhere and the pairs be
-        // others. Where every pair has a cell, the strings break as they did.
-        if counts.len() > pair_cells.len() {
-            write_all(&pairs);
-            alone = pairs.written_alone();
-            pairs.counts.take();
+            let free = free_cells(&file, &kept, &all_texts, codes);
+            renderer = Renderer::new(&glyphs, &free)?;
+            done.renderer = Some((renderer.len(), free.len()));
         }
     }
 
-    // The characters the font lacks and that are not paired, drawn into its blank cells. The
-    // program's text is drawn with the same font; the menus' labels are not. A narrow character is
-    // drawn where a pair it is in has no cell.
-    let new: Vec<char> =
-        lacking.into_iter().filter(|char| !pairs.narrow.contains(char) || alone.contains(char)).collect();
+    // The characters the font lacks that are not drawn at their own widths, drawn into its blank
+    // cells. The program's text is drawn with the same font; the menus' labels are not.
+    let new: Vec<char> = lacking.into_iter().filter(|char| renderer.code(*char).is_none()).collect();
     let mut drawn = HashMap::new();
     let mut pages: Vec<Vec<u8>> = Vec::new();
-    if !new.is_empty() || !pair_cells.is_empty() {
+    if !new.is_empty() || !renderer.is_empty() {
         pages = FONT_MEMBERS.iter().map(|entry| member(disc, *entry)).collect::<Result<_>>()?;
     }
     if !new.is_empty() {
@@ -1455,13 +1264,15 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         }
         done.new_characters = new;
     }
-    for ((left, right), code) in &pair_cells {
-        draw_pair(&mut pages, *code as u32, *left, *right, &shapes)?;
-    }
+    renderer.draw(&mut pages)?;
     for (entry, page) in FONT_MEMBERS.iter().zip(pages) {
         patches.push((ARCHIVE, u64::from(program.contents[*entry].0) * ps1::SECTOR, page));
     }
-    let writing = Writing { codes, drawn: &drawn, pairs: (!pairs.narrow.is_empty()).then_some(&pairs) };
+    if !renderer.is_empty() {
+        let file = program_text::program_file(disc)?;
+        patches.extend(renderer.install(&file)?.into_iter().map(|(at, data)| (PROGRAM, at as u64, data)));
+    }
+    let writing = Writing { codes, drawn: &drawn, renderer: (!renderer.is_empty()).then_some(&renderer) };
 
     // The changed strings, each fitted to the window, by area.
     let mut refusals = Vec::new();
@@ -1533,12 +1344,6 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         }
     }
 
-    // How many pairs found a cell, and how many of those the strings were written with did not.
-    if let Some(free) = free_count {
-        let short = pairs.counts.borrow().keys().filter(|key| !pair_cells.contains_key(*key)).count();
-        done.pairs = Some((pair_cells.len(), free, short));
-    }
-
     // Each changed area rebuilt, and put where it fits.
     let mut contents = program.contents.clone();
     let archive_first = disc.first_sector(ARCHIVE)?;
@@ -1591,7 +1396,8 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         for (entry, code) in &new_codes {
             footprints.get_mut(entry).expect("every area has a footprint").code = *code;
         }
-        heap::check(&footprints, &changed)
+        // The renderer's grids take more of the heap while windows are open (see `vwf`).
+        heap::check(&footprints, &changed, if renderer.is_empty() { 0 } else { vwf::GRIDS })
     };
     done.least = least;
     for Shortfall { area, other, moment, over } in shortfalls {

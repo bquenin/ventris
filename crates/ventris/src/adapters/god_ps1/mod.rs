@@ -62,6 +62,9 @@
 //!   $01 waits for the player's button as $0B does, but goes on along the same line (`{HOLD}`),
 //!   $02 clears the window and goes back to its first line (`{CLEAR}`), $03 plays a sound, and
 //!   other values do nothing; those are written with their value, `{0F:03}`.
+//! - $0A, which the game reads as the high half of a code past its font's and its own text never
+//!   writes, starts or ends a run of the characters a build draws at their own widths, a byte each
+//!   (see `vwf`): `{RUN}`, each byte of the run written `{B:..}`.
 //!
 //! The game's font is two pictures in the TIM format, members 0 and 1 of the archive, each 256 by
 //! 256 pixels of 4 bits. Each bit of a pixel is a font of its own, so each picture holds four fonts
@@ -122,6 +125,9 @@ pub const GLYPH_SIZE: usize = 16;
 pub const GLYPH_COUNT: usize = 0x800;
 /// The highest code a pair of bytes can give: high half $0A.
 const LAST_PAIR_CODE: u32 = 0x0AFF;
+/// The byte that starts or ends a run of the characters a build draws at their own widths, a byte
+/// each (see `vwf`): the high half of codes past the font's, which the game's own text never writes.
+pub const RUN: u8 = 0x0A;
 /// The highest value of $0C that the game looks up; what follows it in memory is not a list of
 /// its routines.
 const LAST_INSERT: u8 = 0x1E;
@@ -283,14 +289,24 @@ pub fn numbers_at(span: &[u8]) -> bool {
 
 /// Where the zero byte that ends the text at the start of `data` is, if every byte up to it is one
 /// the game reads as text, and how many characters the text draws: a code of two bytes, or a byte
-/// whose code is a glyph.
+/// whose code is a glyph. A run of the characters a build draws at their own widths, a byte each
+/// (see `vwf`), is read too, though the game's own text has none.
 pub fn read_text(data: &[u8], codes: &ByteCodes) -> Option<(usize, usize)> {
-    let (mut at, mut characters) = (0, 0);
+    let (mut at, mut characters, mut run) = (0, 0, false);
     loop {
         let byte = *data.get(at)?;
+        if run && byte >= 0x10 {
+            (at, characters) = (at + 1, characters + 1);
+            continue;
+        }
+        run = byte == RUN && !run;
         let length = match byte {
             0x00 => return Some((at, characters)),
-            0x01..=0x0A => 2,
+            RUN => {
+                at += 1;
+                continue;
+            }
+            0x01..=0x09 => 2,
             0x0C if *data.get(at + 1)? <= LAST_INSERT => 2,
             0x0C => return None,
             0x0F if *data.get(at + 1)? == 0 => 3,
@@ -312,8 +328,15 @@ pub fn read_text(data: &[u8], codes: &ByteCodes) -> Option<(usize, usize)> {
 /// Whether every character a string, without its zero byte, draws is one the table of characters
 /// has. A byte that draws nothing, or a code with no character, is not.
 pub fn every_character_known(data: &[u8], codes: &ByteCodes) -> bool {
-    let mut at = 0;
+    let (mut at, mut run) = (0, false);
     while at < data.len() {
+        if data[at] == RUN || data[at] < 0x10 {
+            run = data[at] == RUN && !run;
+        }
+        if run || data[at] == RUN {
+            at += 1;
+            continue;
+        }
         let (code, length) = match data[at] {
             byte @ 0x01..=0x0A => (data.get(at + 1).map(|low| u32::from(byte) << 8 | u32::from(*low)), 2),
             0x0C => (None, 2),
@@ -430,12 +453,19 @@ pub fn areas(disc: &Disc) -> Result<Arc<Vec<Area>>> {
 /// A string of the game, without its zero byte, as script text.
 pub fn decode(data: &[u8], codes: &ByteCodes) -> String {
     let mut out = String::new();
-    let mut speaking = false;
+    let (mut speaking, mut run) = (false, false);
     let mut at = 0;
     while at < data.len() {
         let byte = data[at];
         let next = data.get(at + 1).copied();
+        if run && byte >= 0x10 {
+            out.push_str(&format!("{{B:{byte:02X}}}"));
+            at += 1;
+            continue;
+        }
+        run = byte == RUN && !run;
         match (byte, next) {
+            (RUN, _) => out.push_str("{RUN}"),
             (0x01..=0x0A, Some(low)) => {
                 let code = u32::from(byte) << 8 | u32::from(low);
                 match character(code, codes) {
@@ -561,6 +591,7 @@ fn encode_tag(raw: &str, name: &str, value: &str, codes: &ByteCodes) -> Result<V
     };
     let bytes = match (name, data.as_slice()) {
         ("WAIT", []) => vec![0x0B],
+        ("RUN", []) => vec![RUN],
         ("SAY" | "/SAY", []) => vec![0x0E],
         ("NAME", [value]) if NAME_INSERTS.contains(value) => vec![0x0C, *value],
         ("NUM", []) => vec![0x0C, NUMBER_INSERT],
@@ -854,6 +885,7 @@ pub mod battle;
 pub mod heap;
 pub mod insert;
 pub mod program;
+pub mod vwf;
 
 #[cfg(test)]
 mod tests;

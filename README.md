@@ -27,7 +27,7 @@ it. Patching a SNES cartridge image or a PlayStation 2 disc image is not. So the
   once a game has an adapter, anyone can write one.
 
 How a new alphabet gets on screen depends on the game. Where the game draws text of one fixed width, a
-variable-width renderer is injected (Tales of Phantasia); where its font has cells it does not use, new
+variable-width renderer is injected (Tales of Phantasia on the Super Famicom, G.O.D pure on the PlayStation); where its font has cells it does not use, new
 glyphs are drawn into them and the game draws them as its own (Tales of Destiny 2). What is shared is
 everything around that: preparing glyphs from a font, finding room for them, expanding the image, and
 moving text that outgrew its place.
@@ -94,7 +94,7 @@ PlayStation 2 and one on the Nintendo DS.
 | Tales of Destiny 2 (PlayStation 2) | story scripts, skits, menus, battle and place names, the lists of skills, items, equipment, titles and recipes, the names of enemies, and the quiz and other games within the game | story scripts and skits, longer strings included, in any alphabet, with dialogue fitted to the speech bubble; the lists and the menus, whose changed strings share the room they had, so that one may be longer where others are shorter, and a menu may grow besides; the rest where it fits in the room of the game's own |
 | Super Robot Wars Z (PlayStation 2) | stage dialogue, captions and objectives, battle lines, the names and help of the data lists, menus, the library, help and tutorial, summaries, credits, prologue, and the names of maps and squads | not yet |
 | Ganbare Goemon: Tōkai Dōchū Ōedo Tengurigaeshi no Maki (Nintendo DS) | the scenes, what the townspeople and the shopkeepers say, the help, and the messages of the save and the wireless link | all of it, longer strings included, in any alphabet, with lines broken to the box; the storyteller's screens written across with an option |
-| G.O.D pure (PlayStation) | dialogue, and the program's own text: shops, help pages, item, monster and place names, battle messages, menus, the bosses' speeches in battle | dialogue, longer strings included, in the Latin alphabet two letters to a cell, so a line holds about 30; the program's text in the room its strings share; the menus' labels in their slots; the bosses' speeches not yet |
+| G.O.D pure (PlayStation) | dialogue, and the program's own text: shops, help pages, item, monster and place names, battle messages, menus, the bosses' speeches in battle | dialogue, longer strings included, in the Latin alphabet each letter at its own width by a renderer put into the game, so a line holds about 35; the program's text in the room its strings share; the menus' labels in their slots; the bosses' speeches not yet |
 
 Each adapter was made for one release of its game, the Japanese one. The app shows each game's limits on
 the game's page, and the command `ventris games` lists the same, with the release.
