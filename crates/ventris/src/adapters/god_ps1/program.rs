@@ -112,7 +112,8 @@ pub const LIMITS: &str = "a line is no wider than the note on the first string o
                           being made for that; a name of the party takes at most 6 characters, a cell each, and 15 \
                           bytes, in capitals; the strings a pack changes share the room they had between them, 70,402 \
                           bytes if every one changes, where a letter drawn at its own width takes one byte and each \
-                          run of them one more, a kanji two, and a kana, or a letter written a cell each, one, and \
+                          run of them one more, the pairs of letters a pack writes most taking a byte for two, a \
+                          kanji two, and a kana, or a letter written a cell each, one, and \
                           strings given the same text are written once, unless the code that finds them cannot reach \
                           one place from all of them";
 
@@ -708,6 +709,9 @@ pub struct Written {
     pub moved: usize,
     /// How many were not written, being the same text as another that was.
     pub once: usize,
+    /// The bytes the strings that moved take, and the room they had between them.
+    pub used: usize,
+    pub room: usize,
 }
 
 /// A string waiting for its place: its offset, its new bytes, and the offsets it may be put at.
@@ -871,6 +875,8 @@ pub fn write_strings(
              {lines}"
         ));
     }
+    written.room = needs.iter().map(|need| need.1).sum();
+    written.used = needs.iter().map(|need| need.2).sum();
     let mut areas: Vec<(usize, Vec<u8>)> =
         stretches.iter().map(|stretch| (stretch.start, vec![0; stretch.len()])).collect();
     for (members, _) in &groups {

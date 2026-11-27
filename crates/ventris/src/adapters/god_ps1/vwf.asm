@@ -19,6 +19,14 @@
 ; whether it is in a run (`runs`), set back when the window is given a new string; the menus'
 ; screens keep one (`menu_run`), set back when they start a string.
 ;
+; Pairs. A byte of a run may stand for two characters (`run_codes`), which are drawn one after the
+; other as if each had its own byte: the first time a reader comes to such a byte it takes the
+; first, notes in its run's flag that the second is to come, and moves its place back by one, so
+; that it reads the same byte again, as the next character, and takes the second (`run_code`). So
+; the writer that types a character a frame types a pair in two frames, each writer ends a line
+; between the two characters where the first fills it, and every character is drawn and measured
+; as it would be with a byte of its own.
+;
 ; Given: CODE, where this code goes. Register conventions of the routines below are in their notes;
 ; the game's registers that are live at each hook are kept.
 
@@ -323,8 +331,38 @@ run_instant:
         j     $80024F84
         sb    v1, 0(at)
 
+; run_code: a0 = the code of byte a0 of a run, whose flag is at t7: a character's, or, for a byte
+; that stands for two, the first's the first time, the flag's bit 1 set, and the second's the next,
+; the bit cleared. v0 = 1 when the reader is to read the same byte again. Clobbers at, v1.
+run_code:
+        sll   v1, a0, 2
+        lui   at, %hi(run_codes)
+        addiu at, at, %lo(run_codes)
+        addu  at, at, v1
+        lbu   v0, 0(t7)
+        lhu   v1, 2(at)
+        lhu   a0, 0(at)
+        andi  v0, v0, 2
+        beqz  v1, .one
+        nop
+        bnez  v0, .second
+        lbu   v0, 0(t7)
+        nop
+        ori   v0, v0, 2
+        sb    v0, 0(t7)
+        jr    ra
+        li    v0, 1
+.second:
+        move  a0, v1
+        xori  v0, v0, 2
+        sb    v0, 0(t7)
+.one:
+        jr    ra
+        move  v0, zero
+
 ; byte_code: the writer that types, at a byte a0 from $10 up: a0 = its code, the renderer's in a
-; run, else the game's. Clobbers v0, v1, at, t6, t7.
+; run, else the game's; the first character of a pair moves the place in the string back by one.
+; Clobbers v0, v1, at, t6, t7.
 byte_code:
         move  t6, ra
         jal   run_flag
@@ -332,9 +370,16 @@ byte_code:
         lbu   v1, 0(at)
         sll   v0, a0, 1
         beqz  v1, .own
-        lui   at, %hi(run_codes)
-        addu  at, at, v0
-        lhu   a0, %lo(run_codes)(at)
+        move  t7, at
+        jal   run_code
+        nop
+        beqz  v0, .done
+        nop
+        lhu   v1, $14(s0)
+        nop
+        addiu v1, v1, -1
+        sh    v1, $14(s0)
+.done:
         jr    t6
         nop
 .own:
@@ -353,7 +398,7 @@ instant_code:
         lbu   v1, 0(at)
         sll   a0, s1, 1
         bnez  v1, .run
-        lui   at, %hi(run_codes)
+        move  t7, at
         li    v0, $20
         beq   s1, v0, .space
         lui   at, %hi(OWN_CODES)
@@ -366,8 +411,15 @@ instant_code:
         jr    t6
         li    v0, 1
 .run:
-        addu  at, at, a0
-        lhu   s1, %lo(run_codes)(at)
+        jal   run_code
+        move  a0, s1
+        beqz  v0, .done
+        move  s1, a0
+        lhu   v1, $14(s0)
+        nop
+        addiu v1, v1, -1
+        sh    v1, $14(s0)
+.done:
         jr    t6
         move  v0, zero
 
@@ -391,7 +443,8 @@ set_string:
 
 ; The menus' screens: menu_start, at the start of a string, ends any run; menu_byte, at each byte,
 ; v0 = the byte at s2, and a byte under $10 other than RUN ends a run; menu_code, at a character,
-; a2 = its code, with s2 at its last byte, after RUN if it starts with one.
+; a2 = its code, with s2 at its last byte, after RUN if it starts with one, or, for the first
+; character of a pair, at the byte before, so that the pair's byte is read again.
 menu_start:
         lui   at, %hi(menu_run)
         j     $8005CD4C
@@ -441,12 +494,14 @@ menu_code:
         jr    ra
         nop
 .run:
-        sll   v0, v0, 1
-        lui   at, %hi(run_codes)
-        addu  at, at, v0
-        lhu   a2, %lo(run_codes)(at)
-        jr    ra
-        nop
+        move  t6, ra
+        lui   t7, %hi(menu_run)
+        addiu t7, t7, %lo(menu_run)
+        jal   run_code
+        move  a0, v0
+        move  a2, a0
+        jr    t6
+        subu  s2, s2, v0
 
 menu_width:
         .byte SMALL
@@ -456,9 +511,10 @@ runs:
         .space 17
         .align 4
 
-; The code of each byte in a run, by byte. The build writes them.
+; What each byte of a run stands for, by byte: a character's code and 0, or the codes of the two
+; characters of a pair. The build writes them.
 run_codes:
-        .space 512
+        .space 1024
 
 ; Each code's width, the dialogue's font in the low four bits and the small font's in the high
 ; four, from code 0 (an empty cell) to TABLE_CODES. The build writes them.

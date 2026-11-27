@@ -78,8 +78,12 @@
 //! the game, a cell of the font each, from Unifont unless the build is given another font. They are
 //! written a byte each, in runs (`encode_text`): the byte $0A starts a run, and ends it where a
 //! character of the game's own font follows; a line break or a tag ends it anyway. So a letter takes
-//! one byte, and each run one more. The build switch `full-width` writes every character a cell,
-//! as the game's own text does, and puts no renderer in.
+//! one byte, and each run one more. Every changed string is laid out and measured so, and then the
+//! pairs of characters that save the most bytes in the runs of all of them are written a byte each
+//! (`paired`, see `vwf::Pairs`), which the game draws as it draws the two characters: so the bytes
+//! the build counts, for the program's room and the heap, are those written, and the widths and
+//! lines it measured hold. The build switch `full-width` writes every character a cell, as the
+//! game's own text does, and puts no renderer in.
 //!
 //! The font is drawn twice: in glyphs of 16 by 16 pixels, members 0 and 1, which the dialogue's
 //! window draws, and in glyphs of 12 by 11, member 2, by the same codes, which the battle's window and
@@ -109,7 +113,7 @@ use std::sync::Arc;
 use super::battle::{BATTLE_SECTION, BattleText, battle_text};
 use super::heap::{self, Footprint, SPARE, Shortfall};
 use super::program::{self as program_text, Lines, MENU_SECTION, PROGRAM_SECTION, ProgramText};
-use super::vwf::{self, Renderer};
+use super::vwf::{self, Pairs, Renderer};
 use super::{
     ARCHIVE, AREA_HEADER, AREAS, Area, ByteCodes, CONTENTS, Entry, FIRST_CODE, FONT_PAGES, GLYPH_COUNT, GLYPH_SIZE,
     NAME_INSERTS, PROGRAM, TABLE, WORD_INSERT, areas, code_of, decode, encode_with, member, program, text_block, word,
@@ -193,7 +197,8 @@ pub const LIMITS: &str = "the window shows 4 lines of 224 pixels, 210 in a spoke
                           area, loads one of its maps or fights in it: not at all for areas 105 and 107, a few \
                           thousand bytes for areas 131, 154, 157 and 179, and over 150,000 for half of the areas \
                           (docs/packs.md lists the tightest); a letter drawn at its own width takes one byte, and \
-                          each run of them one more, a kana one";
+                          each run of them one more, a kana one, and the pairs of letters a pack writes most are \
+                          written a byte each, which takes about two fifths of the bytes off English";
 
 // --- characters ------------------------------------------------------------
 
@@ -774,6 +779,39 @@ fn run_states(pieces: &[(Piece, Vec<u8>)]) -> Vec<bool> {
     states
 }
 
+/// Where the runs of the renderer's characters are in a string's bytes: the stretches of bytes each
+/// read as one of its characters, one after another (see `pieces`).
+fn run_stretches(data: &[u8], writing: &Writing) -> Vec<Range<usize>> {
+    let mut found: Vec<Range<usize>> = Vec::new();
+    let mut at = 0;
+    for (piece, bytes) in pieces(data, writing) {
+        if matches!(piece, Piece::Run(_)) {
+            match found.last_mut() {
+                Some(last) if last.end == at => last.end += bytes.len(),
+                _ => found.push(at..at + bytes.len()),
+            }
+        }
+        at += bytes.len();
+    }
+    found
+}
+
+/// A string's bytes, laid out a byte a character, with its runs written in pairs (see
+/// `vwf::Pairs`). The game draws a pair as it draws its two characters, a byte each, and ends a
+/// line between them where it would between those: so what was measured of the string holds, and
+/// only its bytes are fewer.
+fn paired(data: &[u8], writing: &Writing, pairs: &Pairs) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut at = 0;
+    for run in run_stretches(data, writing) {
+        out.extend(&data[at..run.start]);
+        out.extend(pairs.write(&data[run.clone()]));
+        at = run.end;
+    }
+    out.extend(&data[at..]);
+    out
+}
+
 /// The tags after which the game goes on at the start of a new line, as a line break does.
 const NEW_LINE_TAGS: [&str; 2] = ["WAIT", "CLEAR"];
 
@@ -1151,13 +1189,17 @@ struct Done {
     /// The least of the heap that a moment of the changed areas leaves free, and which moment it is.
     least: Option<(usize, String)>,
     new_characters: Vec<char>,
-    /// The characters drawn at their own widths, and the cells free for them.
+    /// The characters drawn at their own widths, and the cells free for them, and the pairs of them
+    /// written a byte each.
     renderer: Option<(usize, usize)>,
+    pairs: usize,
     /// The strings of the program's text that changed, how many of them moved, and how many were
     /// written once for several.
     program_strings: usize,
     program_moved: usize,
     program_once: usize,
+    /// The bytes the program's strings that moved take of the room they share, and that room.
+    program_room: (usize, usize),
     labels: usize,
 }
 
@@ -1169,8 +1211,12 @@ impl Done {
                 0 => String::new(),
                 once => format!(", {once} of them the same text as another and written once"),
             };
+            let room = match self.program_room {
+                (_, 0) => String::new(),
+                (used, room) => format!(", taking {used} bytes of its {room}"),
+            };
             lines.push(format!(
-                "program:   {} strings changed, {} of them moved in the room they share{once}",
+                "program:   {} strings changed, {} of them moved in the room they share{room}{once}",
                 self.program_strings, self.program_moved
             ));
         }
@@ -1202,9 +1248,13 @@ impl Done {
             ));
         }
         if let Some((drawn, free)) = self.renderer {
+            let pairs = match self.pairs {
+                0 => String::new(),
+                pairs => format!(", and {pairs} pairs of them written a byte each"),
+            };
             lines.push(format!(
                 "renderer:  {drawn} characters drawn at their own widths, in cells of kanji no unchanged string \
-                 uses, of {free}; its code at ${:08X}, loaded at start-up from the program's file",
+                 uses, of {free}{pairs}; its code at ${:08X}, loaded at start-up from the program's file",
                 vwf::PLACEMENT.destination
             ));
         }
@@ -1431,10 +1481,6 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
     for (entry, page) in FONT_MEMBERS.iter().zip(pages) {
         patches.push((ARCHIVE, u64::from(program.contents[*entry].0) * ps1::SECTOR, page));
     }
-    if !renderer.is_empty() {
-        let file = program_text::program_file(disc)?;
-        patches.extend(renderer.install(&file)?.into_iter().map(|(at, data)| (PROGRAM, at as u64, data)));
-    }
     let writing = Writing { codes, drawn: &drawn, renderer: (!renderer.is_empty()).then_some(&renderer) };
 
     // The changed strings, each fitted to the window, by area.
@@ -1450,34 +1496,21 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         }
     }
 
-    // The program's own text, each string fitted to the room its part has on screen, then all of
-    // them written back into the room they share; and the menus' labels, each in its slot.
-    if !program_changes.is_empty() || !labels.is_empty() {
+    // The program's own text, each string fitted to the room its part has on screen; and the menus'
+    // labels, each in its slot.
+    let mut changed = BTreeMap::new();
+    for (section, number, text) in &program_changes {
+        match write_program(text, *number, &writing) {
+            Ok(data) => {
+                changed.insert(*number, data);
+            }
+            Err(Error::Text(problem)) => refusals.push(format!("string {}: {problem}", string_name(section, *number))),
+            Err(other) => return Err(other),
+        }
+    }
+    if !labels.is_empty() {
         let file = program_text::program_file(disc)?;
         let references = program_text::references(disc)?;
-        let mut changed = BTreeMap::new();
-        for (section, number, text) in &program_changes {
-            match write_program(text, *number, &writing) {
-                Ok(data) => {
-                    changed.insert(*number, data);
-                }
-                Err(Error::Text(problem)) => {
-                    refusals.push(format!("string {}: {problem}", string_name(section, *number)))
-                }
-                Err(other) => return Err(other),
-            }
-        }
-        if !changed.is_empty() {
-            let rooms = program_text::rooms(&file, &own_text[PROGRAM_SECTION], &references, codes);
-            match program_text::write_strings(&file, &rooms, &changed) {
-                Ok(written) => {
-                    (done.program_moved, done.program_once) = (written.moved, written.once);
-                    let to_program = written.patches.into_iter().map(|(at, data)| (PROGRAM, at as u64, data));
-                    patches.extend(to_program);
-                }
-                Err(problem) => refusals.push(problem),
-            }
-        }
         let own_labels = &own_text[MENU_SECTION];
         for (section, number, text) in &labels {
             let room = program_text::label_room(&file, *number as usize, own_labels, &references.referred);
@@ -1504,6 +1537,37 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
                 }
                 Err(other) => return Err(other),
             }
+        }
+    }
+
+    // Two characters a byte (see `vwf::Pairs`): the pairs that save the most in the runs of every
+    // string laid out above, put into them now that each has been measured a byte a character.
+    if !renderer.is_empty() {
+        let strings = replaced.values().flat_map(BTreeMap::values).chain(changed.values());
+        let runs: Vec<Vec<u8>> =
+            strings.flat_map(|data| run_stretches(data, &writing).into_iter().map(|run| data[run].to_vec())).collect();
+        let pairs = Pairs::choose(&renderer, &runs);
+        for data in replaced.values_mut().flat_map(BTreeMap::values_mut).chain(changed.values_mut()) {
+            *data = paired(data, &writing, &pairs);
+        }
+        let file = program_text::program_file(disc)?;
+        patches.extend(renderer.install(&file, &pairs)?.into_iter().map(|(at, data)| (PROGRAM, at as u64, data)));
+        done.pairs = pairs.len();
+    }
+
+    // The program's strings written back into the room they share.
+    if !changed.is_empty() {
+        let file = program_text::program_file(disc)?;
+        let references = program_text::references(disc)?;
+        let rooms = program_text::rooms(&file, &own_text[PROGRAM_SECTION], &references, codes);
+        match program_text::write_strings(&file, &rooms, &changed) {
+            Ok(written) => {
+                (done.program_moved, done.program_once) = (written.moved, written.once);
+                done.program_room = (written.used, written.room);
+                let to_program = written.patches.into_iter().map(|(at, data)| (PROGRAM, at as u64, data));
+                patches.extend(to_program);
+            }
+            Err(problem) => refusals.push(problem),
         }
     }
 
