@@ -378,7 +378,10 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
 ### G.O.D pure (`god-ps1`)
 
 - Only the dialogue can be changed so far: the sections `096` to `188`, one for each area of the game. The
-  sections `program` and `menu` can be extracted and read, and a pack that changes them is refused.
+  sections `program`, `menu` and `battle` can be extracted and read, and a pack that changes them is refused.
+  Section `battle` is what the bosses say in battle, and the messages that take the place of the battle's
+  own when such a battle starts, is won or is lost; it is shown in the battle's window, 4 lines of 18 smaller
+  cells, where the game goes on to the next line by itself when a line is full.
 - Every character takes the same room, a cell of 14 pixels, and the window shows 4 lines of 16 cells.
   After `{SAY}`, which starts a spoken line and draws its 「, the lines that follow are indented by one
   cell, so a spoken line holds 15. Changed lines are broken at spaces to fit, and a `{WAIT}` is put in

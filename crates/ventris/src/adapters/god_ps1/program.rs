@@ -32,10 +32,9 @@
 //! Labels written in ASCII alone are not taken: the same part of the data holds the names of files
 //! and the formats of numbers, which look the same.
 //!
-//! Not covered yet: the battles' scripts, from $98128 of the file to about $9AA00, which a table at
-//! $98048 lists (56 of them, the speeches before and after the bosses' fights). Their text is
-//! written as the dialogue is, but among commands of another kind whose reader has not been found,
-//! so where a string starts and ends in them is not known.
+//! The battles' scripts, from $98128 of the file to $9AC23, which a table at $98048 lists, hold what
+//! the bosses say in battle, written as the dialogue is among commands of their own. They are read
+//! in `battle`, as section `battle`, and are in none of the stretches above.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
