@@ -57,8 +57,10 @@
 //!
 //! A label of the menus stays in its slot, since the code finds it a set number of bytes from the
 //! first of its screen (see `label_room`), and draws no more characters than the widest of the
-//! game's own labels on its screen (see `label_width`), which is what its box or column was made
-//! for. The small font draws a lowercase letter as its capital, so a pack's are written as capitals.
+//! game's own labels on its screen (see `label_width`). That is a guess at the room its box or
+//! column has, not a measure of it, so a label within it is not sure to show whole, and a box may
+//! have more room, as the main menu's was seen to have for 8 characters. The small font draws a lowercase letter as its
+//! capital, so a pack's are written as capitals.
 //!
 //! Not covered yet: the battles' scripts, from $98128 of the file to about $9AA00, which a table at
 //! $98048 lists (56 of them, the speeches before and after the bosses' fights). Their text is
@@ -73,7 +75,7 @@ use std::sync::Arc;
 
 use super::{ByteCodes, PROGRAM, every_character_known, read_text};
 use crate::error::{Result, text_error};
-use crate::placement::{pack_room, share_room};
+use crate::placement::{Shared, pack_room, share_room};
 use crate::platforms::mips::{CodeUse, code_use, number, within_reach};
 use crate::platforms::ps1::Disc;
 use crate::script::string_name;
@@ -600,8 +602,8 @@ pub struct Room {
 /// tail, and its bytes are part of the string's room.
 ///
 /// A string can move when everything found to refer to it is a 32-bit word that holds its address
-/// or an instruction that builds that address, and nothing refers to a place inside it or reads it
-/// straight from memory. Every string of the game's has words or code that refer to it, and none is
+/// or an instruction that builds that address and no other, and nothing refers to a place inside it
+/// or reads it straight from memory. Every string of the game's has words or code that refer to it, and none is
 /// referred to otherwise. Nothing in the archive was found to point at the program's text: the 33
 /// words of its members that hold the address of a string are what chance gives among its pictures,
 /// as many as words in the same span hold any address there.
@@ -612,6 +614,16 @@ pub fn rooms(
     codes: &ByteCodes,
 ) -> BTreeMap<u32, Room> {
     let referred = |range: Range<usize>| references.referred.range(range).next().is_some();
+    // The instructions that add a low half to more than one high half, their register having been
+    // given different ones on different ways to them: a new low half for one address would change
+    // the others too.
+    let mut addresses_of: BTreeMap<usize, BTreeSet<u32>> = BTreeMap::new();
+    for (address, sites) in &references.code.built {
+        for at in sites {
+            addresses_of.entry(*at).or_default().insert(*address);
+        }
+    }
+    let shared_code = |at: &usize| addresses_of.get(at).is_some_and(|addresses| addresses.len() > 1);
     let starts: Vec<usize> = strings.keys().map(|offset| *offset as usize).collect();
     let mut rooms = BTreeMap::new();
     for (index, (offset, data)) in strings.iter().enumerate() {
@@ -623,6 +635,7 @@ pub fn rooms(
         };
         let followed = !references.code.straight.contains(&address)
             && !referred(start + 1..end + 1)
+            && !reached.code.iter().any(shared_code)
             && (!reached.words.is_empty() || !reached.code.is_empty());
         let stretch = TEXT.iter().find(|stretch| stretch.contains(&start));
         let next = starts.get(index + 1).copied().filter(|next| stretch.is_some_and(|stretch| stretch.contains(next)));
@@ -706,7 +719,9 @@ pub fn write_strings(
             continue;
         }
         if need(*offset, data) > room.size {
-            too_long.push(format!("string {} takes {} bytes, and has {}", name(*offset), data.len(), room.size - 1));
+            // Its room holds its zero byte and its tail too, which a translator does not write.
+            let has = room.size - 1 - room.tail.len();
+            too_long.push(format!("string {} takes {} bytes, and has {has}", name(*offset), data.len()));
             continue;
         }
         let mut bytes = [data.as_slice(), &[0], &room.tail].concat();
@@ -739,16 +754,36 @@ pub fn write_strings(
         }
     }
     // Each string brings its room; the first of each group needs room for them all.
-    let mut needs: Vec<(usize, usize, usize, Range<usize>)> =
-        moving.iter().map(|(offset, ..)| (*offset as usize, rooms[offset].size, 0, 0..usize::MAX)).collect();
-    for (members, common) in &groups {
-        let (offset, data, _) = moving[members[0]];
-        needs[members[0]].2 = need(offset, data);
-        needs[members[0]].3 = common.clone();
-    }
-    let mut shared = share_room(&needs, None);
-    if groups.iter().any(|(members, _)| shared.1[members[0]].is_none()) {
-        shared = pack_room(&needs, None);
+    let place = |groups: &[(Vec<usize>, Range<usize>)]| {
+        let mut needs: Vec<(usize, usize, usize, Range<usize>)> =
+            moving.iter().map(|(offset, ..)| (*offset as usize, rooms[offset].size, 0, 0..usize::MAX)).collect();
+        for (members, common) in groups {
+            let (offset, data, _) = moving[members[0]];
+            needs[members[0]].2 = need(offset, data);
+            needs[members[0]].3 = common.clone();
+        }
+        let mut shared = share_room(&needs, None);
+        if groups.iter().any(|(members, _)| shared.1[members[0]].is_none()) {
+            shared = pack_room(&needs, None);
+        }
+        (needs, shared)
+    };
+    let (mut needs, mut shared) = place(&groups);
+    // A group may go only where its strings' reaches overlap, which may have no room free. A group
+    // left without a place is then tried as one copy per string, each within its own reach; that is
+    // kept if every string then has a place, and otherwise what is refused is the first try.
+    let unplaced = |shared: &Shared, (members, _): &(Vec<usize>, Range<usize>)| {
+        members.len() > 1 && shared.1[members[0]].is_none()
+    };
+    if groups.iter().any(|group| unplaced(&shared, group)) {
+        let (split, mut apart): (Vec<_>, Vec<_>) = groups.iter().cloned().partition(|group| unplaced(&shared, group));
+        apart.extend(
+            split.into_iter().flat_map(|(members, _)| members).map(|member| (vec![member], moving[member].2.clone())),
+        );
+        let (apart_needs, apart_shared) = place(&apart);
+        if apart.iter().all(|(members, _)| apart_shared.1[members[0]].is_some()) {
+            (groups, needs, shared) = (apart, apart_needs, apart_shared);
+        }
     }
     let (stretches, places, largest) = shared;
     let left: Vec<(u32, usize)> = (groups.iter())
@@ -832,9 +867,9 @@ pub fn label_cells(label: &[u8]) -> usize {
 }
 
 /// How many characters the label at `start` may draw: as many as the widest of the game's own
-/// labels in its run (see `menu_strings`), which are the labels of one screen, since that is what
-/// its box or column was made for; the main menu's box was seen to have room for more. `labels`
-/// are the section's.
+/// labels in its run (see `menu_strings`), which are the labels of one screen. That is taken as the
+/// room its box or column has, without having been measured, so a label within it is not sure to
+/// show whole; the main menu's box was seen to show 8 characters. `labels` are the section's.
 pub fn label_width(start: u32, labels: &BTreeMap<u32, Vec<u8>>) -> usize {
     if MAIN_MENU.contains(&start) {
         return MAIN_MENU_WIDTH;

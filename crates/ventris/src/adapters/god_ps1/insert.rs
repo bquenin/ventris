@@ -427,6 +427,13 @@ fn wrap(text: &str) -> Result<String> {
 
 /// The same, to lines of `columns` cells, one fewer in a spoken line.
 fn wrap_to(text: &str, columns: usize) -> Result<String> {
+    // The line breaking stands for a tag's cells with this character, so a string cannot have it.
+    if text.contains(TAG_CELL) {
+        return text_error(format!(
+            "it has the character U+{:04X}, which the breaking of lines uses for itself: remove it",
+            TAG_CELL as u32
+        ));
+    }
     let mut speaking = false;
     let mut lines = Vec::new();
     for line in text.split('\n') {
@@ -690,6 +697,15 @@ fn program_string(
             quoted(&char.to_string())
         ));
     }
+    // The record holds the name's characters alone: the menus' font draws no code of the dialogue.
+    if names
+        && let Some(Token::Tag { raw, .. }) = tokens(text).into_iter().find(|token| matches!(token, Token::Tag { .. }))
+    {
+        return text_error(format!(
+            "it has the tag {raw}, and a name of the party is copied into a record that the menus draw as \
+             characters, in a font that has no codes: write the name in characters alone"
+        ));
+    }
     let text = if wrap { wrap_to(text, width)? } else { text.to_string() };
     let data = encode_with(&text, codes, &|char| pack_code(char, codes, drawn))?;
     let lines = line_cells(&data, codes);
@@ -715,7 +731,11 @@ fn program_string(
         Lines::Most(most) | Lines::Running(most) => (most, format!("a string of this part has room for {most}")),
     };
     if lines.len() > most {
-        return text_error(format!("it has {} lines, and {why}", lines.len()));
+        let what = match wrap {
+            true => format!("shorten it until, broken at spaces, it has no more than {most}"),
+            false => format!("join its lines, or shorten it, until it has no more than {most}"),
+        };
+        return text_error(format!("it has {} lines, and {why}: {what}", lines.len()));
     }
     if names && data.len() > NAME_BYTES {
         return text_error(format!(

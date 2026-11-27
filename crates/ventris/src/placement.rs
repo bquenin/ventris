@@ -107,14 +107,26 @@ pub fn share_room(strings: &[(usize, usize, usize, Range<usize>)], spare: Option
     left.sort_by_key(|index| (Reverse(strings[*index].2), strings[*index].0));
     for index in left {
         let (need, may) = (strings[index].2, &strings[index].3);
-        let fits = |stretch: &usize| free[*stretch] + need <= stretches[*stretch].end && may.contains(&free[*stretch]);
-        if let Some(stretch) = (0..stretches.len()).find(fits) {
-            places[index] = Some(free[stretch]);
-            free[stretch] += need;
+        let at = |stretch: usize, gap: bool| start_in(&stretches[stretch], free[stretch], need, may, gap);
+        let found = [false, true]
+            .into_iter()
+            .find_map(|gap| (0..stretches.len()).find_map(|stretch| Some((stretch, at(stretch, gap)?))));
+        if let Some((stretch, start)) = found {
+            places[index] = Some(start);
+            free[stretch] = start + need;
         }
     }
     let largest = stretches.iter().zip(&free).map(|(stretch, free)| stretch.end - free).max().unwrap_or(0);
     (stretches, places, largest)
+}
+
+/// Where a string of `need` bytes that may start in `may` can go in `stretch`, which is filled up to
+/// `free`: at `free`, or, with `gap`, further on when it may not start that soon, the bytes between
+/// left unused. A place with no gap is looked for in every stretch first, so that a gap is left only
+/// where nothing else would do.
+fn start_in(stretch: &Range<usize>, free: usize, need: usize, may: &Range<usize>, gap: bool) -> Option<usize> {
+    let start = if gap { free.max(may.start) } else { free };
+    (may.contains(&start) && start + need <= stretch.end).then_some(start)
 }
 
 /// The strings of `share_room` in the order of their offsets, the stretches their rooms make, the
@@ -156,11 +168,14 @@ pub fn pack_room(strings: &[(usize, usize, usize, Range<usize>)], spare: Option<
             places[index] = Some(free[stretch_of[index]]);
             continue;
         }
-        let fits = |stretch: &usize| free[*stretch] + need <= stretches[*stretch].end && may.contains(&free[*stretch]);
-        let best = (0..stretches.len()).filter(fits).min_by_key(|stretch| stretches[*stretch].end - free[*stretch]);
-        if let Some(stretch) = best {
-            places[index] = Some(free[stretch]);
-            free[stretch] += need;
+        let at = |stretch: usize, gap: bool| start_in(&stretches[stretch], free[stretch], need, may, gap);
+        let best = [false, true].into_iter().find_map(|gap| {
+            let starts = (0..stretches.len()).filter_map(|stretch| Some((stretch, at(stretch, gap)?)));
+            starts.min_by_key(|(stretch, start)| stretches[*stretch].end - start)
+        });
+        if let Some((stretch, start)) = best {
+            places[index] = Some(start);
+            free[stretch] = start + need;
         }
     }
     let largest = stretches.iter().zip(&free).map(|(stretch, free)| stretch.end - free).max().unwrap_or(0);
@@ -219,5 +234,18 @@ mod tests {
         // Where a string may go is kept to.
         let strings = [(100, 8, 3, ANY), (200, 4, 3, 0..150)];
         assert_eq!(pack_room(&strings, None).1, [Some(200), Some(100)]);
+    }
+
+    #[test]
+    fn a_string_that_may_not_start_where_a_stretch_is_filled_to_goes_further_on_in_it() {
+        // One stretch of 16 bytes: the second string may not start before 108, where the first leaves
+        // the stretch filled to 104. It goes at 108, and the 4 bytes between are left unused.
+        let strings = [(100, 8, 4, ANY), (108, 8, 8, 108..200)];
+        assert_eq!(share_room(&strings, None).1, [Some(100), Some(108)]);
+        let strings = [(100, 8, 8, 104..200), (108, 8, 4, ANY)];
+        assert_eq!(pack_room(&strings, None).1, [Some(104), Some(112)]);
+        // A stretch it can go in with no gap comes first.
+        let strings = [(100, 8, 4, ANY), (108, 8, 8, 108..300)];
+        assert_eq!(share_room(&strings, Some(200..216)).1, [Some(100), Some(200)]);
     }
 }

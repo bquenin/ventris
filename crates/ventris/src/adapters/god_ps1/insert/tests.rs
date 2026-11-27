@@ -127,6 +127,43 @@ fn wrapping_breaks_lines_at_spaces_and_waits_before_the_window_scrolls() {
     assert_eq!(shown(&written("A\nA\nA{WAIT}\nA\nA\nA", true).unwrap()), "A/A/A|A/A/A");
 }
 
+#[test]
+fn a_string_with_the_character_that_stands_for_a_tag_s_cells_is_refused() {
+    // Without the check, the line breaking took it for a tag's cells and found no tag behind it.
+    let refused = wrap("A\u{E000}A").unwrap_err().to_string();
+    assert!(refused.contains("U+E000"), "{refused}");
+    assert!(wrap("A {NAME:19}\u{E000}").is_err());
+}
+
+/// A changed string of the program's text at `offset` as it is written, the game's own being Ａ.
+fn program_written(text: &str, offset: u32, wrap: bool) -> std::result::Result<Vec<u8>, String> {
+    program_string(text, offset, &hex("a3"), &codes(), &HashMap::new(), wrap).map_err(|error| error.to_string())
+}
+
+#[test]
+fn a_name_of_the_party_has_characters_alone() {
+    let names = program_text::NAMES;
+    assert_eq!(program_written("AA", names, true).unwrap(), hex("a3 a3"));
+    let refused = program_written("A{HOLD}A", names, true).unwrap_err();
+    assert!(refused.starts_with("it has the tag {HOLD}, and a name of the party"), "{refused}");
+    assert!(refused.ends_with("write the name in characters alone"), "{refused}");
+}
+
+#[test]
+fn a_string_with_too_many_lines_is_told_what_to_do() {
+    // A shopkeeper's line has 2 lines of 13 characters.
+    let shop = program_text::SHOP_LINES[0].0;
+    assert!(program_written("AAAA AAAA AAAA AAAA", shop, true).is_ok());
+    let refused = program_written("AAAA AAAA AAAA AAAA AAAA", shop, true).unwrap_err();
+    assert_eq!(
+        refused,
+        "it has 3 lines, and a string of this part has room for 2: shorten it until, broken at spaces, it has no \
+         more than 2"
+    );
+    let refused = program_written("AAAA\nAAAA\nAAAA", shop, false).unwrap_err();
+    assert!(refused.ends_with(": join its lines, or shorten it, until it has no more than 2"), "{refused}");
+}
+
 /// A text block like the game's: entry 0 a string, entry 1 the same, entry 2 a list of numbers,
 /// entry 3 a string with a byte left over after its zero byte, entry 4 a string, and four zero bytes.
 fn block() -> Vec<u8> {

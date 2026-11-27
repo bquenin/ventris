@@ -515,6 +515,79 @@ fn changed_strings_share_their_room_and_what_refers_to_them_follows() {
 }
 
 #[test]
+fn an_instruction_that_builds_two_addresses_keeps_its_string_where_it_is() {
+    // The third string's `addiu` is reached with `a0` given its high half on one way and another
+    // high half on the other: a new low half for the string would change the other address too.
+    let (mut file, strings) = made_up_program();
+    let address = 0xA_096A + program::PROGRAM_BASE;
+    let code = [
+        mips::LUI << 26 | 4 << 16 | address >> 16,
+        0x04 << 26 | 5 << 21 | 2, // beq a1, zero: on to the `addiu`, or through the second `lui`
+        0,
+        mips::LUI << 26 | 4 << 16 | ((address >> 16) + 1),
+        mips::ADDIU << 26 | 4 << 21 | 4 << 16 | (address & 0xFFFF),
+        mips::RETURN,
+        0,
+    ];
+    for (index, word) in code.into_iter().enumerate() {
+        file[0x800 + 4 * index..][..4].copy_from_slice(&word.to_le_bytes());
+    }
+    let references = program::references_in(&file);
+    assert_eq!(references.code.built.get(&address), Some(&vec![0x810]));
+    let rooms = program::rooms(&file, &strings, &references, &codes());
+    assert_eq!(rooms[&0xA_096A].reached, None);
+    assert!(rooms[&0xA_0960].reached.is_some());
+}
+
+#[test]
+fn a_string_that_stays_is_told_the_room_its_tail_leaves_it() {
+    // Something points inside the second string, whose room of 7 bytes holds its zero byte and a
+    // piece of text of 2 bytes after it: 4 are left for its text.
+    let (mut file, strings) = made_up_program();
+    file[0xA_0A20..0xA_0A24].copy_from_slice(&(0xA_0964 + program::PROGRAM_BASE).to_le_bytes());
+    let references = program::references_in(&file);
+    let rooms = program::rooms(&file, &strings, &references, &codes());
+    assert_eq!((rooms[&0xA_0963].reached.as_ref(), rooms[&0xA_0963].size), (None, 7));
+    let changed = BTreeMap::from([(0xA_0963, vec![0xA2; 4])]);
+    assert!(program::write_strings(&file, &rooms, &changed).is_ok());
+    let changed = BTreeMap::from([(0xA_0963, vec![0xA2; 5])]);
+    let refused = program::write_strings(&file, &rooms, &changed).unwrap_err();
+    assert!(refused.starts_with("string program.657763 takes 5 bytes, and has 4: "), "{refused}");
+}
+
+#[test]
+fn strings_given_the_same_text_are_written_apart_when_no_room_is_within_reach_of_both() {
+    // One string's address is built by an `addiu` and reaches $A8800 to $B8800 of the file; the
+    // other's by an `ori`, and reaches $B0800 to $C0800. Their rooms are each outside the other's
+    // reach, so one copy cannot serve both, but each fits in its own room.
+    let mut file = vec![0u8; 0xC_1000];
+    let (first, second) = (0xB_0000u32, 0xB_9000u32);
+    let high = |offset: u32| (offset + program::PROGRAM_BASE) >> 16;
+    let low = |offset: u32| (offset + program::PROGRAM_BASE) & 0xFFFF;
+    let code = [
+        mips::LUI << 26 | 4 << 16 | (high(first) + 1), // the `addiu` adds its half as a negative number
+        mips::ADDIU << 26 | 4 << 21 | 4 << 16 | low(first),
+        mips::LUI << 26 | 5 << 16 | high(second),
+        mips::ORI << 26 | 5 << 21 | 5 << 16 | low(second),
+    ];
+    for (index, word) in code.into_iter().enumerate() {
+        file[0x800 + 4 * index..][..4].copy_from_slice(&word.to_le_bytes());
+    }
+    let room = |code: usize| program::Room {
+        size: 8,
+        tail: Vec::new(),
+        reached: Some(program::Reached { words: Vec::new(), code: vec![code] }),
+    };
+    let rooms = BTreeMap::from([(first, room(0x804)), (second, room(0x80C))]);
+    let changed = BTreeMap::from([(first, vec![0xA2; 5]), (second, vec![0xA2; 5])]);
+    let written = program::write_strings(&file, &rooms, &changed).unwrap();
+    assert_eq!((written.moved, written.once), (0, 0));
+    let patches: BTreeMap<usize, Vec<u8>> = written.patches.into_iter().collect();
+    let copy = [vec![0xA2; 5], vec![0; 3]].concat();
+    assert_eq!((&patches[&(first as usize)], &patches[&(second as usize)]), (&copy, &copy));
+}
+
+#[test]
 fn a_label_has_its_slot_and_the_width_of_its_screen() {
     let mut file = vec![0u8; 0x200];
     let mut put = |at: usize, label: &str| file[at..at + small(label).len()].copy_from_slice(&small(label));

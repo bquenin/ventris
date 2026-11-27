@@ -249,8 +249,11 @@ pub fn within_reach(data: &[u8], base: u32, offset: usize, code: &[usize]) -> Ra
             true => address - i64::from(word as u16 as i16) - 0x8000,
             false => address & !0xFFFF,
         };
-        let first = (first - i64::from(base)).max(0) as usize;
-        reach = reach.start.max(first)..reach.end.min(first + 0x10000);
+        // The window's end is counted before its start is kept from going below the data's: one
+        // that starts below the base still ends where its high half's reach does.
+        let first = first - i64::from(base);
+        let (start, end) = (first.max(0) as usize, (first + 0x10000).max(0) as usize);
+        reach = reach.start.max(start)..reach.end.min(end);
     }
     reach
 }
@@ -279,5 +282,19 @@ mod tests {
         data.extend(words.iter().flat_map(|word: &u32| word.to_le_bytes()));
         let found = code_use(&data, start..data.len(), base);
         assert_eq!(found.built.get(&0x800B_1234), Some(&vec![start + 16]));
+    }
+
+    /// A string near the start of what is loaded high in memory: the reach of its high half starts
+    /// below the data, and ends where that half's reach ends, not 65,536 bytes past the data's start.
+    #[test]
+    fn a_reach_that_starts_below_the_data_keeps_its_end() {
+        let base = 0x8000_F800;
+        let mut data = vec![0; 0x1000];
+        // `ori a0, a0, 0xFC00` builds the address of offset $400 on the high half $8000.
+        data[0x900..0x904].copy_from_slice(&(ORI << 26 | 4 << 21 | 4 << 16 | 0xFC00).to_le_bytes());
+        assert_eq!(within_reach(&data, base, 0x400, &[0x900]), 0..0x800);
+        // `addiu a0, a0, 0x0400` builds that of offset $C00 on $8001, which reaches $8000 bytes down.
+        data[0x904..0x908].copy_from_slice(&(ADDIU << 26 | 4 << 21 | 4 << 16 | 0x0400).to_le_bytes());
+        assert_eq!(within_reach(&data, base, 0xC00, &[0x904]), 0..0x8800);
     }
 }
