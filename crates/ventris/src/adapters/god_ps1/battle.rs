@@ -177,7 +177,10 @@ pub fn read_script(
             Some(follows) => follows,
             None => {
                 first = false;
-                match later_command(command, file.get(at + 1).copied()) {
+                // A round's number is part of its command, so a script that ends before it is cut
+                // short, not stopped.
+                let after = if command == 0x07 { Some(byte(at + 1)?) } else { file.get(at + 1).copied() };
+                match later_command(command, after) {
                     Some(follows) => follows,
                     None => return Ok((strings, at)),
                 }

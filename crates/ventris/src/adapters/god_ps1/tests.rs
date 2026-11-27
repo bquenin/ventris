@@ -189,6 +189,9 @@ fn a_battle_s_script_is_read_command_by_command() {
     assert!(script("01 A2").is_err());
     assert!(script("0C 0C FF 00 00").is_err());
     assert!(script("0B").is_err());
+    // A round command whose number is missing is a script cut short, not a stop.
+    assert!(script("0C A2 00 07").is_err());
+    assert_eq!(script("0C A2 00 07 02 A2 00 00"), Ok((vec![(1, When::Next), (5, When::Round(2))], 7)));
 }
 
 #[test]
