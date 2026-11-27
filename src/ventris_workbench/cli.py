@@ -6,7 +6,7 @@ import sys
 import zlib
 from pathlib import Path
 
-from ventris_workbench import __version__, emulator, pcsx2, ps2probe
+from ventris_workbench import __version__, dsprobe, emulator, pcsx2, ps2probe
 from ventris_workbench.bindiff import diff_ranges, merge_ranges
 from ventris_workbench.patch import PatchError, apply_patch, create_bps, detect_format
 from ventris_workbench.platforms import snes, w65816
@@ -149,6 +149,26 @@ def _cmd_ps2_probe(args: argparse.Namespace) -> int:
     with pcsx2.Pcsx2(args.emulator) as running:
         files = ps2probe.run(running, args.output, plan)
     for path in files:
+        print(path)
+    return 0
+
+
+def _cmd_ds_probe(args: argparse.Namespace) -> int:
+    plan = dsprobe.Plan(
+        frames=args.frames,
+        input=args.input,
+        touch=args.touch,
+        shots=args.shot,
+        dumps=args.dump,
+        registers=args.registers,
+        reads=args.reads,
+        writes=args.writes,
+        exec_range=args.exec or "",
+        trace_from=args.trace_from,
+        state=args.state,
+        save=args.save or "",
+    )
+    for path in dsprobe.run(args.rom, args.output, plan, timeout=args.timeout):
         print(path)
     return 0
 
@@ -322,6 +342,54 @@ def build_parser() -> argparse.ArgumentParser:
     ps2.add_argument("--emulator", metavar="HOST:PORT", help="where PCSX2 listens, when not the usual place")
     ps2.set_defaults(func=_cmd_ps2_probe)
 
+    ds = sub.add_parser(
+        "ds-probe",
+        help="run a Nintendo DS game in the DeSmuME emulator with scripted input and record what it does",
+        description="Frames count from power-on, or from the state when one is given; something asked for at "
+        "frame N happens once N frames have run. Addresses are hexadecimal, as the processor sees them; watches "
+        "see both processors and say which. Needs the DESMUME environment variable to name DeSmuME's interface "
+        "library, built with tools/desmume/interface-hooks.patch.",
+    )
+    ds.add_argument("rom", type=Path)
+    ds.add_argument("-o", "--output", type=Path, required=True, help="path prefix for everything written")
+    ds.add_argument("--frames", type=int, default=600, help="frame at which to stop")
+    ds.add_argument(
+        "--input",
+        nargs="*",
+        default=[],
+        metavar="STEP",
+        help="input steps FRAME:KIND:BUTTONS, where KIND is mash, press, hold or none; such as 0:mash:start,a. "
+        f"Buttons: {', '.join(dsprobe.BUTTONS)}",
+    )
+    ds.add_argument(
+        "--touch",
+        nargs="*",
+        default=[],
+        metavar="FRAME:X,Y[:FRAMES]",
+        help=f"touch the bottom screen at X,Y (from its top left) for FRAMES frames, {ps2probe.PRESS_FRAMES} if not "
+        "given",
+    )
+    ds.add_argument("--shot", nargs="*", type=int, default=[], metavar="FRAME", help="take screenshots of both screens")
+    ds.add_argument(
+        "--dump",
+        nargs="*",
+        default=[],
+        metavar="MEMORY@FRAME",
+        help=f"save memory: one of {', '.join(dsprobe.MEMORIES)}, or ADDRESS:LENGTH as the ARM9 sees it; "
+        "e.g. main@300 or 27C0000:4000@300",
+    )
+    ds.add_argument(
+        "--registers", nargs="*", type=int, default=[], metavar="FRAME", help="save both processors' registers"
+    )
+    ds.add_argument("--reads", nargs="*", default=[], metavar="START-END", help="record which code reads these ranges")
+    ds.add_argument("--writes", nargs="*", default=[], metavar="START-END", help="record which code writes them")
+    ds.add_argument("--exec", metavar="START-END", help="record the instructions run in this range")
+    ds.add_argument("--trace-from", type=int, default=0, metavar="FRAME", help="start recording at this frame")
+    ds.add_argument("--state", type=Path, help="saved state to start from")
+    ds.add_argument("--save", metavar="FILE@FRAME", help="save a state at this frame")
+    ds.add_argument("--timeout", type=int, default=600, help="seconds before giving up")
+    ds.set_defaults(func=_cmd_ds_probe)
+
     addr = sub.add_parser("addr", help="convert between SNES CPU addresses and file offsets")
     addr.add_argument("value", help="hexadecimal address or offset")
     addr.add_argument("--mapping", choices=("LoROM", "HiROM", "ExHiROM"), required=True)
@@ -347,6 +415,7 @@ def main(argv: list[str] | None = None) -> int:
         emulator.EmulatorError,
         pcsx2.Pcsx2Error,
         ps2probe.ProbeError,
+        dsprobe.DesmumeError,
         OSError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)
