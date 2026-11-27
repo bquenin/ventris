@@ -46,7 +46,7 @@
 //!
 //! The grids of the four windows are four times as large, on the heap: the largest the game opens
 //! is 18 cells by 4, so the grids take at most `GRIDS` bytes more than the game's own while four
-//! windows are open, which the build counts at every moment of an area it changes (see `heap`).
+//! windows are open, which the build counts at every moment of every area (see `heap`).
 
 use std::collections::{BTreeMap, HashMap};
 

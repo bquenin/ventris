@@ -426,21 +426,25 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   areas for a while, loading one of its maps, or fighting in it. Going through a door into an area
   whose code does not fit where the old area's was, the game needs room for three copies of the new
   code at once, and running out of room there stops the game. The game leaves itself little room in
-  places: going from area 107 into area 105, only 19,636 bytes of the heap are free. A build must leave
-  at least that much at every moment of every area it changes, or it is refused with the area, the
-  moment (the door, and the other area) and how many bytes too many it needs. How much an area can
-  grow, if no other area does:
+  places: going from area 107 into area 105, only 19,636 bytes of the heap are free, because it reads
+  the new area's pictures (229,412 bytes there) before it goes through the door. A build that changes an
+  area, or draws letters at their own widths, makes the game read them after, once the old area is
+  gone, as it already does when it has no room for them; the door takes a few frames longer. Every
+  moment of every area it changes, and of every area when it draws letters at their own widths, must
+  still leave at least 19,636 bytes free, or the build is refused with the area, the moment (the door,
+  and the other area) and how many bytes too many it needs. How much an area can grow, if no other area
+  does, with letters drawn at their own widths:
 
   | Area | Text (bytes) | Can grow by (bytes) | Tightest moment |
   | --- | ---: | ---: | --- |
-  | 105 | 27,598 | 0 | going into it from area 107 |
-  | 107 | 6,088 | 0 | going from it into area 105 |
-  | 179 | 13,474 | 384 | going into it from area 131 |
-  | 131 | 12,750 | 1,160 | going from it into area 179 |
-  | 157 | 16,370 | 1,652 | going into it from area 154 |
-  | 154 | 20,354 | 3,592 | going into it from area 157 |
+  | 157 | 16,370 | 52,324 | going into it from area 154 |
+  | 154 | 20,354 | 53,256 | going into it from area 157 |
+  | 105 | 27,598 | 75,892 | going into it from area 107 |
+  | 179 | 13,474 | 77,944 | going into it from area 131 |
+  | 131 | 12,750 | 106,520 | going into it from area 179 |
+  | 107 | 6,088 | 121,164 | going into it from area 105 |
 
-  Every other area can grow by more than 27,000 bytes, and half of them by more than 150,000. Two areas
+  Every other area can grow by more than 79,000 bytes, and half of them by more than 180,000. Two areas
   that lead to each other share their room: what one takes, the other cannot, and an area whose code
   grows past another's can make the door between them need the three copies.
 - The program cannot grow, so the strings of `program` a pack changes share the room they had between them:
