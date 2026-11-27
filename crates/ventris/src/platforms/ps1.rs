@@ -726,13 +726,18 @@ pub fn write_image(disc: &Disc, output: &Path, patches: &[(&str, u64, Vec<u8>)])
     }
     let sheet = cue_for(disc, &bin)?;
 
-    // Which outputs this attempt has started to write: only those are removed if it fails, so that a
-    // failure to open one leaves whatever was there before.
-    let (mut bin_started, mut cue_started) = (false, false);
+    // Both files are written under names of their own beside the outputs and only put in place once
+    // both are whole, so that a build that fails leaves whatever was there before.
+    let partial = |path: &Path| {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".part");
+        path.with_file_name(name)
+    };
+    let (bin_part, cue_part) = (partial(&bin), partial(&cue));
     let written = (|| -> Result<()> {
         let mut source = File::open(&disc.path).map_err(at(&disc.path))?;
-        let mut out = OpenOptions::new().write(true).create(true).truncate(true).open(&bin).map_err(at(&bin))?;
-        bin_started = true;
+        let mut out =
+            OpenOptions::new().write(true).create(true).truncate(true).open(&bin_part).map_err(at(&bin_part))?;
         let mut buffer = vec![0; BATCH * RAW_SECTOR];
         let mut sector = 0u64;
         loop {
@@ -746,19 +751,18 @@ pub fn write_image(disc: &Disc, output: &Path, patches: &[(&str, u64, Vec<u8>)])
                 let place = (u64::from(*number) - sector) as usize * RAW_SECTOR;
                 buffer[place..place + RAW_SECTOR].copy_from_slice(whole);
             }
-            out.write_all(&buffer[..count]).map_err(at(&bin))?;
+            out.write_all(&buffer[..count]).map_err(at(&bin_part))?;
             sector = end;
         }
-        cue_started = true;
-        fs::write(&cue, &sheet).map_err(at(&cue))
+        out.sync_all().map_err(at(&bin_part))?;
+        drop(out);
+        fs::write(&cue_part, &sheet).map_err(at(&cue_part))?;
+        fs::rename(&bin_part, &bin).map_err(at(&bin))?;
+        fs::rename(&cue_part, &cue).map_err(at(&cue))
     })();
     if written.is_err() {
-        if bin_started {
-            let _ = fs::remove_file(&bin);
-        }
-        if cue_started {
-            let _ = fs::remove_file(&cue);
-        }
+        let _ = fs::remove_file(&bin_part);
+        let _ = fs::remove_file(&cue_part);
     }
     written
 }

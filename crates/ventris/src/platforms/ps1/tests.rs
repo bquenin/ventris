@@ -362,6 +362,28 @@ fn write_image_changes_bytes_inside_files_and_seals_their_sectors() {
 }
 
 #[test]
+fn a_write_that_fails_leaves_the_files_that_were_there() {
+    let folder = tempfile::tempdir().unwrap();
+    let image = image(folder.path());
+    let disc = Disc::open(&image).unwrap();
+    let out = folder.path().join("copy.bin");
+    fs::write(&out, b"an earlier copy").unwrap();
+    fs::write(out.with_extension("cue"), b"its cue sheet").unwrap();
+    // The copy is written under a name of its own first; a folder in that place makes the write fail.
+    fs::create_dir(folder.path().join("copy.bin.part")).unwrap();
+    assert!(write_image(&disc, &out, &[]).is_err());
+    assert_eq!(fs::read(&out).unwrap(), b"an earlier copy");
+    assert_eq!(fs::read(out.with_extension("cue")).unwrap(), b"its cue sheet");
+    assert!(!folder.path().join("copy.cue.part").exists());
+    // Once the way is clear, the copy replaces them, and nothing is left under the other names.
+    fs::remove_dir(folder.path().join("copy.bin.part")).unwrap();
+    write_image(&disc, &out, &[]).unwrap();
+    assert!(fs::read(&out).unwrap() == fs::read(&image).unwrap());
+    assert!(fs::read_to_string(out.with_extension("cue")).unwrap().starts_with("FILE \"copy.bin\""));
+    assert!(!folder.path().join("copy.bin.part").exists() && !folder.path().join("copy.cue.part").exists());
+}
+
+#[test]
 fn write_image_refuses_what_it_cannot_do_before_writing() {
     let folder = tempfile::tempdir().unwrap();
     let image = image(folder.path());
