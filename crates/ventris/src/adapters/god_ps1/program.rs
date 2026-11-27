@@ -1,8 +1,11 @@
 //! The text the program holds itself, in its file `SLPS_009.44`.
 //!
 //! The file is a PlayStation program: a header of $800 bytes, then what is loaded at $80010000, so
-//! the address of a byte is its offset in the file plus $8000F800. Its code runs from just past the
-//! header to $7F4C8 of the file, just past its last return; its data follows.
+//! the address of a byte is its offset in the file plus $8000F800. Just past the header is some of
+//! its read-only data, up to $31AC, where its first function, `main`, starts: jump tables, messages
+//! for its programmers, the names of its movies, and a few labels of the menus (see `READ_ONLY`).
+//! Its code runs from there to $7F4C8 of the file, just past its last return; the rest of its data
+//! follows.
 //!
 //! Two routines draw the program's text, and each reads its own encoding.
 //!
@@ -30,7 +33,12 @@
 //! the stretches of the dialogue's text, that reads as such text with a kana letter in it, and the
 //! labels that follow it with nothing but zero bytes between, with a kana letter or an `@` in each.
 //! Labels written in ASCII alone are not taken: the same part of the data holds the names of files
-//! and the formats of numbers, which look the same.
+//! and the formats of numbers, which look the same. Most labels are in the data past the code; a
+//! few are in the read-only data before it, each built by the code on its own: the shop's commands
+//! (buy, sell, leave), its yes and no, its count of what the party has, the monster book's count of
+//! a monster beaten, and a count of turns left. A label that holds a format, such as `%8dコ`, is
+//! filled in by the code before it is drawn, and a pack's must keep its conversions (see
+//! `conversions`).
 //!
 //! Putting changed text back. The program's file cannot grow: it fills its place on the disc, up
 //! to the sector where the archive starts, and the memory after what it loads holds the game's
@@ -89,6 +97,9 @@ pub const PROGRAM_BASE: u32 = 0x8000_F800;
 /// Where the program's code is in its file: from the end of the header to just past the last
 /// instruction that returns from a function.
 pub const PROGRAM_CODE: Range<usize> = 0x800..0x7_F4C8;
+/// The read-only data the program's file has before its code, from the end of its header to `main`.
+/// The code builds the address of a few labels of the menus here (see `menu_strings`).
+pub const READ_ONLY: Range<usize> = 0x800..0x31AC;
 /// The stretches of the program's file where the text written as dialogue is: the kinds of shop;
 /// the shopkeepers' lines and the monster book; the souvenirs; and the rest, from the professor's
 /// notebook to the rumours. Between them are tables and records, and the menus' labels.
@@ -123,7 +134,9 @@ pub const MENU_LIMITS: &str = "a label stays in its slot, and takes no more byte
                                takes one, so a kana with ﾞ or ﾟ takes two; nor does it draw more characters than the \
                                widest of the game's own labels on its screen, ﾞ and ﾟ being drawn over the letter \
                                before, but the main menu's may draw 8; the small font has capitals, digits and \
-                               !\"#$%&'()*+,-./:;<=>?[] besides the kana, and lowercase letters are written as capitals";
+                               !\"#$%&'()*+,-./:;<=>?[] besides the kana, and lowercase letters are written as capitals; \
+                               a label that holds a format the game fills in, such as %8d, keeps the game's own, in \
+                               the same order";
 
 /// The two sections of the program's text.
 pub const PROGRAM_SECTION: &str = "program";
@@ -317,10 +330,12 @@ fn offset_of(file: &[u8], address: u32) -> Option<usize> {
     (offset < file.len()).then_some(offset)
 }
 
-/// The places in the program's data whose address its code builds, as offsets in its file.
+/// The places in the program's data whose address its code builds, as offsets in its file: in the
+/// data past its code, or in the read-only data before it.
 pub fn built_targets(file: &[u8]) -> BTreeSet<usize> {
     let built = code_use(file, PROGRAM_CODE, PROGRAM_BASE).built;
-    built.into_keys().filter_map(|address| offset_of(file, address)).filter(|at| *at >= PROGRAM_CODE.end).collect()
+    let data = |at: &usize| *at >= PROGRAM_CODE.end || READ_ONLY.contains(at);
+    built.into_keys().filter_map(|address| offset_of(file, address)).filter(data).collect()
 }
 
 /// The places in the program's data that one of its 32-bit words points at, as offsets in its file.
@@ -369,12 +384,14 @@ fn is_kana_letter(byte: u8) -> bool {
 
 /// How long the label at the start of `data` is, up to its zero byte, if it is one: bytes the small
 /// font's routine reads as characters, with a kana letter among them, or with `@` if `switch` is
-/// allowed in place of one.
+/// allowed in place of one, and a character drawn. An `@` alone draws nothing: the shop's commands
+/// are followed by a table of buttons whose first number is $0040, which reads as one.
 fn small_length(data: &[u8], switch: bool) -> Option<usize> {
     let length = data.iter().position(|byte| *byte == 0)?;
     let label = &data[..length];
     let letters = label.iter().any(|byte| is_kana_letter(*byte)) || (switch && label.contains(&SWITCH));
-    (length > 0 && letters && label.iter().all(|byte| is_small(*byte))).then_some(length)
+    let drawn = label_cells(label) > 0;
+    (letters && drawn && label.iter().all(|byte| is_small(*byte))).then_some(length)
 }
 
 /// The labels of section `menu`: what the program's code builds the address of (`built`), in its
@@ -963,6 +980,52 @@ pub fn label_width(file: &[u8], start: u32, labels: &BTreeMap<u32, Vec<u8>>) -> 
     listed[first..=last].iter().map(|(_, label)| label_cells(label)).max().unwrap_or(0)
 }
 
+/// The conversions of the format a label holds, which the code fills in before the label is drawn,
+/// in their order: `d` for `%8d`. A `%%` draws a `%` and is none. A pack's label must have the same
+/// as the game's own: the code passes what it fills in for each, and a conversion it does not pass
+/// for reads whatever is there.
+pub fn conversions(label: &[u8]) -> Vec<u8> {
+    let mut found = Vec::new();
+    let mut bytes = label.iter().copied();
+    while let Some(byte) = bytes.next() {
+        if byte != b'%' {
+            continue;
+        }
+        let conversion = bytes.find(|byte| !in_conversion(*byte));
+        match conversion {
+            Some(b'%') => {}
+            Some(conversion) => found.push(conversion),
+            None => found.push(0),
+        }
+    }
+    found
+}
+
+/// What a translator is told about some of the labels of section `menu`.
+const LABEL_NOTES: [(u32, &str); 6] = [
+    (
+        0xD00,
+        "A count of turns left, which the code drawn in battle fills in: %d is the number. Not yet seen on screen.",
+    ),
+    (
+        0x15C8,
+        "The shop's commands: buy, then sell, then leave the shop, each in a slot of its own. Buy and sell have 3 \
+         bytes each, leave 7.",
+    ),
+    (0x15D8, "In a shop, the label over how many of the chosen thing the party has. Its slot has 11 bytes."),
+    (
+        0x15F4,
+        "A shop's yes and no, in one label, with a space between: the hand points at the label's first character \
+         for yes and at its fourth for no, so no starts 3 characters in.",
+    ),
+    (0x16D0, "How many of a monster the party has beaten. Not yet seen on screen."),
+    (
+        0xD_2E8C,
+        "In a shop, the count of the chosen thing to buy, and of how many the party has: %8d is the number, put \
+         right in 8 characters; コ is the word for things counted.",
+    ),
+];
+
 /// Strings of section `program` shown in a box the game sized for its own text, so that no line may
 /// be wider than the game's own widest: the choices of yes and no, the title screen's menu, the
 /// inn's menu, and the memory card's question whether to write over a save. The title screen's
@@ -993,7 +1056,30 @@ pub fn encode_label(text: &str) -> Result<Vec<u8>> {
             quoted(&char.to_string())
         ));
     }
-    encode_small(&text.to_ascii_uppercase())
+    encode_small(&capitals(text))
+}
+
+/// Whether a byte can be between the `%` of a conversion and its letter: a flag, a width, a
+/// precision or a size.
+fn in_conversion(byte: u8) -> bool {
+    matches!(byte, b'0'..=b'9' | b'-' | b'+' | b' ' | b'#' | b'.' | b'l' | b'h')
+}
+
+/// A label's lowercase letters as capitals, but those of a conversion of its format, which the code
+/// reads as they are: `%8d` stays `%8d`.
+fn capitals(text: &str) -> String {
+    let mut out = String::new();
+    let mut converting = false;
+    for char in text.chars() {
+        if converting {
+            out.push(char);
+            converting = char.is_ascii() && in_conversion(char as u8);
+        } else {
+            out.push(char.to_ascii_uppercase());
+            converting = char == '%';
+        }
+    }
+    out
 }
 
 // --- what a translator is told ---------------------------------------------------
@@ -1036,9 +1122,14 @@ pub fn note(section: &str, number: Option<u32>) -> Option<String> {
              next label of the screen at the next slot: the game's own leave the bytes up to the next label \
              unused, and a label cannot take more. Nor can it draw more characters than the widest label of its \
              screen does, ﾞ and ﾟ being drawn over the letter before; the main menu's have room for 8. The dots \
-             after a configuration label lead to its setting, 11 characters in."
+             after a configuration label lead to its setting, 11 characters in. A label with a % in it is a \
+             format the game fills in before it draws it: %8d is a number put right in 8 characters, and a \
+             label keeps the game's own, in the same order."
                 .to_string(),
         ),
+        (MENU_SECTION, Some(number)) => {
+            LABEL_NOTES.iter().find(|(start, _)| *start == number).map(|(_, note)| note.to_string())
+        }
         _ => None,
     }
 }
