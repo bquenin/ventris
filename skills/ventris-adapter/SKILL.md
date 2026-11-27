@@ -108,12 +108,19 @@ look at the screen.
   through; matching glyphs against the system's Japanese fonts gave poor candidates for a game's own font.
   Glyphs the script never uses are the weakest part of such a table: say so in its header.
 - **Latin letters are narrow and even, always.** A translation in a Latin alphabet is drawn in narrow
-  letters (two to a cell, a narrower font, whatever the game allows), not the game's full-width ones, and
+  letters, not the game's full-width ones, and
   never a mix of the two: no fallback that draws some letters wide when the font runs short of room. When
   there is not room for every letter narrow, draw the leftovers as single narrow letters or refuse the
   build, saying how much room it needed and had. A build option that makes every letter full-width is
   allowed, as the pack's own choice. Check it on screen twice: with a pack that changes little, when the
   font has least free room, and with one that changes much.
+- **A variable-width renderer comes first.** Changing how the game draws text is in scope when a
+  translation needs it: hook the routine that draws a character so that each letter is drawn from a glyph
+  of its own at its own width (Tales of Phantasia's `vwf.asm`). It needs a cell for each character, not
+  for each pair, and gives proportional text. Put what is about the console and not the game (encoding
+  its instructions, placing code in its executable, hooking a routine) under `platforms/`, so the next
+  game on that console reuses it. Schemes that pack letters into the game's fixed cells come after, when
+  a renderer is shown not to be possible.
 - Choose sections and numbers before the first release: a string's address, `section.number`, never
   changes once released, and packs depend on it (`docs/adding-a-game.md`, "Addresses never change").
 - A refusal names the string, the limit and what to do, in words a translator can act on. Write each kind
