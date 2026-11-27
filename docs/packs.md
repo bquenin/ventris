@@ -406,8 +406,13 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   characters the font lacks (accented letters, the comma, the apostrophe, quotation marks) are drawn from
   `unifont`, or from the fonts the pack names, into the font's 26 free cells, so a pack can use at most 26
   such characters. Without the option, those 26 cells take only the characters that are not paired.
-- An area that grows past its place on the disc is moved to free room at the end of the disc; a build
-  that needs more than that room is refused.
+- An area that grows past its sectors on the disc is moved: into the sectors other areas that moved
+  left, or to the disc's free room near its end, 16,384 sectors. Every area of the game can grow and
+  move: an area takes a few hundred to a few thousand sectors, and a full translation adds a few to
+  each, so the areas that move free nearly all the room they need. The heap limits below are reached
+  long before the disc's: every area grown as far as they allow still leaves more than 13,000 sectors
+  of the free room unused. The disc stays the size it is. A build that needs more room than there is
+  is refused, with the areas that found none.
 - An area's code, which holds its text, must fit on the game's heap with everything else that is there
   at the area's busiest moment: going through a door into it or out of it, when the game holds both
   areas for a while, loading one of its maps, or fighting in it. Going through a door into an area

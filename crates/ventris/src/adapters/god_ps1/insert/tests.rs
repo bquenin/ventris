@@ -278,6 +278,23 @@ fn a_member_is_rebuilt_around_its_new_text_block() {
 
 // --- with the game ---------------------------------------------------------
 
+#[test]
+fn areas_that_grew_go_in_the_sectors_moved_areas_leave_before_the_free_room() {
+    // Three areas that grew, the first two side by side, and the disc's free room far past them.
+    let grown = [(0, 10, 12), (10, 10, 11), (30, 5, 6)];
+    let (places, room) = place_grown(&grown, 100..120);
+    // Together the first two leave a piece of 20 sectors: the largest area takes its start, the
+    // next has no piece left large enough and goes to the free room, and the smallest fits in
+    // what is left of the 20.
+    assert_eq!(places, [Some(0), Some(100), Some(12)]);
+    assert_eq!(room, 25);
+    // The free room is used one area after another; an area it has no room left for has no place.
+    let (places, _) = place_grown(&[(0, 4, 5), (20, 4, 6), (40, 4, 7)], 100..112);
+    assert_eq!(places, [Some(100), Some(105), None]);
+    // Nothing grew: nothing to place.
+    assert_eq!(place_grown(&[], 100..120), (vec![], 0));
+}
+
 /// The game's disc, opened, or None where it is not there to test with.
 fn game() -> Option<Image> {
     Some(Image::Ps1Disc(Disc::open(&crate::testing::game("god-ps1")?).unwrap()))
@@ -355,24 +372,48 @@ fn build_puts_a_longer_line_in_and_moves_its_area_when_it_grows() {
         assert_eq!(text["096"][&110], original["096"][&110]);
         assert_eq!(program(&copy).unwrap().contents, program(disc).unwrap().contents);
     }
-    // A line long enough that the area takes more sectors: it moves to the disc's free room, and
-    // every entry that names it follows.
+    // A line long enough that the area takes more sectors: alone, it moves to the disc's free room,
+    // and every entry that names it follows.
     let long = format!("{{SAY}}{}{{/SAY}}", "élan ".repeat(1200));
     let built = build(disc, &pack_of(&[(109, &long)]), &out, &full_width()).unwrap();
     assert_eq!(
         built.summary[1],
-        format!("moved:     area 096 grew past its sectors and is now in the disc's free room ({SPARE_FILE})")
+        format!(
+            "moved:     area 096 grew past its sectors, and is now in the sectors such areas left in {ARCHIVE} or \
+             in the disc's free room ({SPARE_FILE}), of which 933 sectors of 16384 are used"
+        )
     );
+    let old = program(disc).unwrap().contents.clone();
     {
         let copy = Disc::open(&out).unwrap();
         let contents = &program(&copy).unwrap().contents;
         let spare = copy.first_sector(SPARE_FILE).unwrap() - copy.first_sector(ARCHIVE).unwrap();
         assert_eq!(contents[96].0, spare);
         assert!(contents[189..=195].iter().all(|entry| *entry == contents[96]));
-        assert_eq!(&contents[..96], &program(disc).unwrap().contents[..96]);
+        assert_eq!(&contents[..96], &old[..96]);
         let text = extract(&copy).unwrap();
         assert_eq!(text["096"][&110], original["096"][&110]);
         assert!(text["096"][&109].len() > 6000);
+    }
+    // With area 097, the one after it, grown too, the two leave one piece of sectors: area 096, the
+    // larger, takes its start, over the sectors 097 had, and 097 goes to the free room.
+    let pack = Pack::of(Script::from([
+        ("096".to_string(), BTreeMap::from([(109, long.clone())])),
+        ("097".to_string(), BTreeMap::from([(4, long.clone())])),
+    ]));
+    let built = build(disc, &pack, &out, &full_width()).unwrap();
+    assert!(built.summary[1].starts_with("moved:     areas 096, 097 grew past their sectors"), "{}", built.summary[1]);
+    {
+        let copy = Disc::open(&out).unwrap();
+        let contents = &program(&copy).unwrap().contents;
+        let spare = copy.first_sector(SPARE_FILE).unwrap() - copy.first_sector(ARCHIVE).unwrap();
+        assert_eq!(contents[96].0, old[96].0);
+        assert!(contents[96].1 as usize > (old[97].0 - old[96].0) as usize * SECTOR);
+        assert_eq!(contents[97].0, spare);
+        assert!(contents[189..=195].iter().all(|entry| *entry == contents[96]));
+        let text = extract(&copy).unwrap();
+        assert!(text["096"][&109].len() > 6000 && text["097"][&4].len() > 6000);
+        assert_eq!((&text["096"][&110], &text["097"][&3]), (&original["096"][&110], &original["097"][&3]));
     }
     // Too large for the heap, and the bosses' speeches in battle: refused, and nothing written.
     fs::remove_file(&out).unwrap();
