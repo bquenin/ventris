@@ -637,6 +637,27 @@ fn a_line_break_left_out_after_a_run_does_not_end_it() {
 }
 
 #[test]
+fn a_wait_put_inside_a_run_starts_the_run_again_after_it() {
+    let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
+    let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
+    // Five lines of letters with no line break to turn into a wait: one is put before the letter that
+    // would scroll the window, inside the run, and every letter is still read as the renderer's.
+    let width = |char: char| renderer.width(char).unwrap();
+    let letter = ('a'..='z').find(|char| WINDOW_WIDTH.is_multiple_of(width(*char))).unwrap();
+    let text = letter.to_string().repeat(WINDOW_WIDTH / width(letter) * (ROWS + 1));
+    let data = fit(&encode_text(&text, &writing).unwrap(), &writing, true).unwrap();
+    assert!(data.contains(&0x0B), "{data:02X?}");
+    let code = renderer.code(letter).unwrap();
+    let read = pieces(&data, &writing);
+    assert!(
+        read.iter().all(|(piece, _)| matches!(piece, Piece::Glyph(found) if *found == code)
+            || matches!(piece, Piece::Wait | Piece::Silent)),
+        "{read:?}"
+    );
+    assert_eq!(read.iter().filter(|(piece, _)| *piece == Piece::Glyph(code)).count(), text.len());
+}
+
+#[test]
 fn lines_are_broken_where_the_next_word_would_run_past_the_window() {
     let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
     let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };

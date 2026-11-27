@@ -725,11 +725,29 @@ fn fit(data: &[u8], writing: &Writing, wrap: bool) -> Result<Vec<u8>> {
             }
             Laid::Overfull { page, at } => match (page..=at).rev().find(|index| pieces[*index].0 == Piece::Break) {
                 Some(index) => pieces[index] = (Piece::Wait, vec![0x0B]),
-                None => pieces.insert(at, (Piece::Wait, vec![0x0B])),
+                None => {
+                    // A wait ends a run of the renderer's characters: one put inside a run starts it
+                    // again after it.
+                    let in_run = writing.renderer.is_some() && run_at(&pieces, at);
+                    pieces.insert(at, (Piece::Wait, vec![0x0B]));
+                    if in_run {
+                        pieces.insert(at + 1, (Piece::Silent, vec![vwf::RUN]));
+                    }
+                }
             },
         }
     }
     text_error("it cannot be laid out in the window")
+}
+
+/// Whether piece `at` of a string is read in a run of the renderer's characters: `vwf::RUN` starts
+/// or ends one, and any other byte under $10 ends it.
+fn run_at(pieces: &[(Piece, Vec<u8>)], at: usize) -> bool {
+    pieces[..at].iter().fold(false, |run, (piece, bytes)| match bytes.first() {
+        Some(&vwf::RUN) if *piece == Piece::Silent => !run,
+        Some(byte) if *byte < 0x10 => false,
+        _ => run,
+    })
 }
 
 /// The tags after which the game goes on at the start of a new line, as a line break does.
