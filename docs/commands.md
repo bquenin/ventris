@@ -78,7 +78,7 @@ Tales of Phantasia (Super Famicom, Japan)
   id         top-sfc
   release    Japan
   file       C:\path\to\your\games\snes\Tales of Phantasia (Japan).zip
-found 1 of the 2 games there are adapters for; 2 files had the size of one
+found 1 of the 4 games there are adapters for; 2 files had the size of one
 ```
 
 If it does not list your game, see [Your copy of the game](playing.md#your-copy-of-the-game). Then see

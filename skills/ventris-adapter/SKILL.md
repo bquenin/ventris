@@ -97,6 +97,16 @@ look at the screen.
   The build can come later, from the user or from someone else.
 - Reuse the shared modules the top of `adapters/mod.rs` lists. What is about a console and not about the
   game goes under `platforms/`.
+- **A console ventris has no platform for** comes first: a module under `platforms/` on the contract in
+  `platform.rs` (recognise an image, open it, its SHA-1, its label) and the library its adapters will
+  need (a file system and rebuilding it, headers and checksums), tested on a made-up image, and a line in
+  `platforms::ALL`. Its emulator is built from source like the others, and what the workbench needs that
+  it lacks (screenshots, input, memory dumps, watching memory with the processor and the address of the
+  instruction, saved states, running without a window) goes in a patch under `tools/<emulator>/`.
+- **A font with no standard encoding**, its glyphs in the order the game's makers first used them, needs
+  its table read by eye. Check every kanji against the furigana the script gives it and read decoded lines
+  through; matching glyphs against the system's Japanese fonts gave poor candidates for a game's own font.
+  Glyphs the script never uses are the weakest part of such a table: say so in its header.
 - Choose sections and numbers before the first release: a string's address, `section.number`, never
   changes once released, and packs depend on it (`docs/adding-a-game.md`, "Addresses never change").
 - A refusal names the string, the limit and what to do, in words a translator can act on. Write each kind
@@ -110,6 +120,12 @@ look at the screen.
   program can; run it and keep its output for the pull request.
 - Tests go in `tests.rs` beside the module. A test that needs the game finds it with `crate::testing` and
   passes without checking anything when it is missing. No test fixture is cut from the game.
+- So a test that passes may not have run. `VENTRIS_ROMS` is set in `.cargo/config.toml`, which each
+  machine keeps for itself and a fresh checkout or worktree lacks: run the game's tests with
+  `-- --nocapture` and see that no `skipped:` line names your game.
+- A new adapter changes what other tests count: the list in `adapters::ALL`'s test, the number of games in
+  `ventris find`'s output (`crates/ventris/tests/cli.rs`, `docs/commands.md`), the app's list of games
+  (`app/src-tauri/src/lib.rs`), and the table of games in the README.
 - Run the checks in `CONTRIBUTING.md`, "Checks".
 
 ## 5. Look at the screen

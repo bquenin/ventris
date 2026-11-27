@@ -553,13 +553,16 @@ mod tests {
     fn every_game_is_listed_with_what_a_pack_can_change() {
         let listed = games();
         let ids: Vec<&str> = listed.iter().map(|game| game.id).collect();
-        assert_eq!(ids, ["top-sfc", "tod2-ps2", "srwz-ps2", "god-ps1"]);
-        let destiny = &listed[1];
-        assert_eq!((destiny.platform, destiny.source_language, destiny.can_insert), ("PlayStation 2", "ja", true));
-        assert!(destiny.kinds.iter().any(|kind| kind.name == "menus" && kind.insert && kind.grow));
-        assert!(!destiny.releases.is_empty() && destiny.releases[0].sha1.len() == 40);
+        assert_eq!(ids, ["top-sfc", "tod2-ps2", "srwz-ps2", "goemon-nds", "god-ps1"]);
+        // A game that can only be extracted so far is listed too, with nothing a pack can change.
+        let extract_only = &listed[3];
+        assert_eq!((extract_only.platform, extract_only.can_insert), ("Nintendo DS", false));
+        let last = &listed[1];
+        assert_eq!((last.platform, last.source_language, last.can_insert), ("PlayStation 2", "ja", true));
+        assert!(last.kinds.iter().any(|kind| kind.name == "menus" && kind.insert && kind.grow));
+        assert!(!last.releases.is_empty() && last.releases[0].sha1.len() == 40);
         // The release in full, for the page to state it.
-        let release = &destiny.releases[0];
+        let release = &last.releases[0];
         assert_eq!(
             (release.label_kind, release.label, release.version, release.size),
             ("serial", "SLPS-25172", "1.01", 3_234_004_992)
@@ -568,7 +571,7 @@ mod tests {
         let redump = release.catalogue.as_ref().unwrap();
         assert_eq!((redump.name, redump.entry), ("Redump", "Tales of Destiny 2 (Japan, Asia)"));
         assert_eq!(redump.page, Some("http://redump.org/disc/15921/"));
-        assert!(!destiny.sets_names && destiny.name_limits.is_empty());
+        assert!(!last.sets_names && last.name_limits.is_empty());
         // The page shows what a name may be beside the row for names.
         let phantasia = &listed[0];
         assert!(phantasia.sets_names && phantasia.name_limits.starts_with("a name is 1 to 15 characters"));

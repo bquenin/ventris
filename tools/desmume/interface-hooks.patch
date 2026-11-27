@@ -1,0 +1,267 @@
+diff --git a/desmume/src/MMU.h b/desmume/src/MMU.h
+index 261247be..465a6386 100644
+--- a/desmume/src/MMU.h
++++ b/desmume/src/MMU.h
+@@ -718,7 +718,7 @@ FORCEINLINE u8 _MMU_read08(const int PROCNUM, const MMU_ACCESS_TYPE AT, const u3
+ 	CallRegisteredLuaMemHook(addr, 1, /*FIXME*/ 0, LUAMEMHOOK_READ);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 1, HOOK_READ);
++    call_registered_interface_mem_hook(addr, 1, HOOK_READ, PROCNUM, AT, 0);
+ #endif
+ 
+ 	// break points, wheee
+@@ -766,7 +766,7 @@ FORCEINLINE u16 _MMU_read16(const int PROCNUM, const MMU_ACCESS_TYPE AT, const u
+ 	CallRegisteredLuaMemHook(addr, 2, /*FIXME*/ 0, LUAMEMHOOK_READ);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 2, HOOK_READ);
++    call_registered_interface_mem_hook(addr, 2, HOOK_READ, PROCNUM, AT, 0);
+ #endif
+ 
+ 	// break points, wheee
+@@ -827,7 +827,7 @@ FORCEINLINE u32 _MMU_read32(const int PROCNUM, const MMU_ACCESS_TYPE AT, const u
+ 	CallRegisteredLuaMemHook(addr, 4, /*FIXME*/ 0, LUAMEMHOOK_READ);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 4, HOOK_READ);
++    call_registered_interface_mem_hook(addr, 4, HOOK_READ, PROCNUM, AT, 0);
+ #endif
+ 	// break points, wheee
+ 	for (size_t i = 0; i < memReadBreakPoints.size(); ++i)
+@@ -912,7 +912,7 @@ FORCEINLINE void _MMU_write08(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
+ 			CallRegisteredLuaMemHook(addr, 1, val, LUAMEMHOOK_WRITE);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 1, HOOK_READ);
++    call_registered_interface_mem_hook(addr, 1, HOOK_WRITE, PROCNUM, AT, val);
+ #endif
+ 			return;
+ 		}
+@@ -926,7 +926,7 @@ FORCEINLINE void _MMU_write08(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
+ 		CallRegisteredLuaMemHook(addr, 1, val, LUAMEMHOOK_WRITE);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 1, HOOK_WRITE);
++    call_registered_interface_mem_hook(addr, 1, HOOK_WRITE, PROCNUM, AT, val);
+ #endif
+ 		return;
+ 	}
+@@ -937,7 +937,7 @@ FORCEINLINE void _MMU_write08(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
+ 	CallRegisteredLuaMemHook(addr, 1, val, LUAMEMHOOK_WRITE);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 1, HOOK_WRITE);
++    call_registered_interface_mem_hook(addr, 1, HOOK_WRITE, PROCNUM, AT, val);
+ #endif
+ }
+ 
+@@ -970,7 +970,7 @@ FORCEINLINE void _MMU_write16(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
+ 			CallRegisteredLuaMemHook(addr, 2, val, LUAMEMHOOK_WRITE);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 2, HOOK_WRITE);
++    call_registered_interface_mem_hook(addr, 2, HOOK_WRITE, PROCNUM, AT, val);
+ #endif
+ 			return;
+ 		}
+@@ -982,6 +982,9 @@ FORCEINLINE void _MMU_write16(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
+ 		T1WriteWord( MMU.MAIN_MEM, addr & _MMU_MAIN_MEM_MASK16, val);
+ #ifdef HAVE_LUA
+ 		CallRegisteredLuaMemHook(addr, 2, val, LUAMEMHOOK_WRITE);
++#endif
++#ifdef TARGET_INTERFACE
++    call_registered_interface_mem_hook(addr, 2, HOOK_WRITE, PROCNUM, AT, val);
+ #endif
+ 		return;
+ 	}
+@@ -992,7 +995,7 @@ FORCEINLINE void _MMU_write16(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
+ 	CallRegisteredLuaMemHook(addr, 2, val, LUAMEMHOOK_WRITE);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 2, HOOK_WRITE);
++    call_registered_interface_mem_hook(addr, 2, HOOK_WRITE, PROCNUM, AT, val);
+ #endif
+ }
+ 
+@@ -1025,7 +1028,7 @@ FORCEINLINE void _MMU_write32(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
+ 			CallRegisteredLuaMemHook(addr, 4, val, LUAMEMHOOK_WRITE);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 4, HOOK_WRITE);
++    call_registered_interface_mem_hook(addr, 4, HOOK_WRITE, PROCNUM, AT, val);
+ #endif
+ 			return;
+ 		}
+@@ -1040,7 +1043,7 @@ FORCEINLINE void _MMU_write32(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
+ 		CallRegisteredLuaMemHook(addr, 4, val, LUAMEMHOOK_WRITE);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 4, HOOK_WRITE);
++    call_registered_interface_mem_hook(addr, 4, HOOK_WRITE, PROCNUM, AT, val);
+ #endif
+ 		return;
+ 	}
+@@ -1051,7 +1054,7 @@ FORCEINLINE void _MMU_write32(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
+ 	CallRegisteredLuaMemHook(addr, 4, val, LUAMEMHOOK_WRITE);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(addr, 4, HOOK_WRITE);
++    call_registered_interface_mem_hook(addr, 4, HOOK_WRITE, PROCNUM, AT, val);
+ #endif
+ }
+ 
+diff --git a/desmume/src/armcpu.cpp b/desmume/src/armcpu.cpp
+index 114b1933..a321c9fd 100644
+--- a/desmume/src/armcpu.cpp
++++ b/desmume/src/armcpu.cpp
+@@ -681,7 +681,7 @@ u32 armcpu_exec()
+ 			CallRegisteredLuaMemHook(ARMPROC.instruct_adr, 4, ARMPROC.instruction, LUAMEMHOOK_EXEC); // should report even if condition=false?
+ #endif
+ #ifdef TARGET_INTERFACE
+-            call_registered_interface_mem_hook(ARMPROC.instruct_adr, 4, HOOK_EXEC);
++            call_registered_interface_mem_hook(ARMPROC.instruct_adr, 4, HOOK_EXEC, PROCNUM, MMU_AT_CODE, ARMPROC.instruction);
+ #endif
+ 			#ifdef DEVELOPER
+ 			DEBUG_statistics.instructionHits[PROCNUM].arm[INSTRUCTION_INDEX(ARMPROC.instruction)]++;
+@@ -705,7 +705,7 @@ u32 armcpu_exec()
+ 	CallRegisteredLuaMemHook(ARMPROC.instruct_adr, 2, ARMPROC.instruction, LUAMEMHOOK_EXEC);
+ #endif
+ #ifdef TARGET_INTERFACE
+-    call_registered_interface_mem_hook(ARMPROC.instruct_adr, 2, HOOK_EXEC);
++    call_registered_interface_mem_hook(ARMPROC.instruct_adr, 2, HOOK_EXEC, PROCNUM, MMU_AT_CODE, ARMPROC.instruction);
+ #endif
+ 	#ifdef DEVELOPER
+ 	DEBUG_statistics.instructionHits[PROCNUM].thumb[ARMPROC.instruction>>6]++;
+diff --git a/desmume/src/frontend/interface/interface.cpp b/desmume/src/frontend/interface/interface.cpp
+index 19fcb10c..29df1ef2 100644
+--- a/desmume/src/frontend/interface/interface.cpp
++++ b/desmume/src/frontend/interface/interface.cpp
+@@ -30,6 +30,7 @@
+ #include "../../movie.h"
+ #include "../../mc.h"
+ #include "../../firmware.h"
++#include "../../path.h"
+ #include "../../armcpu.h"
+ #include "../posix/shared/sndsdl.h"
+ #include "../posix/shared/ctrlssdl.h"
+@@ -94,6 +95,11 @@ EXPORTED void desmume_set_language(u8 lang)
+     CommonSettings.fwConfig.language = lang;
+ }
+ 
++EXPORTED void desmume_set_battery_dir(const char *dir)
++{
++    path.setpath(PathInfo::BATTERY, std::string(dir));
++}
++
+ EXPORTED int desmume_open(const char *filename)
+ {
+     int i;
+@@ -537,6 +543,35 @@ EXPORTED void desmume_memory_register_exec(int address, int size, memory_cb_fnc
+ 	memory_register_hook(address, HOOK_EXEC, size, cb);
+ }
+ 
++InterfaceHookContext interface_hook_context;
++
++EXPORTED int desmume_memory_hook_cpu(void)
++{
++    return interface_hook_context.cpu;
++}
++
++EXPORTED u32 desmume_memory_hook_pc(void)
++{
++    return interface_hook_context.cpu == ARMCPU_ARM7 ? NDS_ARM7.instruct_adr : NDS_ARM9.instruct_adr;
++}
++
++EXPORTED int desmume_memory_hook_access(void)
++{
++    return interface_hook_context.access;
++}
++
++EXPORTED u32 desmume_memory_hook_value(void)
++{
++    return interface_hook_context.value;
++}
++
++EXPORTED void desmume_memory_read_block(int cpu, u32 address, u32 length, u8 *buffer)
++{
++    for (u32 i = 0; i < length; i++)
++        buffer[i] = cpu == ARMCPU_ARM7 ? _MMU_read08<ARMCPU_ARM7, MMU_AT_DEBUG>(address + i)
++                                       : _MMU_read08<ARMCPU_ARM9, MMU_AT_DEBUG>(address + i);
++}
++
+ EXPORTED void desmume_screenshot(char *screenshot_buffer)
+ {
+     u16 *gpuFramebuffer = GPU->GetDisplayInfo().masterNativeBuffer16;
+diff --git a/desmume/src/frontend/interface/interface.h b/desmume/src/frontend/interface/interface.h
+index e45a91f2..444a4435 100644
+--- a/desmume/src/frontend/interface/interface.h
++++ b/desmume/src/frontend/interface/interface.h
+@@ -72,6 +72,9 @@ EXPORTED void desmume_free(void);
+ // 0 = Japanese, 1 = English, 2 = French, 3 = German, 4 = Italian, 5 = Spanish
+ EXPORTED void desmume_set_language(u8 language);
+ EXPORTED int desmume_open(const char *filename);
++// Folder for the battery save (ROMNAME.dsv); call before desmume_open. By default it is beside the
++// program that loaded this library.
++EXPORTED void desmume_set_battery_dir(const char *dir);
+ EXPORTED void desmume_set_savetype(int type);
+ EXPORTED void desmume_pause(void);
+ EXPORTED void desmume_resume(void);
+@@ -183,6 +186,16 @@ EXPORTED void desmume_memory_register_write(int address, int size, memory_cb_fnc
+ EXPORTED void desmume_memory_register_read(int address, int size, memory_cb_fnc cb);
+ EXPORTED void desmume_memory_register_exec(int address, int size, memory_cb_fnc cb);
+ 
++// Inside a memory hook callback: the processor that made the access (0 ARM9, 1 ARM7), the address of the
++// instruction it was executing, the kind of access (0 code fetch, 1 data, 3 DMA; for DMA the address is
++// whatever the processor happened to be running), and the value written or instruction executed.
++EXPORTED int desmume_memory_hook_cpu(void);
++EXPORTED u32 desmume_memory_hook_pc(void);
++EXPORTED int desmume_memory_hook_access(void);
++EXPORTED u32 desmume_memory_hook_value(void);
++// Copy memory as the given processor (0 ARM9, 1 ARM7) sees it, without triggering any memory hook.
++EXPORTED void desmume_memory_read_block(int cpu, u32 address, u32 length, u8 *buffer);
++
+ // Buffer must have the size 98304*3
+ EXPORTED void desmume_screenshot(char *screenshot_buffer);
+ 
+@@ -313,19 +326,35 @@ extern TieredRegion hooked_regions [HOOK_COUNT];
+ 
+ extern std::map<unsigned int, memory_cb_fnc> hooks[HOOK_COUNT];
+ 
+-FORCEINLINE void call_registered_interface_mem_hook(unsigned int address, int size, MemHookType hook_type)
++// What the hook being called is about, for the callback to ask through desmume_memory_hook_*:
++// which processor (0 ARM9, 1 ARM7), what kind of access (MMU_ACCESS_TYPE: 0 code fetch, 1 data,
++// 3 DMA), and the value written or the instruction executed (0 for reads).
++struct InterfaceHookContext
++{
++    int cpu;
++    int access;
++    u32 value;
++};
++extern InterfaceHookContext interface_hook_context;
++
++FORCEINLINE void call_registered_interface_mem_hook(unsigned int address, int size, MemHookType hook_type, int cpu, int access, u32 value)
+ {
+     // See notes for CallRegisteredLuaMemHook!
++    // Accesses made by the emulator itself (MMU_AT_DEBUG, as desmume_memory_read_block uses) are not reported.
++    if(access == 4 /* MMU_AT_DEBUG */) return;
+     if(hooked_regions[hook_type].NotEmpty())
+     {
+         if(hooked_regions[hook_type].Contains(address, size))
+         {
+-            for(int i = address; i != address+size; i++)
++            for(unsigned int i = address; i != address+size; i++)
+             {
+-                memory_cb_fnc hook = hooks[hook_type][i];
+-                if(hook != 0)
++                std::map<unsigned int, memory_cb_fnc>::const_iterator found = hooks[hook_type].find(i);
++                if(found != hooks[hook_type].end() && found->second != 0)
+                 {
+-                    (*hook)(address, size);
++                    interface_hook_context.cpu = cpu;
++                    interface_hook_context.access = access;
++                    interface_hook_context.value = value;
++                    (*found->second)(address, size);
+                     break;
+                 }
+             }
