@@ -218,6 +218,9 @@ pub struct Shortfall {
     /// The area whose code is too large for it, by entry, and the other area, for a door.
     pub area: usize,
     pub other: Option<usize>,
+    /// Whether the other area's own moments count the same door, from its side: true for a door the
+    /// events show, false for one assumed into an area no door the events show leads to.
+    pub mutual: bool,
     /// What the moment is, in words, and how many bytes too many it needs.
     pub moment: String,
     pub over: usize,
@@ -225,8 +228,9 @@ pub struct Shortfall {
 
 /// The heap an area needs at each of its moments: going through each door into it and out of it,
 /// reading its rest after a door, loading each of its maps, and fighting there. Each comes with what
-/// it is, the other area for a door, and the bytes it takes. `areas` is every area, by entry.
-fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Option<usize>, usize)> {
+/// it is, the other area for a door, whether that area's own moments count the door too (see
+/// `Shortfall`), and the bytes it takes. `areas` is every area, by entry.
+fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Option<usize>, bool, usize)> {
     let here = &areas[&entry];
     let (largest_map, _) = here.map_blocks();
     let mut found = Vec::new();
@@ -250,6 +254,7 @@ fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Opt
         })
         .map(|(other, _)| *other)
         .collect();
+    let mutual = !from.is_empty();
     if from.is_empty() && !testing {
         // Only the test room leads here, or no door the events show: as if from the area whose door
         // into it needs the most. That is not always the area that leaves the most behind it: a
@@ -259,19 +264,20 @@ fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Opt
         from.extend(worst.map(|(other, _)| *other));
     }
     for other in from {
-        found.push((format!("going into it from area {other:03}"), Some(other), door(&areas[&other], here)));
+        found.push((format!("going into it from area {other:03}"), Some(other), mutual, door(&areas[&other], here)));
     }
     for other in &here.doors {
         if !testing && *other != entry && *other != TEST_ROOM && areas.contains_key(other) {
-            found.push((format!("going from it into area {other:03}"), Some(*other), door(here, &areas[other])));
+            // The other area counts it going into it, since this area's door leads there.
+            found.push((format!("going from it into area {other:03}"), Some(*other), true, door(here, &areas[other])));
         }
     }
-    found.push(("reading its rest after a door into it".into(), None, block(here.code) + block(here.rest)));
+    found.push(("reading its rest after a door into it".into(), None, false, block(here.code) + block(here.rest)));
     for (number, (map, picture)) in here.maps.iter().enumerate() {
         let used = block(here.code) + block(*map) + block(*picture).max(block(here.rest));
-        found.push((format!("loading its map {number}"), None, used));
+        found.push((format!("loading its map {number}"), None, false, used));
     }
-    found.push(("in a battle".into(), None, block(here.code) + largest_map + BATTLE));
+    found.push(("in a battle".into(), None, false, block(here.code) + largest_map + BATTLE));
     found
 }
 
@@ -291,14 +297,14 @@ pub fn check(
         if !areas.contains_key(&entry) {
             continue;
         }
-        for (moment, other, used) in moments(areas, entry) {
+        for (moment, other, mutual, used) in moments(areas, entry) {
             let used = used + reserve;
             let free = (ROOM + SPARE).saturating_sub(used);
             if least.as_ref().is_none_or(|(least, _)| free < *least) {
                 least = Some((free, format!("area {entry:03}, {moment}")));
             }
             if used > ROOM {
-                shortfalls.push(Shortfall { area: entry, other, moment, over: used - ROOM });
+                shortfalls.push(Shortfall { area: entry, other, mutual, moment, over: used - ROOM });
             }
         }
     }

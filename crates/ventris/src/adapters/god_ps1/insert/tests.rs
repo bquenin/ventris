@@ -290,6 +290,36 @@ fn areas_that_grew_go_in_the_sectors_moved_areas_leave_before_the_free_room() {
     assert_eq!(place_grown(&[], 100..120), (vec![], 0));
 }
 
+#[test]
+fn a_door_short_on_the_heap_is_said_once_and_never_dropped() {
+    let short = |area, other, mutual, moment: &str| Shortfall { area, other, mutual, moment: moment.into(), over: 8 };
+    let changed = BTreeSet::from([153]);
+    // A door the events show between a changed area and one that is not: both sides count it, and
+    // the build says it from the changed side alone.
+    let both = vec![
+        short(153, Some(154), true, "going from it into area 154"),
+        short(154, Some(153), true, "going into it from area 153"),
+    ];
+    let said = heap_refusals(both, &changed);
+    assert_eq!(said.len(), 1);
+    assert!(said[0].starts_with("area 153: going from it into area 154,"), "{said:?}");
+    assert!(said[0].ends_with(": shorten some of its changed lines"), "{said:?}");
+    // A door assumed into an unchanged area from the changed one, which has no door there: no moment
+    // of the changed area counts it, so it is said from the unchanged one, with the lines to shorten.
+    let assumed = vec![short(123, Some(153), false, "going into it from area 153")];
+    let said = heap_refusals(assumed, &changed);
+    assert_eq!(said.len(), 1);
+    assert!(said[0].starts_with("area 123: going into it from area 153,"), "{said:?}");
+    assert!(said[0].ends_with(": shorten some of the changed lines of area 153"), "{said:?}");
+    // Between two changed areas, each side says it; an unchanged area alone is short for the grids.
+    let said = heap_refusals(
+        vec![short(154, Some(153), true, "going into it from area 153"), short(96, None, false, "in a battle")],
+        &BTreeSet::from([153, 154]),
+    );
+    assert!(said[0].ends_with("(or those of area 153)"), "{said:?}");
+    assert!(said[1].contains(FULL_WIDTH), "{said:?}");
+}
+
 /// The game's disc, opened, or None where it is not there to test with.
 fn game() -> Option<Image> {
     Some(Image::Ps1Disc(Disc::open(&crate::testing::game("god-ps1")?).unwrap()))

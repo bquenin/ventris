@@ -1584,23 +1584,7 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         heap::check(&footprints, &checked, reserve)
     };
     done.least = least;
-    for Shortfall { area, other, moment, over } in shortfalls {
-        let fix = match other {
-            // Where the other area of a door changed and this one did not, the other's own moment says it.
-            Some(other) if changed.contains(&other) && !changed.contains(&area) => continue,
-            Some(other) if changed.contains(&other) => {
-                format!("shorten some of its changed lines (or those of area {other:03})")
-            }
-            _ if changed.contains(&area) => "shorten some of its changed lines".to_string(),
-            _ => format!(
-                "the renderer's larger grids take {} bytes of it: build with the option {FULL_WIDTH}",
-                vwf::GRIDS
-            ),
-        };
-        refusals.push(format!(
-            "area {area:03}: {moment}, the game would need {over} bytes more of its heap than it has room for: {fix}"
-        ));
-    }
+    refusals.extend(heap_refusals(shortfalls, &changed));
     if !homeless.is_empty() {
         let wanted: usize = needs.iter().map(|(.., sectors)| sectors).sum();
         refusals.push(format!(
@@ -1624,6 +1608,37 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
     }
     ps1::write_image(disc, output, &patches)?;
     Ok(Built { summary: done.summary() })
+}
+
+/// What a build says of each moment on the heap it would leave short, and how to fix it. `changed` is
+/// the areas whose code the pack changes. A door between a changed area and one that is not is said
+/// once, from the changed side, where the other side's moment is the changed area's own too
+/// (`Shortfall::mutual`); a door assumed into an unchanged area is said from that area, since no
+/// moment of the changed one counts it.
+fn heap_refusals(shortfalls: Vec<Shortfall>, changed: &BTreeSet<usize>) -> Vec<String> {
+    let mut refusals = Vec::new();
+    for Shortfall { area, other, mutual, moment, over } in shortfalls {
+        let fix = match other {
+            Some(other) if changed.contains(&other) && !changed.contains(&area) => {
+                if mutual {
+                    continue;
+                }
+                format!("shorten some of the changed lines of area {other:03}")
+            }
+            Some(other) if changed.contains(&other) => {
+                format!("shorten some of its changed lines (or those of area {other:03})")
+            }
+            _ if changed.contains(&area) => "shorten some of its changed lines".to_string(),
+            _ => format!(
+                "the renderer's larger grids take {} bytes of it: build with the option {FULL_WIDTH}",
+                vwf::GRIDS
+            ),
+        };
+        refusals.push(format!(
+            "area {area:03}: {moment}, the game would need {over} bytes more of its heap than it has room for: {fix}"
+        ));
+    }
+    refusals
 }
 
 #[cfg(test)]

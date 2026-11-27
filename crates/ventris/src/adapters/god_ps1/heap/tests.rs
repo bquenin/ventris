@@ -73,8 +73,15 @@ fn a_door_needs_both_areas_and_three_copies_of_a_code_that_does_not_fit_where_th
     let over = 3 * grow - (free - SPARE);
     assert_eq!(
         shortfalls,
-        [Shortfall { area: 154, other: Some(153), moment: "going into it from area 153".into(), over }]
+        [Shortfall { area: 154, other: Some(153), mutual: true, moment: "going into it from area 153".into(), over }]
     );
+    // The door is the small area's too, going from it, which says the same.
+    let (shortfalls, _) = check(&grown, &BTreeSet::from([153, 154]), 0);
+    assert_eq!(
+        shortfalls.iter().map(|short| (short.area, short.other, short.mutual, short.over)).collect::<Vec<_>>(),
+        [(153, Some(154), true, over), (154, Some(153), true, over)]
+    );
+    assert_eq!(shortfalls[0].moment, "going from it into area 154");
     // Only the moments of the areas checked are.
     let (shortfalls, least) = check(&grown, &BTreeSet::new(), 0);
     assert!(shortfalls.is_empty() && least.is_none());
@@ -84,7 +91,13 @@ fn a_door_needs_both_areas_and_three_copies_of_a_code_that_does_not_fit_where_th
     assert_eq!(least, Some((SPARE - 4, "area 154, going into it from area 153".to_string())));
     assert_eq!(
         shortfalls,
-        [Shortfall { area: 154, other: Some(153), moment: "going into it from area 153".into(), over: 4 }]
+        [Shortfall {
+            area: 154,
+            other: Some(153),
+            mutual: true,
+            moment: "going into it from area 153".into(),
+            over: 4
+        }]
     );
 }
 
@@ -123,8 +136,17 @@ fn with_no_door_known_into_an_area_the_worst_door_is_not_always_from_the_largest
     let used = block(0x8C14) + block(0x2A00) + 3 * block(0x4_0000);
     assert_eq!(
         shortfalls,
-        [Shortfall { area: 123, other: Some(153), moment: "going into it from area 153".into(), over: used - ROOM }]
+        [Shortfall {
+            area: 123,
+            other: Some(153),
+            mutual: false,
+            moment: "going into it from area 153".into(),
+            over: used - ROOM
+        }]
     );
+    // That door is assumed: area 153's own moments have no door into area 123, so they do not say it.
+    let (shortfalls, _) = check(&areas, &BTreeSet::from([153]), 0);
+    assert!(shortfalls.is_empty(), "{shortfalls:?}");
 }
 
 // --- with the game ---------------------------------------------------------
