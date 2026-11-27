@@ -398,6 +398,18 @@ fn encode_text(text: &str, writing: &Writing) -> Result<Vec<u8>> {
                  string, a line break, a tag or another {raw} after it would be read as a character's bytes"
             ));
         }
+        // In a run, the game reads each byte from $10 up by the renderer's table, whatever the font has.
+        let unassigned = found
+            .iter()
+            .zip(run_states(&found))
+            .find(|((piece, bytes), run)| *run && *piece == Piece::Silent && bytes[0] >= 0x10);
+        if let Some(((_, bytes), _)) = unassigned {
+            return text_error(format!(
+                "it has the byte ${:02X} in a run of the characters drawn at their own widths, after a {raw}, and \
+                 none of them is written with it",
+                bytes[0]
+            ));
+        }
         return Ok(out);
     }
     encode_runs(text, writing)
@@ -416,8 +428,9 @@ fn encode_runs(text: &str, writing: &Writing) -> Result<Vec<u8>> {
         if *in_run && bytes.first().is_some_and(|byte| *byte >= 0x10) {
             out.push(vwf::RUN);
         }
-        *in_run = false;
         out.extend(bytes);
+        // What was written may start or end a run itself, with a `{RUN}` of the pack's.
+        *in_run = run_states(&pieces(out, writing)).last().copied().unwrap_or_default();
         other.clear();
         Ok(())
     };
@@ -445,6 +458,8 @@ fn encode_runs(text: &str, writing: &Writing) -> Result<Vec<u8>> {
 enum Piece {
     /// A character, by its code.
     Glyph(u32),
+    /// One of the renderer's characters, read in a run, by its code.
+    Run(u32),
     /// What the game fills in, taking this many cells: a name, a number, a word.
     Cells(usize),
     /// $0D, a new line.
@@ -469,14 +484,17 @@ fn pieces(data: &[u8], writing: &Writing) -> Vec<(Piece, Vec<u8>)> {
     let (mut at, mut run) = (0, false);
     while at < data.len() {
         let next = data.get(at + 1).copied();
-        let in_run = writing.renderer.filter(|_| run).and_then(|renderer| renderer.byte_code(data[at]));
+        let read_in_run = run && data[at] >= 0x10;
         run = match data[at] {
             vwf::RUN => !run,
             0x00..=0x0F => false,
             _ => run,
         };
         let (piece, length) = match data[at] {
-            _ if in_run.is_some() => (Piece::Glyph(in_run.unwrap_or_default()), 1),
+            // A byte the renderer has no character for is read as nothing (see `encode_text`).
+            byte if read_in_run && writing.renderer.is_some() => {
+                (writing.renderer.and_then(|renderer| renderer.byte_code(byte)).map_or(Piece::Silent, Piece::Run), 1)
+            }
             vwf::RUN if writing.renderer.is_some() => (Piece::Silent, 1),
             high @ 0x01..=0x0A => (Piece::Glyph(u32::from(high) << 8 | u32::from(next.unwrap_or(0))), 2),
             0x0B => (Piece::Wait, 1),
@@ -516,7 +534,7 @@ fn line_widths(data: &[u8], writing: &Writing, font: Face) -> Vec<usize> {
     for (piece, _) in pieces(data, writing) {
         let line = lines.last_mut().unwrap();
         match piece {
-            Piece::Glyph(code) => *line += writing.code_width(code, font),
+            Piece::Glyph(code) | Piece::Run(code) => *line += writing.code_width(code, font),
             Piece::Cells(count) => *line += count * font.cell(),
             Piece::Break | Piece::Wait | Piece::Clear => lines.push(0),
             Piece::Say => {
@@ -626,7 +644,7 @@ fn lay(pieces: &[(Piece, Vec<u8>)], wrap: bool, writing: &Writing) -> Laid {
             _ => {}
         }
         let (width, cells) = match piece {
-            Piece::Glyph(code) => {
+            Piece::Glyph(code) | Piece::Run(code) => {
                 out.extend(bytes);
                 (writing.code_width(*code, Face::Large), 1)
             }
@@ -726,9 +744,10 @@ fn fit(data: &[u8], writing: &Writing, wrap: bool) -> Result<Vec<u8>> {
             Laid::Overfull { page, at } => match (page..=at).rev().find(|index| pieces[*index].0 == Piece::Break) {
                 Some(index) => pieces[index] = (Piece::Wait, vec![0x0B]),
                 None => {
-                    // A wait ends a run of the renderer's characters: one put inside a run starts it
-                    // again after it.
-                    let in_run = writing.renderer.is_some() && run_at(&pieces, at);
+                    // A wait ends a run of the renderer's characters: one put before a character of a
+                    // run starts the run again after it. A break turned into a wait needs nothing more,
+                    // as a break ends a run too and the run is started again after it.
+                    let in_run = matches!(pieces[at].0, Piece::Run(_));
                     pieces.insert(at, (Piece::Wait, vec![0x0B]));
                     if in_run {
                         pieces.insert(at + 1, (Piece::Silent, vec![vwf::RUN]));
@@ -740,14 +759,19 @@ fn fit(data: &[u8], writing: &Writing, wrap: bool) -> Result<Vec<u8>> {
     text_error("it cannot be laid out in the window")
 }
 
-/// Whether piece `at` of a string is read in a run of the renderer's characters: `vwf::RUN` starts
-/// or ends one, and any other byte under $10 ends it.
-fn run_at(pieces: &[(Piece, Vec<u8>)], at: usize) -> bool {
-    pieces[..at].iter().fold(false, |run, (piece, bytes)| match bytes.first() {
-        Some(&vwf::RUN) if *piece == Piece::Silent => !run,
-        Some(byte) if *byte < 0x10 => false,
-        _ => run,
-    })
+/// Whether each piece of a string is read in a run of the renderer's characters, and, last, whether
+/// the string ends in one: `vwf::RUN` starts or ends a run, and any other byte under $10 ends it.
+fn run_states(pieces: &[(Piece, Vec<u8>)]) -> Vec<bool> {
+    let mut states = vec![false];
+    for (piece, bytes) in pieces {
+        let run = states[states.len() - 1];
+        states.push(match bytes.first() {
+            Some(&vwf::RUN) if *piece == Piece::Silent => !run,
+            Some(byte) if *byte < 0x10 => false,
+            _ => run,
+        });
+    }
+    states
 }
 
 /// The tags after which the game goes on at the start of a new line, as a line break does.
@@ -813,15 +837,6 @@ fn wrap_to(text: &str, width: usize, line_cells: usize, writing: &Writing, font:
                     }
                     continue;
                 }
-                Token::Tag { name: "SAY" | "/SAY", raw, .. } => {
-                    out.push_str(raw);
-                    speaking = !speaking;
-                    if speaking {
-                        (x, used) = (x + font.cell(), used + 1);
-                        indent = (x, used);
-                    }
-                    continue;
-                }
                 Token::Tag { name, raw, .. } if NEW_LINE_TAGS.contains(&name) => {
                     out.push_str(raw);
                     (x, used) = if name == "CLEAR" { (0, 0) } else { start(speaking, indent) };
@@ -830,7 +845,13 @@ fn wrap_to(text: &str, width: usize, line_cells: usize, writing: &Writing, font:
                 }
                 _ => {}
             }
-            let (step, step_cells) = size(&token);
+            // `{SAY}` draws a 「 that takes a glyph's room, and its line goes on past it; `{/SAY}` takes none.
+            let say = matches!(token, Token::Tag { name: "SAY" | "/SAY", .. });
+            let (step, step_cells) = match say {
+                true if speaking => (0, 0),
+                true => (font.cell(), 1),
+                false => size(&token),
+            };
             if (x + step > width || used + step_cells > line_cells)
                 && let Some((at, was_speaking, was_indent)) = space.take()
             {
@@ -854,6 +875,12 @@ fn wrap_to(text: &str, width: usize, line_cells: usize, writing: &Writing, font:
             }
             out.push_str(&token.text());
             (x, used) = (x + step, used + step_cells);
+            if say {
+                speaking = !speaking;
+                if speaking {
+                    indent = (x, used);
+                }
+            }
         }
     }
     Ok(out)

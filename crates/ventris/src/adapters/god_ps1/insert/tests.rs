@@ -605,6 +605,17 @@ fn the_renderer_s_characters_are_written_a_byte_each_in_runs() {
     assert!(refused.contains("this build draws none"), "{refused}");
     assert_eq!(encode_text("{B:10}", &full).unwrap(), [0x10]);
     assert_eq!(encode_text("{RUN}{B:10}{RUN}あ", &writing).unwrap(), [0x0A, 0x10, 0x0A, 0xA2]);
+    // A letter after a run the pack starts itself goes on in it, and one after a run it ends starts
+    // another.
+    assert_eq!(encode_text("{RUN}{B:10}a", &writing).unwrap(), [0x0A, 0x10, a]);
+    assert_eq!(encode_text("あ{RUN}a", &writing).unwrap(), [0xA2, 0x0A, a]);
+    assert_eq!(encode_text("{RUN}{B:10}{RUN}あa", &writing).unwrap(), [0x0A, 0x10, 0x0A, 0xA2, 0x0A, a]);
+    // In a run, a byte is read by the renderer's table, not the font's: one it has no character for is
+    // refused, though the font has one.
+    assert!(renderer.byte_code(0xA2).is_none() && codes.code(0xA2) != 0);
+    let refused = encode_text("{RUN}{B:A2}", &writing).unwrap_err().to_string();
+    assert!(refused.contains("the byte $A2 in a run"), "{refused}");
+    assert_eq!(encode_text("{B:A2}", &writing).unwrap(), [0xA2]);
     for unfollowed in ["{RUN}{B:10}{RUN}", "{RUN}{B:10}{RUN}\nあ", "{RUN}{RUN}{B:10}", "{RUN}{WAIT}"] {
         let refused = encode_text(unfollowed, &writing).unwrap_err().to_string();
         assert!(refused.contains("not followed by a character"), "{unfollowed}: {refused}");
@@ -628,7 +639,7 @@ fn a_line_break_left_out_after_a_run_does_not_end_it() {
         // The next line starts with a letter: the run goes on, and the letter is read in it.
         let data = laid(&format!("{full}\na"));
         assert_eq!(data, [&run[..], &[a]].concat());
-        assert_eq!(pieces(&data, &writing).last().unwrap().0, Piece::Glyph(renderer.code('a').unwrap()));
+        assert_eq!(pieces(&data, &writing).last().unwrap().0, Piece::Run(renderer.code('a').unwrap()));
         // With a character of the game's font, the run is ended before it.
         assert_eq!(laid(&format!("{full}\nあ")), [&run[..], &[vwf::RUN, 0xA2]].concat());
         // With a tag, which ends a run anyway, nothing is added.
@@ -650,11 +661,32 @@ fn a_wait_put_inside_a_run_starts_the_run_again_after_it() {
     let code = renderer.code(letter).unwrap();
     let read = pieces(&data, &writing);
     assert!(
-        read.iter().all(|(piece, _)| matches!(piece, Piece::Glyph(found) if *found == code)
+        read.iter().all(|(piece, _)| matches!(piece, Piece::Run(found) if *found == code)
             || matches!(piece, Piece::Wait | Piece::Silent)),
         "{read:?}"
     );
-    assert_eq!(read.iter().filter(|(piece, _)| *piece == Piece::Glyph(code)).count(), text.len());
+    assert_eq!(read.iter().filter(|(piece, _)| *piece == Piece::Run(code)).count(), text.len());
+}
+
+#[test]
+fn a_wait_put_before_what_is_not_a_letter_of_a_run_starts_no_run() {
+    let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
+    let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
+    // Four lines of letters, the last ending a 「 short of the window's edge: the 「 that `{SAY}` draws
+    // fills it, and the wait goes before it, where no run is started again, as 0E ends one anyway.
+    let width = |char: char| renderer.width(char).unwrap();
+    let full = ('a'..='z').find(|char| WINDOW_WIDTH.is_multiple_of(width(*char))).unwrap();
+    let short = ('a'..='z').find(|char| (WINDOW_WIDTH - vwf::LARGE).is_multiple_of(width(*char))).unwrap();
+    let text = format!(
+        "{}{}{{SAY}}a{{/SAY}}",
+        full.to_string().repeat(WINDOW_WIDTH / width(full) * (ROWS - 1)),
+        short.to_string().repeat((WINDOW_WIDTH - vwf::LARGE) / width(short))
+    );
+    let data = fit(&encode_text(&text, &writing).unwrap(), &writing, true).unwrap();
+    let wait = data.iter().position(|byte| *byte == 0x0B).unwrap();
+    assert_eq!(data[wait + 1], 0x0E, "{data:02X?}");
+    // The letter after it starts a run of its own.
+    assert_eq!(&data[wait + 2..], [vwf::RUN, renderer.byte('a').unwrap(), 0x0E]);
 }
 
 #[test]
@@ -707,6 +739,11 @@ fn a_line_is_broken_where_its_cells_run_out_and_a_spoken_line_moved_down_is_meas
     // the next line, and its own lines start under its first character from there.
     let text = "AAAAAAAAAA {SAY}AAAAAA AAAAAAA{/SAY}";
     assert_eq!(wrap(text).unwrap(), "AAAAAAAAAA\n{SAY}AAAAAA AAAAAAA{/SAY}");
+    // A 「 that would run past the window's edge starts the next line too, whatever follows it.
+    let kana = "あ".repeat(WINDOW_WIDTH / vwf::LARGE - 1);
+    let broken = super::wrap(&format!("{kana} {{SAY}} b{{/SAY}}"), &writing).unwrap();
+    assert_eq!(broken, format!("{kana}\n{{SAY}} b{{/SAY}}"));
+    assert!(fit(&encode_text(&broken, &writing).unwrap(), &writing, true).is_ok());
 }
 
 #[test]

@@ -435,6 +435,14 @@ impl Pass<'_> {
                     ));
                 }
                 let words = self.instruction(&mnemonic, &items, address)?;
+                if self.last && words.len() > 1 && self.before.is_some_and(|before| before.jumps) {
+                    // A taken jump runs only the first word in its delay slot.
+                    return assembly_error(format!(
+                        "{mnemonic} takes {} words, and only the first would run in the delay slot of the jump \
+                         before it",
+                        words.len()
+                    ));
+                }
                 if self.last {
                     for word in &words {
                         self.check(*word)?;
@@ -490,7 +498,8 @@ impl Pass<'_> {
         let immediate = |operation: u32, rs: u32, rt: u32, value: u32| operation << 26 | rs << 21 | rt << 16 | value;
         let jump = |operation: u32, target: &str| -> Result<u32> {
             let target = self.value(target)?;
-            if self.last && (target % 4 != 0 || (target ^ (address + 4)) & 0xF000_0000 != 0) {
+            let outside = !(0..=0xFFFF_FFFF).contains(&target);
+            if self.last && (outside || target % 4 != 0 || (target ^ (address + 4)) & 0xF000_0000 != 0) {
                 return assembly_error(format!("{target:#x} is out of a jump's reach"));
             }
             Ok(operation << 26 | (target as u32 >> 2 & 0x03FF_FFFF))
@@ -567,8 +576,9 @@ impl Pass<'_> {
                     }
                     Form::Shift(function) => {
                         count(3)?;
+                        // A shift by a symbol defined further on is known on the last pass only.
                         let shift = self.value(items[2])?;
-                        if !(0..32).contains(&shift) {
+                        if self.last && !(0..32).contains(&shift) {
                             return assembly_error(format!("{} is not a shift of 0 to 31", items[2]));
                         }
                         special(0, r(1)?, r(0)?, shift as u32, function)
@@ -777,6 +787,18 @@ mod tests {
         assert_eq!(refused("nop"), "line 1: code needs an org before it");
         assert_eq!(refused("org 0\n li a0, $12345"), "line 2: li takes a number of 16 bits: use la for $12345");
         assert_eq!(refused("org $0FFFFFF8\n j $10000000"), "line 2: 0x10000000 is out of a jump's reach");
+        // A target past 32 bits is refused, not cut down to one in reach.
+        assert_eq!(refused("org 0\n j $100000000"), "line 2: 0x100000000 is out of a jump's reach");
+        assert_eq!(words("org 0\n j 0\n nop"), [0x0800_0000, 0]);
+        // An instruction of two words cannot start in a delay slot, where only its first would run.
+        assert_eq!(
+            refused("org 0\n b 0\n la t0, $12345678"),
+            "line 3: la takes 2 words, and only the first would run in the delay slot of the jump before it"
+        );
+        assert_eq!(words("org 0\n b 0\n lui t0, $1234").len(), 2);
+        // A shift is checked once the symbols in it are known, and must be 0 to 31 then.
+        assert_eq!(words("org 0\n sll v0, v0, SHIFT-1\n SHIFT = 2"), [0x0002_1040]);
+        assert_eq!(refused("org 0\n sll v0, v0, SHIFT\n SHIFT = 32"), "line 2: SHIFT is not a shift of 0 to 31");
         // An instruction must be at the address of a word, whatever data comes before it.
         assert_eq!(
             refused("org 0\n .byte 1\n nop"),
