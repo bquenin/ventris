@@ -727,17 +727,21 @@ pub fn write_image(disc: &Disc, output: &Path, patches: &[(&str, u64, Vec<u8>)])
     let sheet = cue_for(disc, &bin)?;
 
     // Both files are written under names of their own beside the outputs and only put in place once
-    // both are whole, so that a build that fails leaves whatever was there before.
+    // both are whole, so that a build that fails leaves whatever was there before. The names carry the
+    // process's number and are made new, never opened if something has them already; a build removes
+    // only the ones it made.
     let partial = |path: &Path| {
         let mut name = path.file_name().unwrap_or_default().to_os_string();
-        name.push(".part");
+        name.push(format!(".{}.part", std::process::id()));
         path.with_file_name(name)
     };
     let (bin_part, cue_part) = (partial(&bin), partial(&cue));
+    let make = |path: &Path| OpenOptions::new().write(true).create_new(true).open(path).map_err(at(path));
+    let (mut bin_made, mut cue_made) = (false, false);
     let written = (|| -> Result<()> {
         let mut source = File::open(&disc.path).map_err(at(&disc.path))?;
-        let mut out =
-            OpenOptions::new().write(true).create(true).truncate(true).open(&bin_part).map_err(at(&bin_part))?;
+        let mut out = make(&bin_part)?;
+        bin_made = true;
         let mut buffer = vec![0; BATCH * RAW_SECTOR];
         let mut sector = 0u64;
         loop {
@@ -756,13 +760,23 @@ pub fn write_image(disc: &Disc, output: &Path, patches: &[(&str, u64, Vec<u8>)])
         }
         out.sync_all().map_err(at(&bin_part))?;
         drop(out);
-        fs::write(&cue_part, &sheet).map_err(at(&cue_part))?;
+        let mut sheet_out = make(&cue_part)?;
+        cue_made = true;
+        sheet_out.write_all(sheet.as_bytes()).map_err(at(&cue_part))?;
+        drop(sheet_out);
         fs::rename(&bin_part, &bin).map_err(at(&bin))?;
-        fs::rename(&cue_part, &cue).map_err(at(&cue))
+        bin_made = false;
+        fs::rename(&cue_part, &cue).map_err(at(&cue))?;
+        cue_made = false;
+        Ok(())
     })();
     if written.is_err() {
-        let _ = fs::remove_file(&bin_part);
-        let _ = fs::remove_file(&cue_part);
+        if bin_made {
+            let _ = fs::remove_file(&bin_part);
+        }
+        if cue_made {
+            let _ = fs::remove_file(&cue_part);
+        }
     }
     written
 }

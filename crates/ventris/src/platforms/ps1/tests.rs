@@ -369,18 +369,30 @@ fn a_write_that_fails_leaves_the_files_that_were_there() {
     let out = folder.path().join("copy.bin");
     fs::write(&out, b"an earlier copy").unwrap();
     fs::write(out.with_extension("cue"), b"its cue sheet").unwrap();
-    // The copy is written under a name of its own first; a folder in that place makes the write fail.
-    fs::create_dir(folder.path().join("copy.bin.part")).unwrap();
+    // The copy is written under names of its own first, which carry the process's number. A folder
+    // in the place of the first makes the write fail; a file already under the second is someone
+    // else's, and is left as it is.
+    let id = std::process::id();
+    let (bin_part, cue_part) =
+        (folder.path().join(format!("copy.bin.{id}.part")), folder.path().join(format!("copy.cue.{id}.part")));
+    fs::create_dir(&bin_part).unwrap();
+    fs::write(&cue_part, b"not this build's").unwrap();
     assert!(write_image(&disc, &out, &[]).is_err());
     assert_eq!(fs::read(&out).unwrap(), b"an earlier copy");
     assert_eq!(fs::read(out.with_extension("cue")).unwrap(), b"its cue sheet");
-    assert!(!folder.path().join("copy.cue.part").exists());
+    assert!(bin_part.is_dir());
+    assert_eq!(fs::read(&cue_part).unwrap(), b"not this build's");
+    // A build that cannot make its second file removes the first, and still leaves the outputs.
+    fs::remove_dir(&bin_part).unwrap();
+    assert!(write_image(&disc, &out, &[]).is_err());
+    assert!(!bin_part.exists());
+    assert_eq!(fs::read(&out).unwrap(), b"an earlier copy");
     // Once the way is clear, the copy replaces them, and nothing is left under the other names.
-    fs::remove_dir(folder.path().join("copy.bin.part")).unwrap();
+    fs::remove_file(&cue_part).unwrap();
     write_image(&disc, &out, &[]).unwrap();
     assert!(fs::read(&out).unwrap() == fs::read(&image).unwrap());
     assert!(fs::read_to_string(out.with_extension("cue")).unwrap().starts_with("FILE \"copy.bin\""));
-    assert!(!folder.path().join("copy.bin.part").exists() && !folder.path().join("copy.cue.part").exists());
+    assert!(!bin_part.exists() && !cue_part.exists());
 }
 
 #[test]
