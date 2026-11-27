@@ -1414,7 +1414,7 @@ fn the_adapter_declares_itself_properly() {
     // The archive's last member is 09202: a number past it is no section of the game.
     assert_eq!([kind("09202"), kind("09203"), kind("99999")], [Some("dialogue"), None, None]);
     assert_eq!(ADAPTER.unmapped("あ{G:9944}い{G:99a4}{G:994}{G:E6C2}{G:9944"), ["9944", "E6C2"]);
-    assert!(std::ptr::addr_eq(ADAPTER.platform(), &ps2::PLATFORM));
+    assert!(crate::platform::same_platform(ADAPTER.platform(), &ps2::PLATFORM));
     assert_eq!(ADAPTER.glyph_shades(), (0..16).map(|level| level * 17).collect::<Vec<u8>>());
     assert_eq!((code_at(0), code_at(GLYPH_COUNT - 1)), (0x9940, 0xE6C2));
     let summary = |narrow: &str, moved, growth| {

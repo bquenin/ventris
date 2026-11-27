@@ -135,8 +135,8 @@ mod tests {
         let looked = search(folder.path(), &BTreeMap::new()).unwrap();
         assert!(looked.games.is_empty());
         // A compressed disc image could be either disc game, and is no cartridge.
-        assert_eq!(looked.near.keys().collect::<Vec<_>>(), ["god-ps1", "tod2-ps2"]);
-        for game in ["god-ps1", "tod2-ps2"] {
+        assert_eq!(looked.near.keys().collect::<Vec<_>>(), ["god-ps1", "srwz-ps2", "tod2-ps2"]);
+        for game in ["god-ps1", "srwz-ps2", "tod2-ps2"] {
             assert!(looked.near[game][0].starts_with("game.chd is a compressed disc image (CHD, CSO or ZSO): "));
         }
     }

@@ -96,9 +96,8 @@ pub fn label_words(platform: &dyn Platform, name: &str, version: &str) -> String
     words
 }
 
-/// Whether two consoles are the same one. They are told apart by name, not by where they are in
-/// memory: each is a value that takes no room, and the compiler may put two such values at one
-/// address, which made two consoles one in builds where it did.
+/// Whether two consoles are the same one. They are told apart by name, not by address: a console is
+/// an empty type, and the statics of empty types may all share one address.
 pub fn same_platform(one: &dyn Platform, other: &dyn Platform) -> bool {
     one.name() == other.name()
 }

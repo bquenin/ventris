@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::adapter::{Adapter, BuildOptions, Release, TextKind};
+use crate::adapter::{Adapter, BuildOptions, Release, TextKind, same_adapter};
 use crate::error::{Error, Result};
 use crate::manifest::{self, Manifest};
 use crate::platform::{Image, Platform, same_platform};
@@ -405,12 +405,12 @@ pub fn identify_noting<'a>(candidates: impl IntoIterator<Item = &'a Candidate>) 
     let mut games: Vec<Found> = Vec::new();
     let mut passed = Vec::new();
     for candidate in candidates {
-        let wanted = |adapter: &&dyn Adapter| !games.iter().any(|found| found.adapter.id() == adapter.id());
+        let wanted = |adapter: &&dyn Adapter| !games.iter().any(|found| same_adapter(found.adapter, *adapter));
         if !candidate.could_be.iter().any(wanted) {
             continue;
         }
         match candidate.examine() {
-            Ok(Examined::Game(found)) if !games.iter().any(|known| known.adapter.id() == found.adapter.id()) => {
+            Ok(Examined::Game(found)) if !games.iter().any(|known| same_adapter(known.adapter, found.adapter)) => {
                 games.push(found)
             }
             Ok(Examined::Not(Some(near))) => passed.push(near),
@@ -459,7 +459,7 @@ impl Survey {
     /// now. Those are read only for the consoles of the games that are missing, a few bytes each;
     /// nothing is hashed.
     pub fn missed(&self, missing: &[&'static dyn Adapter], read: &[Passed]) -> Vec<Missed> {
-        let is_missing = |adapter: &dyn Adapter| missing.iter().any(|wanted| wanted.id() == adapter.id());
+        let is_missing = |adapter: &dyn Adapter| missing.iter().any(|wanted| same_adapter(*wanted, adapter));
         let wanted_on =
             |platform: &dyn Platform| missing.iter().any(|adapter| same_platform(adapter.platform(), platform));
         let mut passed: Vec<Passed> = read.iter().filter(|near| is_missing(near.adapter)).cloned().collect();
@@ -481,7 +481,7 @@ impl Survey {
             .iter()
             .map(|adapter| Missed {
                 adapter: *adapter,
-                passed: passed.iter().filter(|near| near.adapter.id() == adapter.id()).cloned().collect(),
+                passed: passed.iter().filter(|near| same_adapter(near.adapter, *adapter)).cloned().collect(),
                 compressed: if adapter.platform().disc() { compressed.clone() } else { Vec::new() },
             })
             .collect()

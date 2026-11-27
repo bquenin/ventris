@@ -34,7 +34,8 @@ procedure and its guardrails; the facts are there, and they win where the two di
   stay under `work/` or `roms/`, which git ignores, or outside the repository.
 - **The game comes from the user.** Ask for the path to their copy, the release they mean to support.
   Never download a game or a BIOS. A fan translation's patch may be fetched to use as an answer key, from
-  its authors' own page, never a copy of the game with it applied; what it may be used for is in "An answer key is for facts" below.
+  its authors' own page, never a copy of the game with it applied; what it may be used for is in "An
+  answer key is for facts" below.
 - **Text only.** An adapter does not change the game beyond its text: no name-entry screens, no boxes laid
   out again, no pictures redrawn, nothing in how the game behaves (`docs/adding-a-game.md`, "Scope"). An
   adapter that only extracts is a whole contribution.

@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 
-use ventris::adapter::{Adapter, BuildOptions};
+use ventris::adapter::{Adapter, BuildOptions, same_adapter};
 use ventris::error::at;
 use ventris::fonts::{self, Font};
 use ventris::tasks::{self, open_game, shown};
@@ -189,7 +189,7 @@ fn find(folder: &Path) -> Result<()> {
     }
     // A game that is not found, and of which the folder holds a wrong copy, is named with why each
     // copy is not the file needed, and with the file that is.
-    let is_found = |adapter: &&dyn Adapter| found.iter().any(|game| game.adapter.id() == adapter.id());
+    let is_found = |adapter: &&dyn Adapter| found.iter().any(|game| same_adapter(game.adapter, *adapter));
     let missing: Vec<&'static dyn Adapter> =
         adapters::ALL.iter().copied().filter(|adapter| !is_found(adapter)).collect();
     for missed in survey.missed(&missing, &read).iter().filter(|missed| !missed.is_empty()) {

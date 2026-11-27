@@ -1,6 +1,6 @@
 ---
 name: ventris-translate
-description: Translate a game's text with ventris, or improve an existing ventris translation pack, by command line. Checks that the game has an adapter, extracts its script with `ventris extract`, writes a sparse pack of UTF-8 strings with a glossary, builds the game with `ventris insert` after each batch, and fixes the strings a build refuses. Use when the user wants to translate a game that ventris supports into any language, start, review or correct a pack for the ventris-packs repository, or fix a line in one. Not for adding support for a new game (use ventris-adapter).
+description: Translate a game's text with ventris, or improve an existing ventris translation pack, by command line. Checks that the game has an adapter, extracts its script with `ventris extract`, fixes a glossary of official names first, writes a sparse pack of UTF-8 strings that keeps the original's meaning and tone, builds the game with `ventris insert` after each batch, and fixes the strings a build refuses. Use when the user wants to translate a game that ventris supports into any language, start, review or correct a pack for the ventris-packs repository, or fix a line in one. Not for adding support for a new game (use ventris-adapter).
 ---
 
 # Translating a game with ventris
@@ -29,7 +29,8 @@ its guardrails; the facts are there, and they win where the two differ.
 
 - **The game comes from the user.** Ask for the path to their copy. Never download a game or a disc image,
   and never suggest where to get one. An existing fan translation's patch may be fetched from its authors'
-  own page, never a copy of the game with it applied; what it may be used for is in "Translate from the game's own text" below.
+  own page, never a copy of the game with it applied; what it may be used for is in "Translate from the
+  game's own text" below.
 - **The game stays out.** The game, the extracted script, a built image, a font picture and anything made
   from them never go into a pack, a commit, an issue or a pull request. Keep them in a working folder
   outside any repository, or under `work/` in a copy of the ventris repository, which git ignores.
@@ -73,11 +74,38 @@ game stays outside that clone.
 
 ## Fix the glossary first
 
-Before translating at volume, read through the script and list the names of characters, places, skills,
-items and the terms that recur. Agree the main ones with the user, write them in the pack's `NOTES.md`, and
-keep to them in every file: a player who meets two spellings thinks they are two things. Where the game
-can rename its characters, `names.txt` gives the names (`docs/packs.md`, "Names"). Changing an established
-name means changing it in every file of the pack and in `NOTES.md` in the same change.
+`docs/translating.md`, "Fix the names first", has the rules; this is how to hold to them.
+
+1. Before translating at volume, read through the script and list the names of characters, places,
+   machines, attacks, skills, items and the terms that recur.
+2. Find the official name of each in the pack's language: the game's other releases, the series, anime or
+   manga it draws on, the publisher. Do not trust your memory for a name: a name you recall can be a fan
+   spelling or wrong. Look it up, and record the source next to it. Where no official name exists, choose
+   one, preferring a reference work's usage, and mark it as the pack's own choice. A fan translation's
+   coinages are its wording, not a source.
+3. Write the glossary in the pack's `NOTES.md`, one line a term: original, chosen name, source. Agree the
+   main ones with the user.
+4. Keep to it. Before each batch, read the glossary's terms that occur in it; after it, search the
+   batch's original strings in the extracted script for each term, and check that the pack's string for
+   each uses the glossary's name. A term that is not in the
+   glossary goes in before you use it. Never improvise a variant, a shortened form or a new spelling.
+
+Where the game can rename its characters, `names.txt` gives the names (`docs/packs.md`, "Names"). Changing
+an established name means changing it in every file of the pack and in `NOTES.md` in the same change.
+
+## Stay close to the original
+
+`docs/translating.md`, "Stay close to the original", has the rules. Hold to them in every line:
+
+- Translate what is said, as it is said. Rough stays rough: swearing, insults, crude jokes, threats,
+  violence and innuendo keep their strength. Polite stays polite, and each character keeps their voice.
+- Never soften, censor, sanitise, leave out, explain or add. Do not tone a line down because it is rude,
+  offensive or uncomfortable: that is the original's choice, not yours.
+- Wordplay that cannot carry over gets an equivalent that does the same job, with a `# ` comment under the
+  string's header saying what the original was.
+- When a line must be shorter to fit, cut words, not meaning or tone.
+- Choices made once for the whole pack, such as honorifics, how a character's accent is rendered, or
+  units, go in `NOTES.md` and hold everywhere.
 
 ## Write the pack
 
