@@ -162,3 +162,134 @@ fn the_font_is_read() {
     assert!(narrow.iter().any(|row| row[..8].iter().any(|pixel| *pixel != 0)));
     assert!(narrow.iter().all(|row| row[8..].iter().all(|pixel| *pixel == 0)));
 }
+
+// --- building --------------------------------------------------------------
+
+#[test]
+fn a_script_is_laid_out_again_with_a_longer_string() {
+    // Two pieces; the first string of the first grows by an odd number of instructions' bytes.
+    let first: Vec<u8> = [op(0xA9, &[]), op(TEXT, &[0x0E]), op(0xAD, &[])].concat();
+    let second: Vec<u8> = [op(TEXT, &[0x0F, 0x10]), op(0x0F, &[])].concat();
+    let data = make_script(&[&first, &second]);
+    let strings = file_strings("x.dat", &data).unwrap();
+    let (number, code) = &strings[0];
+    let longer = encode("あいうえお\nか").unwrap();
+    let replaced = BTreeMap::from([(*number as usize, (bytes_of(code).len(), longer.clone()))]);
+    let built = rebuild_script("x.dat", &data, &replaced).unwrap();
+    // The pieces are found again through the moved trailer and records, each with its new length.
+    let texts: Vec<String> = file_strings("x.dat", &built).unwrap().iter().map(|(_, code)| decode(code)).collect();
+    assert_eq!(texts, ["あいうえお\nか", "いう"]);
+    assert_eq!(pieces("x.dat", &built).unwrap().len(), 2);
+    assert_eq!(built.len() % 4, data.len() % 4);
+    // With nothing replaced, the file is the same.
+    assert_eq!(rebuild_script("x.dat", &data, &BTreeMap::new()).unwrap(), data);
+}
+
+#[test]
+fn the_storyteller_is_written_across_by_one_argument() {
+    let code: Vec<u8> = [op(0x62, &[0]), op(VERTICAL, &[1]), op(TEXT, &[0x0E])].concat();
+    let data = make_script(&[&code]);
+    let across = written_across("x.dat", &data).unwrap();
+    assert_eq!(across.len(), data.len());
+    let changed: Vec<usize> = (0..data.len()).filter(|at| data[*at] != across[*at]).collect();
+    assert_eq!(changed.len(), 1);
+}
+
+#[test]
+fn new_glyphs_go_at_the_end_of_the_font() {
+    // A made-up font of 1,500 glyphs of 4 units each, and its records.
+    let mut font = vec![0u8; 32 + 1500 * 128 + 4];
+    font[0] = 1;
+    let mut records = vec![0u8; 0xD8];
+    records[0..4].copy_from_slice(&(0xD8 | OFFSET_BIT).to_le_bytes());
+    records[4..8].copy_from_slice(&1500u32.to_le_bytes());
+    for index in 0..1500u16 {
+        for value in [index * 4, 16, 16] {
+            records.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    records.extend_from_slice(&[0x10, 0, 0x10, 0]);
+    let added = AddedGlyphs::new(&['A', 'é'], &fonts::Font::built_ins(&["unifont"])).unwrap();
+    assert_eq!((added.numbers[&'A'], added.numbers[&'é']), (1500, 1501));
+    assert_eq!((added.advance('A'), added.advance('あ'), added.advance('.')), (8, 16, 8));
+    let (pixels, table) = added.extend(&font, &records).unwrap();
+    assert_eq!(u32::from_le_bytes(table[4..8].try_into().unwrap()), 1502);
+    // Each new glyph is on a unit after the old pixels, 8 dots wide, two tiles.
+    let record = |index: usize| {
+        let at = 0xD8 + 6 * index;
+        [0, 2, 4].map(|step| u16::from_le_bytes([table[at + step], table[at + step + 1]]) as usize)
+    };
+    let [unit, width, height] = record(1500);
+    assert_eq!((width, height), (8, 16));
+    assert!(32 + unit * 32 >= font.len());
+    assert!(pixels[32 + unit * 32..32 + unit * 32 + 64].iter().any(|byte| *byte != 0));
+    assert_eq!(record(1501)[0], unit + 2);
+    // The old records and what follows them are kept.
+    assert_eq!(&table[16..0xD8 + 6 * 1500], &records[16..0xD8 + 6 * 1500]);
+    assert_eq!(&table[table.len() - 4..], &[0x10, 0, 0x10, 0]);
+    assert!(pixels.len() <= 32 + u32::from_le_bytes(table[12..16].try_into().unwrap()) as usize * 64);
+}
+
+#[test]
+fn a_built_game_reads_back_the_pack() {
+    let Some(rom) = testing::cartridge("goemon-nds") else { return };
+    let original = extract(&rom).unwrap();
+    // Japanese only, from the game's own font: the second string of a scene put in place of the first,
+    // which makes the file longer.
+    let scene = &original.texts["demo_a1_n0"];
+    let (first, second) = (scene[&1032].clone(), scene[&1060].clone());
+    let mut pack = Pack::default();
+    pack.texts.insert("demo_a1_n0".into(), BTreeMap::from([(1032, second.clone())]));
+    pack.texts.insert("system".into(), BTreeMap::from([(3056, "あいう".into())]));
+    let (built, _) = build(&rom, &pack, &BuildOptions::default()).unwrap();
+    let back = extract(&built).unwrap();
+    assert_eq!(back.texts["system"][&3056], "あいう");
+    let numbers = |texts: &BTreeMap<u32, String>| texts.keys().copied().collect::<Vec<_>>();
+    // A string keeps its place among the others; those after it have moved in the file, so they are
+    // numbered from there now, and read the same.
+    let rebuilt: Vec<&String> = back.texts["demo_a1_n0"].values().collect();
+    let own: Vec<&String> = scene.values().collect();
+    assert_eq!(rebuilt[0], &second);
+    assert_eq!(rebuilt[1..], own[1..]);
+    assert_ne!(first, second);
+    assert_eq!(numbers(&back.texts["npc_town1_n0"]), numbers(&original.texts["npc_town1_n0"]));
+    // A build that changes nothing is the game.
+    assert_eq!(build(&rom, &Pack::default(), &BuildOptions::default()).unwrap().0, rom);
+}
+
+#[test]
+fn latin_letters_are_added_and_lines_broken_at_spaces() {
+    let Some(rom) = testing::cartridge("goemon-nds") else { return };
+    let mut pack = Pack::default();
+    let line = "So you are the band of thieves the whole town is talking about?";
+    pack.texts.insert("demo_a1_n0".into(), BTreeMap::from([(6244, line.into())]));
+    let (built, summary) = build(&rom, &pack, &BuildOptions::default()).unwrap();
+    assert!(summary.iter().any(|line| line.starts_with("font:")), "{summary:?}");
+    let files = FileSystem::read(&built).unwrap();
+    let records = files.file_at(&built, FONT_RECORDS_FILE).unwrap();
+    let count = u32::from_le_bytes(records[4..8].try_into().unwrap()) as usize;
+    assert!(count > GLYPH_COUNT);
+    // Read back with the added glyphs' characters, the line is broken at spaces, 20 letters at most.
+    let back = extract(&built).unwrap();
+    let text = &back.texts["demo_a1_n0"][&6244];
+    let lines: Vec<&str> = text.split('\n').collect();
+    assert_eq!(lines.len(), 4, "{text}");
+    assert!(lines.iter().all(|line| line.matches("{K:").count() + line.chars().filter(|c| *c == ' ').count() <= 20));
+}
+
+#[test]
+fn the_storyteller_option_writes_across() {
+    let Some(rom) = testing::cartridge("goemon-nds") else { return };
+    let options = BuildOptions { switches: [HORIZONTAL.to_string()].into(), ..BuildOptions::default() };
+    let (built, _) = build(&rom, &Pack::default(), &options).unwrap();
+    let files = FileSystem::read(&built).unwrap();
+    let script = files.file_at(&built, &file_of(STORYTELLER)).unwrap();
+    let vertical = pieces("s.dat", script)
+        .unwrap()
+        .into_iter()
+        .flat_map(|piece| instructions("s.dat", script, piece).unwrap())
+        .filter(|instruction| instruction.op == VERTICAL && instruction.args == [1])
+        .count();
+    assert_eq!(vertical, 0);
+    assert_ne!(built, rom);
+}

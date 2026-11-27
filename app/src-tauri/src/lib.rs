@@ -555,8 +555,9 @@ mod tests {
         let ids: Vec<&str> = listed.iter().map(|game| game.id).collect();
         assert_eq!(ids, ["top-sfc", "tod2-ps2", "srwz-ps2", "goemon-nds", "god-ps1"]);
         // A game that can only be extracted so far is listed too, with nothing a pack can change.
-        let extract_only = &listed[3];
-        assert_eq!((extract_only.platform, extract_only.can_insert), ("Nintendo DS", false));
+        let extract_only = &listed[2];
+        assert_eq!((extract_only.platform, extract_only.can_insert), ("PlayStation 2", false));
+        assert_eq!((listed[3].platform, listed[3].can_insert), ("Nintendo DS", true));
         let last = &listed[1];
         assert_eq!((last.platform, last.source_language, last.can_insert), ("PlayStation 2", "ja", true));
         assert!(last.kinds.iter().any(|kind| kind.name == "menus" && kind.insert && kind.grow));
