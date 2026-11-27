@@ -99,12 +99,13 @@ PlayStation 2 and one on the Nintendo DS.
 Each adapter was made for one release of its game, the Japanese one. The app shows each game's limits on
 the game's page, and the command `ventris games` lists the same, with the release.
 
-The packs are kept apart, in [ventris-packs](https://github.com/bquenin/ventris-packs): an English pack
-of Tales of Phantasia and one of Tales of Destiny 2. They are working samples: they show that ventris
-carries a whole game, from the dialogue to the menus and lists, and are playable as far as has been seen.
-**Both are machine translated and have not been reviewed by a human translator yet**, and only parts of
-each have been seen on screen. Anyone is free to improve them, or to write a pack of their own in any
-language: [Translating a game](docs/translating.md) says how.
+The packs are kept apart, in [ventris-packs](https://github.com/bquenin/ventris-packs): English packs of
+Tales of Phantasia, Tales of Destiny 2, G.O.D pure and Ganbare Goemon DS, and a French one of Tales of
+Destiny 2. They are working samples: they show that ventris carries a whole game, from the dialogue to the
+menus and lists, and are playable as far as has been seen. **All are machine translated and have not been
+reviewed by a human translator yet**, and only parts of each have been seen on screen. Anyone is free to
+improve them, or to write a pack of their own in any language: [Translating a game](docs/translating.md)
+says how.
 
 ## No game files
 

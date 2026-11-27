@@ -35,10 +35,10 @@ Download the program for your system from the
 
 | System | File |
 | --- | --- |
-| Windows | `ventris-0.3.0-windows-x86_64.zip` |
-| macOS, Apple silicon (M1 and later) | `ventris-0.3.0-macos-aarch64.tar.gz` |
-| macOS, Intel | `ventris-0.3.0-macos-x86_64.tar.gz` |
-| Linux | `ventris-0.3.0-linux-x86_64.tar.gz` |
+| Windows | `ventris-0.4.0-windows-x86_64.zip` |
+| macOS, Apple silicon (M1 and later) | `ventris-0.4.0-macos-aarch64.tar.gz` |
+| macOS, Intel | `ventris-0.4.0-macos-x86_64.tar.gz` |
+| Linux | `ventris-0.4.0-linux-x86_64.tar.gz` |
 
 It is one program, `ventris` (`ventris.exe` on Windows), with nothing else to install, and the fonts it
 needs are built in. It is not signed yet;
@@ -78,7 +78,7 @@ Tales of Phantasia (Super Famicom, Japan)
   id         top-sfc
   release    Japan
   file       C:\path\to\your\games\snes\Tales of Phantasia (Japan).zip
-found 1 of the 4 games there are adapters for; 2 files had the size of one
+found 1 of the 5 games there are adapters for; 2 files had the size of one
 ```
 
 If it does not list your game, see [Your copy of the game](playing.md#your-copy-of-the-game). Then see
@@ -91,8 +91,9 @@ ventris insert "C:\path\to\your\games\Tales of Phantasia (Japan).zip" ventris-pa
 
 `ventris-packs` is the folder you unpacked the packs into. The first file `insert` takes is your game, the
 second is the pack's folder, and `-o` names the file to write. Put quotes around a path that has spaces in
-it. Give the new file the same ending as the game's own (`.sfc` for a cartridge, even when your copy is a
-zip archive; `.iso` for a disc). Then [play it](playing.md#play-it).
+it. Give the new file the same ending as the game's own (`.sfc` or `.nds` for a cartridge, even when your
+copy is a zip archive; `.bin` for a PlayStation disc, whose `.cue` is written beside it; `.iso` for a
+PlayStation 2 disc). Then [play it](playing.md#play-it).
 
 ## For a translator
 
@@ -116,10 +117,13 @@ one whose `pack.toml` or files are wrong, with the reason the app shows beside *
 `extract`, `insert`, `check` and `font` work only on games that have an adapter. They take the game's own
 file:
 
-- **A cartridge game** (Super Famicom) as its image, with or without the 512 bytes a copier adds at the
-  front, or as the zip archive a collection keeps it in, as long as the archive holds one cartridge image.
-- **A PlayStation 2 game** as its disc image (`.iso`). The image is opened, not loaded: the commands read
-  the files inside it that they need.
+- **A cartridge game** (Super Famicom, Nintendo DS) as its image, for the Super Famicom with or without the
+  512 bytes a copier adds at the front, or as the zip archive a collection keeps it in, as long as the
+  archive holds one cartridge image.
+- **A PlayStation game** as its disc image: the `.bin` of its data track, or the `.cue` sheet that names
+  it. A `.bin` given alone is taken to be the data track.
+- **A PlayStation 2 game** as its disc image (`.iso`). A disc image is opened, not loaded: the commands
+  read the files inside it that they need.
 
 A game is recognised by the SHA-1 of its image, so only the release an adapter was made for is recognised.
 An image that already has a fan patch applied is a different file and is not recognised as the game. A

@@ -23,7 +23,7 @@ procedure and its guardrails; the facts are there, and they win where the two di
 - The top of `crates/ventris/src/adapters/mod.rs`: what each part of an adapter says, and the shared
   modules an adapter reuses rather than writes again.
 - The module comments of the existing adapters, under `crates/ventris/src/adapters/`: what the road found
-  in two games.
+  in each game.
 - `docs/commands.md` and `docs/packs.md`: the commands, and what a translator does with your adapter.
 
 ## Guardrails

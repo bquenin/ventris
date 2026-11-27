@@ -9,7 +9,7 @@ If you would like a game supported and are not going to write the adapter yourse
 
 Questions and findings along the way go in the
 [Adapters](https://github.com/bquenin/ventris/discussions/categories/adapters) category of Discussions, where
-two posts tell how the existing adapters were made:
+two posts tell how the first two adapters were made:
 [Tales of Phantasia](https://github.com/bquenin/ventris/discussions/2) and
 [Tales of Destiny 2](https://github.com/bquenin/ventris/discussions/3).
 
@@ -214,7 +214,7 @@ the library is not built with `interface-hooks.patch` means it is DeSmuME's own,
 
 Every game is different, but the road is the same: get a line of text on screen, find it in memory, work
 out its encoding from the bytes and the font, and trace it back to where it is stored and what points at
-it. The two adapters' module comments are what that road found in two games; read them for the shape of
+it. The adapters' module comments are what that road found in each game; read them for the shape of
 the answers.
 
 ### Know the file
@@ -366,7 +366,7 @@ a length as the ARM9 sees them. Each run starts the game afresh, from power-on o
 same run gives the same result, so a run can be repeated with a watch added. Use `--trace-from` to set the
 watches only from the frame where they are wanted: they slow the game, `--exec` most of all.
 
-## Two adapters, two situations
+## Three adapters, three situations
 
 Each adapter's module comment describes what was found, for a reader who has not seen the game. They are
 the best guide to what an adapter has to work out.
