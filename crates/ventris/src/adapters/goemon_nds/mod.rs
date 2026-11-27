@@ -76,7 +76,9 @@
 //! the right edge of its box wherever it is, in the middle of a word too, and when a fourth line
 //! comes it waits for a button and goes on in a cleared box; `{0D}{0A}` does the same where the
 //! writers wanted a new box. So a build breaks lines at spaces, at 160 and 224 dots (`DIALOGUE_LINE`,
-//! `SYSTEM_LINE`), and a translation needs no breaks of its own.
+//! `SYSTEM_LINE`), and a translation needs no breaks of its own. While the game waits for a button, a
+//! small icon blinks over the last two cells of the box's third line, so the build keeps the third
+//! line of each box two cells shorter (`PROMPT_CELLS`); the storyteller's pages have no such icon.
 //!
 //! # Building
 //!
@@ -123,11 +125,10 @@ use std::sync::OnceLock;
 use crate::adapter::{Adapter, BuildOptions, Built, CatalogueEntry, Release, TextKind};
 use crate::error::{Error, Result, text_error};
 use crate::fonts;
-use crate::layout;
 use crate::platform::{Image, Platform};
 use crate::platforms::nds::{self, FileSystem};
 use crate::script::{self, Pack, Script};
-use crate::text::{Token, from_hex, read_table, tokens};
+use crate::text::{self, Token, from_hex, read_table, tokens};
 
 pub const NAME: &str = "Ganbare Goemon: Tōkai Dōchū Ōedo Tengurigaeshi no Maki (Nintendo DS, Japan)";
 pub const ROM_SHA1: &str = "a90e1c3491a3120567385245fdb7302c9866fcd4";
@@ -753,19 +754,28 @@ pub fn written_across(name: &str, data: &[u8]) -> Result<Vec<u8>> {
 /// The tags after which the game starts a new box, at the left: `{0A}` clears the box.
 const NEW_BOX: &[&str] = &["0A"];
 
+/// The lines a box shows; at the next line the game waits for a button and clears the box.
+const BOX_LINES: usize = 3;
+
+/// The cells at the end of a box's last line that the game's prompt covers: while it waits for a
+/// button, a small icon 16 dots wide blinks there, over the last two cells of the third line.
+pub const PROMPT_CELLS: usize = 2;
+
 /// What a cell of 8 dots is measured as while a line is broken: anything that is not a space or a brace.
 const CELL: char = 'x';
 
-/// A string broken at spaces to a line `limit` dots wide; breaks and tags already in it are kept.
+/// A string broken at spaces to a line `limit` dots wide; breaks and tags already in it are kept. The
+/// last line of each box is `prompt` cells shorter, so that the prompt covers no letter.
 ///
 /// Every glyph is 8 or 16 dots wide, so a line is measured in cells of 8: a character as one or two
-/// cells, a `{K:…}` tag as the cells of its glyph, the other tags as they are. The shared
-/// `layout::wrap_lines` lets a character start while the line has room; measured in cells, a character
-/// that starts in the last cell also ends there, so no glyph runs past the edge of the box. The text is
-/// put back from its own pieces, so no character in it is ever taken for a cell.
+/// cells, a `{K:…}` tag as the cells of its glyph, the other tags as they are. A character may start
+/// while the line has room; measured in cells, a character that starts in the last cell also ends
+/// there, so no glyph runs past the edge of the box. The text is put back from its own pieces, so no
+/// character in it is ever taken for a cell.
 pub fn wrap(
     text: &str,
     limit: usize,
+    prompt: usize,
     advance: &dyn Fn(char) -> usize,
     glyph_width: &dyn Fn(u16) -> usize,
 ) -> Result<String> {
@@ -786,7 +796,7 @@ pub fn wrap(
         pieces.push((token.text(), measured));
     }
     let measured: String = pieces.iter().map(|(_, measured)| measured.as_str()).collect();
-    let broken = layout::wrap_lines(&measured, &|_| Ok(1), limit / 8, &|_, _| 0, NEW_BOX)?;
+    let broken = break_in_boxes(&measured, limit / 8, prompt);
     let mut restored = String::new();
     let mut chars = broken.chars();
     for (written, measured) in pieces {
@@ -794,6 +804,70 @@ pub fn wrap(
         restored.push_str(if written == " " && taken == "\n" { "\n" } else { &written });
     }
     Ok(restored)
+}
+
+/// Text measured in cells (each `CELL` one cell, a space one, tags none) broken at spaces: a line
+/// holds `limit` cells, the last line of each box `limit - prompt`. Lines are counted from the start
+/// of the string, of each `{0A}` and of each fourth line, where the game starts a new box. As in
+/// `layout::wrap_lines`, a character may start while the line has room, a space that falls at the
+/// end becomes the break, and breaks already in the text are kept.
+fn break_in_boxes(measured: &str, limit: usize, prompt: usize) -> String {
+    let room = |line: usize| if line % BOX_LINES == BOX_LINES - 1 { limit.saturating_sub(prompt) } else { limit };
+    let mut out: Vec<char> = Vec::new();
+    let mut line = 0; // the line being filled, counted in its box
+    let mut width = 0; // its width in cells
+    let mut space = None; // where in `out` its last space is, the place it can be broken
+    let mut after_space = 0; // the width of what follows that space
+    let mut position = 0;
+    while let Some(char) = measured[position..].chars().next() {
+        if char == '{'
+            && let Some(Token::Tag { raw, name, .. }) = text::tag_at(&measured[position..])
+        {
+            if NEW_BOX.contains(&name) {
+                line = 0;
+                width = 0;
+                space = None;
+            }
+            out.extend(raw.chars());
+            position += raw.len();
+            continue;
+        }
+        position += char.len_utf8();
+        match char {
+            '\n' => {
+                out.push('\n');
+                line += 1;
+                width = 0;
+                space = None;
+            }
+            ' ' if width >= room(line) => {
+                out.push('\n');
+                line += 1;
+                width = 0;
+                space = None;
+            }
+            ' ' => {
+                space = Some(out.len());
+                out.push(' ');
+                after_space = 0;
+                width += 1;
+            }
+            _ => {
+                if width >= room(line)
+                    && let Some(at) = space
+                {
+                    out[at] = '\n';
+                    line += 1;
+                    width = after_space;
+                    space = None;
+                }
+                out.push(char);
+                width += 1;
+                after_space += 1;
+            }
+        }
+    }
+    out.into_iter().collect()
 }
 
 /// The width of each of the game's glyphs, from the font's records.
@@ -856,8 +930,10 @@ pub fn build(rom: &[u8], pack: &Pack, options: &BuildOptions) -> Result<(Vec<u8>
             STORYTELLER if across => STORYTELLER_LINE,
             _ => DIALOGUE_LINE,
         };
+        // The storyteller's pages have no prompt in the box: the storyteller's own picture says when to go on.
+        let prompt = if section == STORYTELLER { 0 } else { PROMPT_CELLS };
         let text = if wrapped {
-            wrap(text, limit, &|char| added.advance(char), &|glyph| glyph_width(glyph, &widths, &added))?
+            wrap(text, limit, prompt, &|char| added.advance(char), &|glyph| glyph_width(glyph, &widths, &added))?
         } else {
             text.clone()
         };
