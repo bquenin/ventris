@@ -379,7 +379,10 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
 
 - Three kinds of text can be changed: the dialogue, in the sections `096` to `188`, one for each area of the
   game; the program's own text, in `program` (shops, help pages, the names of items, monsters and places,
-  battle messages); and the labels of the menus, in `menu`.
+  battle messages); and the labels of the menus, in `menu`. Section `battle` can be extracted and read, and a
+  pack that changes it is refused. It is what the bosses say in battle, and the messages that take the place
+  of the battle's own when such a battle starts, is won or is lost; it is shown in the battle's window, 4
+  lines of 18 smaller cells, where the game goes on to the next line by itself when a line is full.
 - Every character takes the same room, a cell of 14 pixels, and the window shows 4 lines of 16 cells.
   After `{SAY}`, which starts a spoken line and draws its 「, the lines that follow are indented by one
   cell, so a spoken line holds 15. Changed lines are broken at spaces to fit, and a `{WAIT}` is put in

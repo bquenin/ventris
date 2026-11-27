@@ -354,6 +354,9 @@ fn build_puts_a_longer_line_in_and_moves_its_area_when_it_grows() {
     let huge = format!("{{SAY}}{}{{/SAY}}", "日".repeat(70_000));
     let refused = build(disc, &pack_of(&[(109, &huge)]), &out, &BuildOptions::default()).err().unwrap().to_string();
     assert!(refused.starts_with("area 096: its code, which holds its text, would be"), "{refused}");
+    let speech = Pack::of(Script::from([("battle".to_string(), BTreeMap::from([(0x9_812A, "x".to_string())]))]));
+    let refused = build(disc, &speech, &out, &BuildOptions::default()).err().unwrap().to_string();
+    assert!(refused.starts_with("the pack changes what the bosses say in battle (battle.622890)"), "{refused}");
     assert!(!out.exists());
 }
 

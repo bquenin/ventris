@@ -59,15 +59,14 @@
 //! first of its screen (see `label_room`), and draws no more characters than the widest of the
 //! game's own labels on its screen (see `label_width`). That is a guess at the room its box or
 //! column has, not a measure of it, so a label within it is not sure to show whole, and a box may
-//! have more room, as the main menu's was seen to have for 8 characters. The small font draws a lowercase letter as its
-//! capital, so a pack's are written as capitals.
+//! have more room, as the main menu's was seen to have for 8 characters. The small font draws a
+//! lowercase letter as its capital, so a pack's are written as capitals.
 //!
-//! Not covered yet: the battles' scripts, from $98128 of the file to about $9AA00, which a table at
-//! $98048 lists (56 of them, the speeches before and after the bosses' fights). Their text is
-//! written as the dialogue is, but among commands of another kind whose reader has not been found,
-//! so where a string starts and ends in them is not known. The pieces of text that follow some
-//! strings, which nothing points at (see `rooms`), are not strings of the section either, so a pack
-//! cannot change them yet; they move with the string before them.
+//! The battles' scripts, from $98128 of the file to $9AC23, which a table at $98048 lists, hold what
+//! the bosses say in battle, written as the dialogue is among commands of their own. They are read
+//! in `battle`, as section `battle`, and are in none of the stretches above. Not covered yet: the
+//! pieces of text that follow some strings, which nothing points at (see `rooms`), are not strings
+//! of the section, so a pack cannot change them yet; they move with the string before them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;

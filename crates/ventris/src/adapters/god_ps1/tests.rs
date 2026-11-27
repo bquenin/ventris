@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::adapter::declaration_faults;
 
+use super::battle::{ANSWERS, When, read_script};
 use super::program::{PARTS, SHOP_LINES};
 use super::*;
 use crate::platforms::mips;
@@ -38,7 +39,7 @@ fn game() -> Option<Image> {
 #[test]
 fn the_adapter_declares_itself_properly() {
     assert_eq!(declaration_faults(&ADAPTER), Vec::<String>::new());
-    assert_eq!(ADAPTER.kinds().len(), 3);
+    assert_eq!(ADAPTER.kinds().len(), 4);
     assert!(ADAPTER.can_insert());
     let insertable: Vec<&str> = ADAPTER.kinds().iter().filter(|kind| kind.insert).map(|kind| kind.name).collect();
     assert_eq!(insertable, ["dialogue", "program", "menu"]);
@@ -140,12 +141,57 @@ fn notes_say_what_repeats() {
 }
 
 #[test]
-fn the_program_s_text_is_in_two_sections_named_in_words() {
+fn the_program_s_text_is_in_three_sections_named_in_words() {
     assert_eq!(ADAPTER.kind_of("program").unwrap().name, "program");
     assert_eq!(ADAPTER.kind_of("menu").unwrap().name, "menu");
+    assert_eq!(ADAPTER.kind_of("battle").unwrap().name, "battle");
     assert_eq!(ADAPTER.kind_of("096").unwrap().name, "dialogue");
     assert!(ADAPTER.kind_of("p").is_none());
     assert!(ADAPTER.kinds().iter().all(|kind| kind.numbered_by_place));
+}
+
+#[test]
+fn notes_say_what_the_battle_s_window_is_and_which_strings_answer_a_question() {
+    assert!(ADAPTER.note("battle", None).unwrap().contains("4 lines of 18 cells"));
+    let (yes, no) = ANSWERS[0];
+    let yes = ADAPTER.note("battle", Some(yes)).unwrap();
+    assert!(yes.contains("answers はい") && yes.contains("program.748709"), "{yes}");
+    assert!(ADAPTER.note("battle", Some(no)).unwrap().contains("answers いいえ"));
+    assert_eq!(ADAPTER.note("battle", Some(0x9_812A)), None);
+}
+
+/// A battle's script read from its first byte, with the table of bytes of `codes`.
+fn script(bytes: &str) -> std::result::Result<(Vec<(usize, When)>, usize), String> {
+    read_script(&hex(bytes), 0, &codes())
+}
+
+#[test]
+fn a_battle_s_script_is_read_command_by_command() {
+    // As the battle starts: two settings, the opening string, a setting with a byte, the string for a
+    // win. Then, as it goes on: a wait for a round, an attack, a string at round 2, a question and
+    // its two answers, a wait on hit points, a command with two bytes, a string with no wait, a
+    // command alone, and the end.
+    let read = script(
+        "08 04 01 A2 00 05 07 02 A1 00 0B 01 0A DE 07 02 A2 0D A2 00 06 A2 00 A1 00 13 32 11 01 02 0C 0F 02 A2 00 \
+         0F 00",
+    );
+    let strings =
+        vec![(3, When::Start), (8, When::Won), (16, When::Round(2)), (21, When::Yes), (23, When::No), (31, When::Next)];
+    assert_eq!(read, Ok((strings, 36)));
+    // The strings of the start are read only before the rest: after it, the game stops at them.
+    assert_eq!(script("0B 00 01 A2 00 00"), Ok((vec![], 2)));
+    assert_eq!(script("14 A2 00 03 A2 00 00"), Ok((vec![(1, When::Lost), (4, When::AfterFirstRound)], 6)));
+    // $04 is a setting as the battle starts, and where the game stops after it; a question follows
+    // only a string of the rest.
+    assert_eq!(script("04 0B 00 04 0C A2 00"), Ok((vec![], 3)));
+    assert_eq!(script("01 A2 00 06 A2 00 A1 00 00"), Ok((vec![(1, When::Start)], 3)));
+    // A string with no zero byte, or with a byte that is no text, and a command cut short, are refused.
+    assert!(script("01 A2").is_err());
+    assert!(script("0C 0C FF 00 00").is_err());
+    assert!(script("0B").is_err());
+    // A round command whose number is missing is a script cut short, not a stop.
+    assert!(script("0C A2 00 07").is_err());
+    assert_eq!(script("0C A2 00 07 02 A2 00 00"), Ok((vec![(1, When::Next), (5, When::Round(2))], 7)));
 }
 
 #[test]
@@ -323,7 +369,7 @@ fn the_game_s_areas_are_read() {
 fn the_game_s_script_is_extracted_and_encodes_back() {
     let Some(image) = game() else { return };
     let pack = ADAPTER.extract(&image).unwrap();
-    assert_eq!(pack.texts.len(), 94); // 92 areas, the program's text and the menus' labels
+    assert_eq!(pack.texts.len(), 95); // 92 areas, the program's text, the menus' labels, the battles' scripts
     assert!(!pack.texts.contains_key("100"));
     assert_eq!(pack.texts["096"][&109], "{SAY}目を覚ましなさい。{/SAY}");
     ADAPTER.verify(&image, &pack.texts).unwrap();
@@ -387,8 +433,9 @@ fn the_game_s_program_text_encodes_back() {
     let pack = ADAPTER.extract(&image).unwrap();
     assert_eq!(pack.texts["menu"][&0xA_8244], "バトルメッセージそくど");
     ADAPTER.verify(&image, &pack.texts).unwrap();
-    for (section, number, text) in [("program", 0xA_B350, "ゲソ"), ("menu", 0xA_8244, "バトルメッセージそくと")]
-    {
+    let changes =
+        [("program", 0xA_B350, "ゲソ"), ("menu", 0xA_8244, "バトルメッセージそくと"), ("battle", 0x9_812A, "")];
+    for (section, number, text) in changes {
         let mut changed = pack.texts.clone();
         changed.get_mut(section).unwrap().insert(number, text.to_string());
         assert!(ADAPTER.verify(&image, &changed).is_err(), "{section}");
@@ -397,6 +444,58 @@ fn the_game_s_program_text_encodes_back() {
     let mut swapped = pack.texts.clone();
     swapped.get_mut("menu").unwrap().insert(0xA_7D1C, "{SAY}".to_string());
     assert!(ADAPTER.verify(&image, &swapped).is_err());
+}
+
+#[test]
+fn the_bosses_speeches_are_read_from_the_battles_scripts() {
+    let Some(image) = game() else { return };
+    let disc = image.ps1_disc().unwrap();
+    let file = program::program_file(disc).unwrap();
+    let codes = &program(disc).unwrap().codes;
+    // The table of the scripts, then the scripts, in the order of the battles.
+    let starts: Vec<usize> = (0..battle::SCRIPT_COUNT)
+        .map(|entry| (mips::number(&file, battle::SCRIPTS + 4 * entry).unwrap() - program::PROGRAM_BASE) as usize)
+        .collect();
+    assert_eq!(starts[0], battle::SCRIPTS + 4 * battle::SCRIPT_COUNT);
+    assert!(starts.is_sorted());
+    // Each script stops at the byte before the next, but six, which have bytes left that the game
+    // never reads; the last is followed by zero bytes.
+    let mut left = Vec::new();
+    for (entry, start) in starts.iter().enumerate() {
+        let (_, end) = read_script(&file, *start, codes).unwrap();
+        let next = starts.get(entry + 1).copied().unwrap_or(end + 1);
+        assert!(end < next, "battle {}", battle::FIRST_BATTLE as usize + entry);
+        if end + 1 != next {
+            left.push(battle::FIRST_BATTLE as usize + entry);
+        }
+    }
+    assert_eq!(left, [210, 218, 225, 233, 238, 253]);
+    let (_, last) = read_script(&file, starts[battle::SCRIPT_COUNT - 1], codes).unwrap();
+    assert_eq!(last, 0x9_AC23);
+    assert!(file[last..last + 16].iter().all(|byte| *byte == 0));
+
+    let lines = battle::battle_text(disc).unwrap();
+    let count = |wanted: fn(&When) -> bool| lines.values().filter(|line| wanted(&line.when)).count();
+    assert_eq!(lines.len(), 144);
+    assert_eq!(count(|when| *when == When::Start), 29);
+    assert_eq!(count(|when| *when == When::Won), 10);
+    assert_eq!(count(|when| *when == When::Lost), 3);
+    assert_eq!(count(|when| matches!(when, When::Yes | When::No)), 2 * ANSWERS.len());
+    for (yes, no) in ANSWERS {
+        assert_eq!((lines[&yes].when, lines[&no].when), (When::Yes, When::No));
+    }
+    assert_eq!(lines[&0x9_812A].battle, 200);
+    let first = decode(&lines[&0x9_812A].data, codes);
+    assert_eq!(first, "ガキ大将だ！{WAIT}\n{CLEAR}ガキ大将\n{SAY}覚悟はいいか！{/SAY}{WAIT}\n");
+    let text = program::program_text(disc).unwrap();
+    assert_eq!(decode(&text[program::PROGRAM_SECTION][&battle::CHOICE], codes), "　　　　はい　　　　いいえ");
+    // No byte of the program is in two strings, of one section or of two.
+    let mut taken: Vec<(u32, usize)> = lines.iter().map(|(at, line)| (*at, line.data.len())).collect();
+    taken.extend(text.values().flat_map(|strings| strings.iter().map(|(at, data)| (*at, data.len()))));
+    taken.sort();
+    for pair in taken.windows(2) {
+        assert!(pair[0].0 as usize + pair[0].1 < pair[1].0 as usize, "{:X} and {:X}", pair[0].0, pair[1].0);
+    }
 }
 
 #[test]

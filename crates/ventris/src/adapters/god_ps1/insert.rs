@@ -68,6 +68,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+use super::battle::{BATTLE_SECTION, battle_text};
 use super::program::{self as program_text, Lines, MENU_SECTION, PROGRAM_SECTION};
 use super::{
     ARCHIVE, AREA_HEADER, Area, ByteCodes, CONTENTS, Entry, FIRST_CODE, FONT_PAGES, GLYPH_SIZE, NAME_INSERTS, PROGRAM,
@@ -748,13 +749,14 @@ fn program_string(
 }
 
 /// Write to `output` the game with the pack's strings in it: the areas' dialogue, the program's
-/// own text and the menus' labels.
+/// own text and the menus' labels. A pack that changes what the bosses say in battle is refused.
 pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) -> Result<Built> {
     let program = program(disc)?;
     let codes = &program.codes;
     let areas = areas(disc)?;
     let by_section: HashMap<String, &Area> = areas.iter().map(|area| (area.section(), area)).collect();
     let own_text = program_text::program_text(disc)?;
+    let battle_lines = battle_text(disc)?;
     let changes = changes_by_place(&pack.texts, |section| match by_section.get(section) {
         Some(area) => Some(area.strings().into_iter().map(|(number, data)| (number, decode(data, codes))).collect()),
         None if section == PROGRAM_SECTION => {
@@ -763,10 +765,27 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         None if section == MENU_SECTION => {
             Some(own_text[section].iter().map(|(number, data)| (*number, program_text::decode_small(data))).collect())
         }
+        None if section == BATTLE_SECTION => {
+            Some(battle_lines.iter().map(|(number, line)| (*number, decode(&line.data, codes))).collect())
+        }
         None => None,
     })?;
     let (dialogue, others): (Vec<_>, Vec<_>) =
         changes.into_iter().partition(|(section, ..)| by_section.contains_key(section));
+    let (speeches, others): (Vec<_>, Vec<_>) = others.into_iter().partition(|(section, ..)| section == BATTLE_SECTION);
+    if !speeches.is_empty() {
+        let names: Vec<String> =
+            speeches.iter().take(5).map(|(section, number, _)| string_name(section, *number)).collect();
+        let more = match speeches.len() - names.len() {
+            0 => String::new(),
+            more => format!(" and {more} more"),
+        };
+        return text_error(format!(
+            "the pack changes what the bosses say in battle ({}{more}), which cannot be changed yet: the dialogue \
+             of the areas, the program's own text and the menus' labels can",
+            names.join(", ")
+        ));
+    }
     let (program_changes, labels): (Vec<_>, Vec<_>) =
         others.into_iter().partition(|(section, ..)| section == PROGRAM_SECTION);
     let mut done = Done {
