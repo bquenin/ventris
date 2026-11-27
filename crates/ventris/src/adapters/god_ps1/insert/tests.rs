@@ -321,5 +321,8 @@ fn build_puts_a_longer_line_in_and_moves_its_area_when_it_grows() {
     let program_text = Pack::of(Script::from([("program".to_string(), BTreeMap::from([(701268, "x".to_string())]))]));
     let refused = build(disc, &program_text, &out, &BuildOptions::default()).err().unwrap().to_string();
     assert!(refused.starts_with("the pack changes the program's own text (program.701268)"), "{refused}");
+    let speech = Pack::of(Script::from([("battle".to_string(), BTreeMap::from([(0x9_812A, "x".to_string())]))]));
+    let refused = build(disc, &speech, &out, &BuildOptions::default()).err().unwrap().to_string();
+    assert!(refused.starts_with("the pack changes the program's own text (battle.622890)"), "{refused}");
     assert!(!out.exists());
 }
