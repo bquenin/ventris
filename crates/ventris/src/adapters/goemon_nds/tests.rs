@@ -205,6 +205,11 @@ fn lines_are_measured_in_cells_of_8_dots() {
     // A glyph written as a tag takes the room of its glyph, and goes to the next line whole.
     let tags = "{K:05CA}{K:0100}";
     assert_eq!(wrapped(&format!("{} {tags}", letters(18))), format!("{}\n{tags}", letters(18)));
+    // A tag's digits may have a space between pairs, as the encoder takes them.
+    assert_eq!(wrapped(&format!("{} {{K:05 CA}}", letters(18))), format!("{} {{K:05 CA}}", letters(18)));
+    // Any character is text, those that look like nothing in particular too.
+    let odd = format!("{} \u{E000}\u{E001}", letters(14));
+    assert_eq!(wrapped(&odd), odd);
     // 20 cells fit; breaks and other tags are kept.
     let text = format!("{} {{WAIT:001E}}b\nc d", letters(18));
     assert_eq!(wrapped(&text), text);

@@ -361,6 +361,12 @@ fn push_instruction(out: &mut Vec<u8>, op: u8, args: &[u16]) {
     }
 }
 
+/// A tag's arguments, written as four hexadecimal digits each, spaces allowed between pairs of digits.
+fn tag_words(value: &str) -> Option<Vec<u16>> {
+    let bytes = from_hex(value)?;
+    (bytes.len() % 2 == 0).then(|| bytes.as_chunks::<2>().0.iter().map(|pair| u16::from_be_bytes(*pair)).collect())
+}
+
 /// The bytes of a string's instructions, from its text.
 pub fn encode(text: &str) -> Result<Vec<u8>> {
     encode_with(text, &HashMap::new())
@@ -390,12 +396,9 @@ pub fn encode_with(text: &str, added: &HashMap<char, u16>) -> Result<Vec<u8>> {
                 }
             },
             Token::Tag { raw, name, value } => {
-                let words = match value.map(from_hex) {
+                let words = match value {
                     None => Some(Vec::new()),
-                    Some(Some(bytes)) if bytes.len() % 2 == 0 => {
-                        Some(bytes.as_chunks::<2>().0.iter().map(|pair| u16::from_be_bytes(*pair)).collect())
-                    }
-                    Some(_) => None,
+                    Some(value) => tag_words(value),
                 };
                 let Some(words) = words else {
                     return text_error(format!("{raw}: an argument is four hexadecimal digits"));
@@ -714,55 +717,45 @@ pub fn written_across(name: &str, data: &[u8]) -> Result<Vec<u8>> {
 /// The tags after which the game starts a new box, at the left: `{0A}` clears the box.
 const NEW_BOX: &[&str] = &["0A"];
 
-/// Stand, while a line is measured, for the second 8 dots of a glyph 16 wide, and for each 8 dots of a
-/// glyph written as a `{K:…}` tag.
-const WIDE_CELL: char = '\u{E001}';
-const TAG_CELL: char = '\u{E000}';
+/// What a cell of 8 dots is measured as while a line is broken: anything that is not a space or a brace.
+const CELL: char = 'x';
 
 /// A string broken at spaces to a line `limit` dots wide; breaks and tags already in it are kept.
 ///
-/// Every glyph is 8 or 16 dots wide, so a line is measured in cells of 8: a wide character as itself and
-/// one `WIDE_CELL`, a `{K:…}` tag as cells of its glyph, put back once the line is broken. The shared
+/// Every glyph is 8 or 16 dots wide, so a line is measured in cells of 8: a character as one or two
+/// cells, a `{K:…}` tag as the cells of its glyph, the other tags as they are. The shared
 /// `layout::wrap_lines` lets a character start while the line has room; measured in cells, a character
-/// that starts in the last cell also ends there, so no glyph runs past the edge of the box.
+/// that starts in the last cell also ends there, so no glyph runs past the edge of the box. The text is
+/// put back from its own pieces, so no character in it is ever taken for a cell.
 pub fn wrap(
     text: &str,
     limit: usize,
     advance: &dyn Fn(char) -> usize,
     glyph_width: &dyn Fn(u16) -> usize,
 ) -> Result<String> {
-    let mut measured = String::new();
-    let mut tags = Vec::new();
+    // Each piece of the text, as it is written and as it is measured: the line breaker sees only the
+    // measured form, and changes nothing in it but a space it turns into a line break.
+    let mut pieces: Vec<(String, String)> = Vec::new();
     for token in tokens(text) {
-        match token {
+        let measured = match token {
             Token::Char(char) if char != '\n' && char != ' ' => {
-                measured.push(char);
-                measured.extend(std::iter::repeat_n(WIDE_CELL, (advance(char) / 8).saturating_sub(1)));
+                std::iter::repeat_n(CELL, (advance(char) / 8).max(1)).collect()
             }
-            Token::Tag { raw, name: "K", value } => {
-                let glyph = value.and_then(|value| u16::from_str_radix(value.trim(), 16).ok()).unwrap_or(0);
-                let cells = (glyph_width(glyph) / 8).max(1);
-                measured.extend(std::iter::repeat_n(TAG_CELL, cells));
-                tags.push((raw, cells));
+            Token::Tag { name: "K", value, .. } => {
+                let glyph = value.and_then(tag_words).and_then(|words| words.first().copied()).unwrap_or(0);
+                std::iter::repeat_n(CELL, (glyph_width(glyph) / 8).max(1)).collect()
             }
-            other => measured.push_str(&other.text()),
-        }
+            other => other.text(),
+        };
+        pieces.push((token.text(), measured));
     }
+    let measured: String = pieces.iter().map(|(_, measured)| measured.as_str()).collect();
     let broken = layout::wrap_lines(&measured, &|_| Ok(1), limit / 8, &|_, _| 0, NEW_BOX)?;
     let mut restored = String::new();
-    let (mut tags, mut chars) = (tags.into_iter(), broken.chars());
-    while let Some(char) = chars.next() {
-        match char {
-            WIDE_CELL => {}
-            TAG_CELL => {
-                let (raw, cells) = tags.next().expect("each run of tag cells stands for a tag");
-                restored.push_str(raw);
-                for _ in 1..cells {
-                    chars.next();
-                }
-            }
-            char => restored.push(char),
-        }
+    let mut chars = broken.chars();
+    for (written, measured) in pieces {
+        let taken: String = chars.by_ref().take(measured.chars().count()).collect();
+        restored.push_str(if written == " " && taken == "\n" { "\n" } else { &written });
     }
     Ok(restored)
 }
