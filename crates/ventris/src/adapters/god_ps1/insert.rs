@@ -32,15 +32,25 @@
 //!
 //! Where a member goes. The archive's members follow one another, each from the start of a sector,
 //! with nothing between. A member that takes no more sectors than it did stays where it is, and zero
-//! bytes fill the rest of its last sector, as in the game. One that grew past them goes to the free
-//! room of the disc: `DATA/OUT3MIN.DAT`, 32 MB of zero bytes that only fill the disc (the program has
-//! no such name in it, and never opens it). Members that grew are put there one after another from
-//! its first sector, and the table of contents in the program says where: it counts a member's first
-//! sector from the archive's, and the program, which looks the archive up by name when it starts and
-//! adds the archive's first sector to entries 0 to 190, reads a member from wherever that is on the
-//! disc. Every entry that names the member is changed with it: entries 189 to 195 name the first area
-//! as 096 does, and are kept the same as 096. (The program does not add the archive's sector to 191
-//! to 195, so they could not be read wherever the member was; nothing seems to read them.)
+//! bytes fill the rest of its last sector, as in the game. One that grew past them moves, and the
+//! table of contents in the program says where: it counts a member's first sector from the
+//! archive's, and the program, which looks the archive up by name when it starts and adds the
+//! archive's first sector to entries 0 to 190, reads a member from wherever that is on the disc.
+//! Every entry that names the member is changed with it: entries 189 to 195 name the first area as
+//! 096 does, and are kept the same as 096. (The program does not add the archive's sector to 191 to
+//! 195, so they could not be read wherever the member was; nothing seems to read them.)
+//!
+//! Where a member that grew is put (`place_grown`). A full translation grows nearly every area, by
+//! a few sectors each, and an area is large (145 to 2,989 sectors, its maps and pictures with its
+//! text): the 93 areas are the last 64,384 of the archive's 72,403 sectors, one after another. So
+//! the sectors of every area that moves are free for the others, and those of areas side by side
+//! make one piece: the area that needs the most goes first, each into the piece it leaves the least
+//! of. The areas no piece is left large enough for go to the free room of the disc, one after
+//! another from its first sector: `DATA/OUT3MIN.DAT`, 16,384 sectors (32 MB) of zero bytes that
+//! only fill the disc (the program has no such name in it, and never opens it). It is the disc's
+//! last file, at sector 191,765. What a pack can grow is bounded by the heap long before it is by
+//! the disc: every area grown as far as the heap lets it grows them by about 2,650 sectors in all,
+//! and puts 3,033 sectors in the free room. The image is never made larger.
 //!
 //! How large an area may grow. The game loads an area's code onto its heap, where it must find room
 //! for it among everything else, and most of all when the player goes through a door, as the old
@@ -100,6 +110,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -115,6 +126,7 @@ use crate::adapter::{BuildOptions, Built};
 use crate::error::{Error, Result, text_error};
 use crate::fonts::{self, CELL, Font, Glyph};
 use crate::layout;
+use crate::placement;
 use crate::platforms::ps1::{self, Disc, tim};
 use crate::script::{Pack, changes_by_place, string_name};
 use crate::text::{Token, from_hex, plain_characters, quoted, tokens};
@@ -1137,6 +1149,29 @@ fn free_cells(file: &[u8], kept: &Kept, texts: &[&str], codes: &ByteCodes) -> Ve
     first.into_iter().chain(then).collect()
 }
 
+/// Where the areas that grew past their sectors go. `grown` gives each one's first sector, the
+/// sectors it had and the sectors it needs now, and `spare` the disc's free room, all in sectors
+/// counted from the archive's first. Once an area moves, the sectors it had are free, and those side
+/// by side make one piece. The area that needs the most goes first, each into the piece it leaves
+/// the least of (`placement::pack_room`), so that the large pieces are kept for the large areas;
+/// those no piece is left large enough for go to the disc's free room, one after another. So the
+/// areas stay in the archive, near the rest of the game, as far as they can. Gives each area's new
+/// first sector, or None where the free room too was full, and how many sectors the pieces have.
+fn place_grown(grown: &[(u32, usize, usize)], spare: Range<usize>) -> (Vec<Option<u32>>, usize) {
+    let areas: Vec<(usize, usize, usize, Range<usize>)> =
+        grown.iter().map(|(sector, had, needs)| (*sector as usize, *had, *needs, 0..usize::MAX)).collect();
+    let (pieces, mut places, _) = placement::pack_room(&areas, None);
+    let mut next = spare.start;
+    for (place, (.., needs)) in places.iter_mut().zip(grown) {
+        if place.is_none() && next + needs <= spare.end {
+            *place = Some(next);
+            next += needs;
+        }
+    }
+    let room = pieces.iter().map(|piece| piece.len()).sum();
+    (places.into_iter().map(|place| place.map(|place| place as u32)).collect(), room)
+}
+
 // --- the build -------------------------------------------------------------
 
 /// What a build did, for its summary.
@@ -1144,8 +1179,10 @@ fn free_cells(file: &[u8], kept: &Kept, texts: &[&str], codes: &ByteCodes) -> Ve
 struct Done {
     strings: usize,
     areas: usize,
-    /// The areas that were moved to the free room of the disc.
+    /// The areas that grew past their sectors and were moved, and the sectors of the disc's free room
+    /// they used, of how many it has.
     moved: Vec<String>,
+    spare: (usize, usize),
     /// The least of the heap that a moment of the changed areas leaves free, and which moment it is.
     least: Option<(usize, String)>,
     new_characters: Vec<char>,
@@ -1177,9 +1214,14 @@ impl Done {
             lines.push(format!("menu:      {} labels changed, each in its slot", self.labels));
         }
         if !self.moved.is_empty() {
+            let (which, its, is) =
+                if self.moved.len() == 1 { ("area", "its", "is") } else { ("areas", "their", "are") };
             lines.push(format!(
-                "moved:     area {} grew past its sectors and is now in the disc's free room ({SPARE_FILE})",
-                self.moved.join(", ")
+                "moved:     {which} {} grew past {its} sectors, and {is} now in the sectors such areas left in \
+                 {ARCHIVE} or in the disc's free room ({SPARE_FILE}), of which {} sectors of {} are used",
+                self.moved.join(", "),
+                self.spare.0,
+                self.spare.1
             ));
         }
         if let Some((free, moment)) = &self.least {
@@ -1539,48 +1581,62 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         done.pairs = Some((pair_cells.len(), free, short));
     }
 
-    // Each changed area rebuilt, and put where it fits.
+    // Each changed area rebuilt, and put where it fits: in its own sectors if it still fits there,
+    // and if it grew past them, in the sectors such areas leave or in the disc's free room.
     let mut contents = program.contents.clone();
-    let archive_first = disc.first_sector(ARCHIVE)?;
-    let spare_first = disc.first_sector(SPARE_FILE)?;
-    let spare_sectors = (disc.size(SPARE_FILE)? / ps1::SECTOR) as usize;
-    let mut spare_used = 0;
-    let mut spare_wanted = 0;
+    let mut point = |old: (u32, u32), sector: u32, size: usize| {
+        for (entry, named) in program.contents.iter().enumerate() {
+            if *named == old {
+                contents[entry] = (sector, size as u32);
+            }
+        }
+    };
     let mut new_codes = BTreeMap::new();
+    let mut grown = Vec::new();
     for (section, strings) in &replaced {
         let area = by_section[*section];
         let old = member(disc, area.entry)?;
-        let rebuilt = match rebuild_member(&old, &text_block_with(area, strings)) {
+        let mut rebuilt = match rebuild_member(&old, &text_block_with(area, strings)) {
             Ok(rebuilt) => rebuilt,
             Err(problem) => return Err(Error::Image(format!("area {section}: {problem}"))),
         };
         new_codes.insert(area.entry, member_word(&rebuilt, 0));
         let (sector, size) = program.contents[area.entry];
-        let (old_sectors, new_sectors) = ((size as usize).div_ceil(SECTOR), rebuilt.len().div_ceil(SECTOR));
-        let mut data = rebuilt.clone();
-        let new_sector = if new_sectors <= old_sectors {
-            data.resize(old_sectors * SECTOR, 0);
-            patches.push((ARCHIVE, u64::from(sector) * ps1::SECTOR, data));
-            sector
-        } else {
-            data.resize(new_sectors * SECTOR, 0);
-            spare_wanted += new_sectors;
-            if spare_used + new_sectors > spare_sectors {
-                continue;
-            }
-            patches.push((SPARE_FILE, (spare_used * SECTOR) as u64, data));
-            let placed = spare_first + spare_used as u32 - archive_first;
-            spare_used += new_sectors;
-            done.moved.push(section.to_string());
-            placed
-        };
-        for (entry, named) in program.contents.iter().enumerate() {
-            if *named == (sector, size) {
-                contents[entry] = (new_sector, rebuilt.len() as u32);
-            }
-        }
+        let (old_sectors, size_now) = ((size as usize).div_ceil(SECTOR), rebuilt.len());
         done.areas += 1;
+        if size_now.div_ceil(SECTOR) <= old_sectors {
+            rebuilt.resize(old_sectors * SECTOR, 0);
+            patches.push((ARCHIVE, u64::from(sector) * ps1::SECTOR, rebuilt));
+            point((sector, size), sector, size_now);
+        } else {
+            rebuilt.resize(size_now.div_ceil(SECTOR) * SECTOR, 0);
+            grown.push((*section, (sector, size), size_now, rebuilt));
+        }
     }
+    let spare_start = (disc.first_sector(SPARE_FILE)? - disc.first_sector(ARCHIVE)?) as usize;
+    let spare = spare_start..spare_start + (disc.size(SPARE_FILE)? / ps1::SECTOR) as usize;
+    let needs: Vec<(u32, usize, usize)> = grown
+        .iter()
+        .map(|(_, (sector, size), _, data)| (*sector, (*size as usize).div_ceil(SECTOR), data.len() / SECTOR))
+        .collect();
+    let (places, room) = place_grown(&needs, spare.clone());
+    let mut homeless = Vec::new();
+    let mut spare_used = 0;
+    for ((section, old, size_now, data), place) in grown.into_iter().zip(places) {
+        let Some(place) = place else {
+            homeless.push(format!("{section} ({} sectors)", data.len() / SECTOR));
+            continue;
+        };
+        if spare.contains(&(place as usize)) {
+            spare_used += data.len() / SECTOR;
+            patches.push((SPARE_FILE, (place as usize - spare.start) as u64 * ps1::SECTOR, data));
+        } else {
+            patches.push((ARCHIVE, u64::from(place) * ps1::SECTOR, data));
+        }
+        point(old, place, size_now);
+        done.moved.push(section.to_string());
+    }
+    done.spare = (spare_used, spare.len());
     // Room on the heap for every moment of the areas that changed. A pack that changes no area's
     // code has nothing to check, and the areas are not read for it.
     let changed: BTreeSet<usize> = new_codes.keys().copied().collect();
@@ -1604,10 +1660,15 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
              shorten some of its changed lines{also}"
         ));
     }
-    if spare_wanted > spare_sectors {
+    if !homeless.is_empty() {
+        let wanted: usize = needs.iter().map(|(.., sectors)| sectors).sum();
         refusals.push(format!(
-            "the areas that grew past their sectors need {spare_wanted} sectors of the disc's free room, which has \
-             {spare_sectors}: shorten some of the changed lines"
+            "the areas that grew past their sectors need {wanted} sectors, and the room for them has {}: the {room} \
+             sectors they leave in {ARCHIVE} and the {} of the disc's free room ({SPARE_FILE}); none of it was left \
+             for area {}: shorten some of the changed lines",
+            room + spare.len(),
+            spare.len(),
+            homeless.join(", ")
         ));
     }
     if !refusals.is_empty() {
