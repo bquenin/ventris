@@ -42,8 +42,8 @@ start work, and the build can come later, from you or from someone else.
 
 - **The game**, the release you mean to support, as a clean image. Your own copy; it never goes into the
   repository.
-- **An emulator with a debugger**: Mesen for the Super Famicom, PCSX2 for the PlayStation 2. The workbench
-  drives both, once they are [set up](#setting-up-the-emulators) for it.
+- **An emulator with a debugger**: Mesen for the Super Famicom, PCSX2 for the PlayStation 2, DeSmuME for
+  the Nintendo DS. The workbench drives all three, once they are [set up](#setting-up-the-emulators) for it.
 - **The workbench**, the Python package in `src/ventris_workbench`: tools for taking a game apart. Install
   [uv](https://docs.astral.sh/uv/) and Python 3.11 or later; `uv run ventris-workbench --help` lists the
   tools. Nothing in it is part of what a translator runs.
@@ -77,11 +77,12 @@ not.
 ## Setting up the emulators
 
 You need the emulator for your game's console, set up once. The last step for each is a command that
-proves the workbench can drive it. All of this has been done on Windows. Both emulators run on macOS and
+proves the workbench can drive it. All of this has been done on Windows. The emulators run on macOS and
 Linux too, but the workbench's commands have not been tried with them there.
 
 Two things are yours to supply, and neither ever goes into the repository: the game, your own copy, and
-for the PlayStation 2 a BIOS dumped from your own console. PCSX2 cannot start a game without one.
+for the PlayStation 2 a BIOS dumped from your own console. PCSX2 cannot start a game without one. DeSmuME
+needs none: it stands in for the Nintendo DS's own.
 
 ### Mesen, for the Super Famicom
 
@@ -141,6 +142,32 @@ It pauses the game, runs it 60 frames on from wherever it was, as fast as the ma
 the path of the screenshot it wrote, `work/game/first-shot-60.png`. The game is left paused. An error
 saying `cannot reach PCSX2` means the control socket is off or not where the workbench looks; one saying
 `PCSX2 refused command` means no game is running, or the build lacks the patch.
+
+### DeSmuME, for the Nintendo DS
+
+The workbench runs DeSmuME as a library, the interface frontend that DeSmuME builds as a DLL on Windows,
+and needs commands that library does not have: which processor and which instruction touched memory,
+reading memory without setting off a watch, and where the game's battery save goes. A patch in
+[`tools/desmume`](../tools/desmume/README.md) adds them, so a released DeSmuME will not do: build the
+library from source with the patch applied. That page says how. In short: apply `interface-hooks.patch`
+to [DeSmuME's source](https://github.com/TASEmulators/desmume) at commit `b549f71` (November 2026), which
+it was written against and used with; build `DeSmuME_Interface.sln` in its Release configuration for
+x64; put `SDL2.dll` beside the library it makes; and set the environment variable `DESMUME` to the
+library's path. A later DeSmuME may need the patch brought up to date.
+
+Like Mesen, DeSmuME is started by the workbench, for each run, with no window, in a process of its own,
+so a crash inside the emulator ends the run and not the workbench.
+
+To check, run the game for 600 frames, ten seconds of play, and take a screenshot at the end:
+
+```bash
+uv run ventris-workbench ds-probe roms/game.nds -o work/game/first --frames 600 --shot 600
+```
+
+It takes a few seconds and prints the path of the one file it wrote, `work/game/first-shot-600.png`: both
+screens, the top one above the bottom one, ten seconds after power-on, usually the game's opening or title
+screen. An error that names `DESMUME` says the variable is not set or does not lead to a file; one saying
+the library is not built with `interface-hooks.patch` means it is DeSmuME's own, or another file.
 
 ## From a line on screen to where it is stored
 
@@ -228,6 +255,30 @@ uv run ventris-workbench ps2-probe -o work/game/run --state work/game/town.p2s \
 The workbench package also holds what a script written to study one game needs: reading the files inside
 a PlayStation 2 disc image, the compression schemes met so far, and the client for the emulator's control
 socket. Scripts written to study one game are scratch; keep them under `work/`.
+
+### Watch the game run (Nintendo DS)
+
+`ds-probe` runs a game headless in [DeSmuME](#desmume-for-the-nintendo-ds) and does what `probe` does for
+Mesen: press buttons at given frames, take screenshots of both screens, save memory and the registers,
+record which code reads or writes a range and which instructions run in another, and save a state on the
+way. [`tools/desmume`](../tools/desmume/README.md) says what was measured, such as what a watch costs.
+
+```bash
+# from a state in a scene with text, see which code writes the main engine's sprites, where many games
+# draw their text
+uv run ventris-workbench ds-probe roms/game.nds -o work/game/run --state work/game/scene.dst \
+    --input 0:press:a --touch 60:128,96 --shot 120 --writes 06400000-0643FFFF --frames 120
+```
+
+Input steps are the same as for `ps2-probe`: `mash` presses its buttons together, a few frames on and a
+few off. `--touch FRAME:X,Y` touches the bottom screen, at a point counted from its top left, for a few
+frames, or for as many as a third number gives (`60:128,96:30`). The console has two processors, and a watch sees both: each line of `-reads.txt`,
+`-writes.txt` and `-exec.txt` says which one, the ARM9, which runs the game, or the ARM7, which looks after
+sound, touch and the wireless, and the address of the instruction. `--dump` takes a memory by name, such
+as `main@300` for the 4 MiB of main memory, `bgb@300` for the sub engine's video memory, or an address and
+a length as the ARM9 sees them. Each run starts the game afresh, from power-on or from `--state`, and the
+same run gives the same result, so a run can be repeated with a watch added. Use `--trace-from` to set the
+watches only from the frame where they are wanted: they slow the game, `--exec` most of all.
 
 ## Two adapters, two situations
 

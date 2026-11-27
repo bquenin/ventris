@@ -1,0 +1,3 @@
+# DeSmuME keeps some of its sources with Windows line endings (src/MMU.h among them), and the patch
+# has to carry them as they are to apply: no conversion to LF here.
+*.patch -text

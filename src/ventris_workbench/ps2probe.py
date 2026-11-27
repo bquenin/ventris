@@ -64,21 +64,40 @@ class Plan:
     fast: bool = True  # run as fast as the machine can, not at the game's own speed
 
 
-def _number(text: str, what: str) -> int:
+def parse_number(text: str, what: str) -> int:
+    """A number in hexadecimal; ``what`` names it in the error."""
     try:
         return int(text, 16)
     except ValueError:
         raise ProbeError(f"{text!r} is not {what} in hexadecimal") from None
 
 
-def _range(text: str) -> tuple[int, int]:
+def parse_range(text: str) -> tuple[int, int]:
+    """``START-END``, in hexadecimal, both ends included."""
     start, dash, end = text.partition("-")
     if not dash:
         raise ProbeError(f"{text!r} is not a range such as 1F27A0-1F27A4")
-    first, last = _number(start, "an address"), _number(end, "an address")
+    first, last = parse_number(start, "an address"), parse_number(end, "an address")
     if last <= first:
         raise ProbeError(f"the range {text} ends before it starts")
     return first, last
+
+
+def parse_dump(text: str) -> tuple[int, int, int]:
+    """``ADDRESS:LENGTH@FRAME``, in hexadecimal but for the frame: (frame, address, length)."""
+    where, at, frame = text.partition("@")
+    address, colon, length = where.partition(":")
+    if not at or not colon or not frame.isdigit():
+        raise ProbeError(f"{text!r} is not a dump such as 1F2000:400@300")
+    return int(frame), parse_number(address, "an address"), parse_number(length, "a length")
+
+
+def parse_save(text: str) -> tuple[str, int]:
+    """``FILE@FRAME``: (file, frame)."""
+    file, at, frame = text.rpartition("@")
+    if not at or not file or not frame.isdigit():
+        raise ProbeError(f"{text!r} is not a state to save, FILE@FRAME, such as scene@900")
+    return file, int(frame)
 
 
 def _is_hex(text: str) -> bool:
@@ -134,22 +153,27 @@ def _is_whole(picture: Path) -> bool:
         return False
 
 
-def button_changes(steps: list[str], frames: int) -> dict[int, list[tuple[str, bool]]]:
+def button_changes(
+    steps: list[str], frames: int, names: tuple[str, ...] = BUTTONS
+) -> dict[int, list[tuple[str, bool]]]:
     """What to do to the controller at each frame: the buttons to press or let go, in order.
 
-    A step is ``FRAME:KIND:BUTTONS``. It lasts until the next step. ``press`` holds its buttons for
-    a few frames and lets go; ``hold`` keeps them down; ``mash`` presses and lets go again and
-    again; ``none`` lets everything go.
+    A step is ``FRAME:KIND:BUTTONS``, or ``FRAME:none``. It lasts until the next step. ``press``
+    holds its buttons for a few frames and lets go; ``hold`` keeps them down; ``mash`` presses and
+    lets go again and again; ``none`` lets everything go. ``names`` are the console's buttons; the
+    PlayStation 2's by default.
     """
     parsed = []
     for step in steps:
         parts = step.split(":")
+        if parts[1:] == ["none"]:  # none needs no buttons
+            parts.append("")
         if len(parts) != 3 or not parts[0].isdigit() or parts[1] not in ("mash", "press", "hold", "none"):
-            raise ProbeError(f"{step!r} is not an input step such as 30:press:cross")
+            raise ProbeError(f"{step!r} is not an input step such as 30:press:start")
         buttons = [name for name in parts[2].split(",") if name]
         for name in buttons:
-            if name not in BUTTONS:
-                raise ProbeError(f"{name!r} in {step!r} is not a button: one of {', '.join(BUTTONS)}")
+            if name not in names:
+                raise ProbeError(f"{name!r} in {step!r} is not a button: one of {', '.join(names)}")
         parsed.append((int(parts[0]), parts[1], buttons))
     parsed.sort(key=lambda step: step[0])
 
@@ -201,23 +225,13 @@ def run(emulator: Pcsx2, output: Path, plan: Plan) -> list[Path]:
     prefix = str(output.resolve())
     Path(prefix).parent.mkdir(parents=True, exist_ok=True)
     changes = button_changes(plan.input, plan.frames)
-    watches = [(*_range(text), READ) for text in plan.reads] + [(*_range(text), WRITE) for text in plan.writes]
-    traces = [_number(text, "an address") for text in plan.log]
-    dumps = []
-    for text in plan.dumps:
-        where, at, frame = text.partition("@")
-        address, colon, length = where.partition(":")
-        if not at or not colon or not frame.isdigit():
-            raise ProbeError(f"{text!r} is not a dump such as 1F2000:400@300")
-        dumps.append((int(frame), _number(address, "an address"), _number(length, "a length")))
+    watches = [(*parse_range(text), READ) for text in plan.reads]
+    watches += [(*parse_range(text), WRITE) for text in plan.writes]
+    traces = [parse_number(text, "an address") for text in plan.log]
+    dumps = [parse_dump(text) for text in plan.dumps]
     pokes = [parse_poke(text) for text in plan.pokes]
     poke_data = [poke.data() for poke in pokes]  # read now, so that a missing file stops the probe first
-    save_at, save_file = -1, ""
-    if plan.save:
-        save_file, at, frame = plan.save.rpartition("@")
-        if not at or not frame.isdigit():
-            raise ProbeError(f"{plan.save!r} is not a state to save such as scene.p2s@900")
-        save_at = int(frame)
+    save_file, save_at = parse_save(plan.save) if plan.save else ("", -1)
 
     # The frames at which something happens. The emulator runs freely between them.
     planned = {0, plan.frames, plan.trace_from, save_at, *changes, *plan.shots, *(frame for frame, _, _ in dumps)}
@@ -322,4 +336,18 @@ def run(emulator: Pcsx2, output: Path, plan: Plan) -> list[Path]:
     return written
 
 
-__all__ = ["Pcsx2Error", "Plan", "Poke", "ProbeError", "button_changes", "log_lines", "parse_poke", "report", "run"]
+__all__ = [
+    "Pcsx2Error",
+    "Plan",
+    "Poke",
+    "ProbeError",
+    "button_changes",
+    "log_lines",
+    "parse_dump",
+    "parse_number",
+    "parse_poke",
+    "parse_range",
+    "parse_save",
+    "report",
+    "run",
+]

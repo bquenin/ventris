@@ -772,7 +772,7 @@ fn a_game_that_is_not_found_is_named_with_what_the_folder_holds_of_it() {
              e8dbe37e88afe8f82d48889b0775274ccde3cf99.",
             "  passed by  game.chd is a compressed disc image (CHD, CSO or ZSO): ventris cannot read it, or tell which \
              game it holds. If it is this game, convert it back to a plain disc image first.",
-            "found 0 of the 3 games there are adapters for; 0 files had the size of one",
+            "found 0 of the 4 games there are adapters for; 0 files had the size of one",
         ]
     );
 }
@@ -787,7 +787,7 @@ fn a_folder_of_games_is_searched_for_the_ones_that_have_an_adapter() {
     fs::write(path.join("snes").join("too small.sfc"), vec![9u8; 0x8000]).unwrap();
     let run = ventris(&["find", text(path)]);
     assert_eq!(run.code, Some(0), "{}", run.err);
-    assert_eq!(run.out.trim_end(), "found 0 of the 3 games there are adapters for; 1 files had the size of one");
+    assert_eq!(run.out.trim_end(), "found 0 of the 4 games there are adapters for; 1 files had the size of one");
 
     let missing = path.join("nowhere");
     let run = ventris(&["find", text(&missing)]);
@@ -808,7 +808,7 @@ fn a_folder_of_games_is_searched_for_the_ones_that_have_an_adapter() {
             "  id         top-sfc",
             "  release    Japan",
             format!("  file       {}", zipped.display()).as_str(),
-            "found 1 of the 3 games there are adapters for; 2 files had the size of one",
+            "found 1 of the 4 games there are adapters for; 2 files had the size of one",
         ]
     );
     // The archive is taken wherever a game's file is.

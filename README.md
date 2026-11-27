@@ -85,13 +85,15 @@ a form for each.
 
 ## Games
 
-It is early days: three games so far, one on the Super Famicom and two on the PlayStation 2.
+It is early days: four games so far, one on the Super Famicom, two on the PlayStation 2 and one on the
+Nintendo DS.
 
 | Game | Extract | Insert |
 | --- | --- | --- |
 | Tales of Phantasia (Super Famicom) | dialogue, menus and captions | dialogue, menus, captions and names, in any alphabet |
 | Tales of Destiny 2 (PlayStation 2) | story scripts, skits, menus, battle and place names, the lists of skills, items, equipment, titles and recipes, the names of enemies, and the quiz and other games within the game | story scripts and skits, longer strings included, in any alphabet, with dialogue fitted to the speech bubble; the lists and the menus, whose changed strings share the room they had, so that one may be longer where others are shorter, and a menu may grow besides; the rest where it fits in the room of the game's own |
 | Super Robot Wars Z (PlayStation 2) | stage dialogue, captions and objectives, battle lines, the names and help of the data lists, menus, the library, help and tutorial, summaries, credits, prologue, and the names of maps and squads | not yet |
+| Ganbare Goemon: Tōkai Dōchū Ōedo Tengurigaeshi no Maki (Nintendo DS) | the scenes, what the townspeople and the shopkeepers say, the help, and the messages of the save and the wireless link | not yet |
 
 Each adapter was made for one release of its game, the Japanese one. The app shows each game's limits on
 the game's page, and the command `ventris games` lists the same, with the release.
