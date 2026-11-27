@@ -215,6 +215,8 @@ fn notes_say_what_each_part_of_the_program_s_text_is() {
     assert!(line(0xA_B380).ends_with("no line may be wider than the game's own widest."));
     assert_eq!(ADAPTER.note("program", Some(0xA_B354)), None);
     assert_eq!(ADAPTER.note("menu", Some(0xA_7D1C)), None);
+    assert!(ADAPTER.note("menu", Some(0x15F4)).unwrap().contains("no starts 3 characters in"));
+    assert!(ADAPTER.note("menu", None).unwrap().contains("%8d is a number put right in 8 characters"));
     // The parts are in the order of the file.
     assert!(PARTS.windows(2).all(|pair| pair[0].start < pair[1].start));
     assert!(SHOP_LINES.windows(2).all(|pair| pair[0].0 < pair[1].0));
@@ -278,10 +280,13 @@ fn menu_labels_are_what_the_code_points_at_and_the_slots_after_it() {
     put(0x90, "ｾｰﾌﾞ");
     put(0xD0, "ﾛｰﾄﾞ"); // too far after the label before
     put(0x100, "@SFX"); // pointed at, but no kana
-    let built = BTreeSet::from([0x10, 0x80, 0x90, 0x100]);
+    put(0x110, "ｱｲ");
+    put(0x114, "@"); // an @ alone draws nothing, and ends the run
+    put(0x118, "ｳｴ");
+    let built = BTreeSet::from([0x10, 0x80, 0x90, 0x100, 0x110]);
     let labels = program::menu_strings(&file, &built);
     let found: Vec<(u32, String)> = labels.into_iter().map(|(at, label)| (at, program::decode_small(&label))).collect();
-    let expected = [(0x10, "どうぐ"), (0x1A, "そうび"), (0x24, "{KANA}SFX VOL"), (0x90, "セーブ")];
+    let expected = [(0x10, "どうぐ"), (0x1A, "そうび"), (0x24, "{KANA}SFX VOL"), (0x90, "セーブ"), (0x110, "アイ")];
     assert_eq!(found, expected.map(|(at, text)| (at, text.to_string())));
 }
 
@@ -403,7 +408,7 @@ fn the_game_s_program_text_is_found() {
     assert!((end..0x8_0000).step_by(4).all(|at| mips::number(&file, at) != Some(mips::RETURN)));
     let text = program::program_text(disc).unwrap();
     let (strings, labels) = (&text[program::PROGRAM_SECTION], &text[program::MENU_SECTION]);
-    assert_eq!((strings.len(), labels.len()), (3303, 56));
+    assert_eq!((strings.len(), labels.len()), (3303, 63));
     let codes = &program(disc).unwrap().codes;
     let shown = |at: u32| decode(&strings[&at], codes);
     assert_eq!(shown(0xA_B350), "ゲン");
@@ -412,6 +417,24 @@ fn the_game_s_program_text_is_found() {
     assert_eq!(shown(0xA_BB33), "メモリーカードが入っていません"); // known to the code alone
     assert_eq!(program::decode_small(&labels[&0xA_7D1C]), "どうぐ");
     assert_eq!(program::decode_small(&labels[&0xA_82AD]), "{KANA}SFX VOL....");
+    // A few labels are in the read-only data before the code: the shop's, and two counts.
+    let early: Vec<(u32, String)> =
+        labels.range(..program::READ_ONLY.end as u32).map(|(at, label)| (*at, program::decode_small(label))).collect();
+    let expected = [
+        (0xD00, "あと%dターン"),
+        (0x15C8, "かう"),
+        (0x15CC, "うる"),
+        (0x15D0, "みせをでる"),
+        (0x15D8, "もっているかず"),
+        (0x15F4, "はい いいえ"),
+        (0x16D0, "たおしたかず"),
+    ];
+    assert_eq!(early, expected.map(|(at, text)| (at, text.to_string())));
+    let references = program::references(disc).unwrap();
+    let room = |at: u32| program::label_room(&file, at as usize, labels, &references.referred);
+    assert_eq!([0x15C8, 0x15CC, 0x15D0, 0x15D8, 0x15F4].map(room), [3, 3, 7, 11, 7]);
+    let width = |at: u32| program::label_width(&file, at, labels);
+    assert_eq!([0x15C8, 0x15D8, 0x15F4, 0xD_2E8C].map(width), [7, 7, 6, 4]);
     // Every string is in a stretch of the text, and the labels in none.
     let in_text = |at: &u32| program::TEXT.iter().any(|stretch| stretch.contains(&(*at as usize)));
     assert!(strings.keys().all(in_text));
@@ -847,9 +870,16 @@ fn a_label_has_its_slot_and_the_width_of_its_screen() {
     assert_eq!(program::label_cells(&small("@ﾄﾞｳｸﾞ")), 3);
     assert_eq!(program::label_width(&file, 0x10, &labels), 5);
     assert_eq!(program::label_width(&file, 0x90, &labels), 3);
+    // A format's conversions, in order; %% draws a % and is none.
+    assert_eq!(program::conversions(&small("%8dｺ")), b"d");
+    assert_eq!(program::conversions(&small("@ｱﾄ%d@ﾀｰﾝ")), b"d");
+    assert_eq!(program::conversions(b"%-4ld%%%s %"), [b'd', b's', 0]);
+    assert!(program::conversions(b"ITEMS").is_empty());
     // A pack's lowercase letters are written as the capitals the font draws.
     assert_eq!(program::encode_label("Items").unwrap(), b"ITEMS");
     assert_eq!(program::encode_label("どうぐ").unwrap(), small("@ﾄﾞｳｸﾞ"));
+    // But not those of a format's conversions, which the code reads as they are.
+    assert_eq!(program::encode_label("%8d pcs, %-3ld%%x").unwrap(), b"%8d PCS, %-3ld%%X");
     for text in ["a~b", "x_y", "a|b", "1^2", "`", "\\"] {
         assert!(program::encode_label(text).is_err(), "{text}");
     }

@@ -23,8 +23,9 @@
 //! spaces and punctuation, whatever its font draws in an 8-pixel cell, is drawn once into a cell of
 //! both fonts, left-aligned, and given its own width: Unifont's ink and one pixel more
 //! (`fonts::proportional`), 4 pixels for a space. The cells are those of kanji that no string the pack
-//! leaves as it is draws (see `insert::free_cells`): about a hundred are needed, and the game's text
-//! alone leaves 275 kanji unused. A pack that needs more cells than there are is refused.
+//! leaves as it is draws, but those the dialogue's font draws a pixel off (see `insert::free_cells`):
+//! about a hundred are needed, and the game's text alone leaves 238 kanji unused. A pack that needs
+//! more cells than there are is refused.
 //!
 //! A byte a character. The renderer's characters would take two bytes each as codes of the font, and
 //! an area's text can grow little or not at all (see `heap`). So they are written a byte each, in

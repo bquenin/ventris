@@ -396,7 +396,7 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   the one of 16 pixels the dialogue's window uses, and the one of 12 by 11 the battle's window and the menus'
   screens use, at the same width. This holds for the dialogue and the program's text, but not for the
   party's names, which stay a character to a cell. The characters take the cells of kanji that no string the
-  pack leaves as it is uses: 275 when a pack changes little, most of the font's 1,516 kanji in a full
+  pack leaves as it is uses: 238 when a pack changes little, most of the font's 1,516 kanji in a full
   translation; a pack needs about a hundred, and one that needs more cells than there are, or more than 240
   such characters, is refused. Such a letter takes **one byte**, in a run that a byte starts, so a run takes
   one more; a line break or a tag ends a run. The bytes a run's characters leave over (156 when a pack writes
@@ -470,4 +470,8 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
 - A label of `menu` stays in its slot: it takes no more bytes than the game left for it, and draws no more
   characters than the widest label of its screen, 8 in the main menu; ﾞ and ﾟ take a byte but are drawn
   over the letter before. The menus' font has capitals, digits, punctuation and the kana; lowercase
-  letters are written as capitals.
+  letters are written as capitals. The shop's labels are among them: its commands (buy and sell have 3
+  bytes each, leave 7), its yes and no in one label (the hand points at its first character for yes and its
+  fourth for no), the label over what the party has, and the count beside them (`menu.863884`, `%8dコ`). A
+  label with a `%` in it is a format the game fills in before drawing it, and keeps the game's own
+  conversions (`%8d`), in the same order.
