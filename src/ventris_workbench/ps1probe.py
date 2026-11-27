@@ -144,7 +144,8 @@ def find_emulator(given: Path | None = None) -> Path:
     binary = given.expanduser()
     if not binary.is_file():
         raise ProbeError(f"the PCSX-Redux binary {binary} is not a file (from --emulator or {EMULATOR_VARIABLE})")
-    return binary
+    # The emulator runs from a temporary folder, where a relative path would point elsewhere.
+    return binary.resolve()
 
 
 def find_bios(given: Path | None = None) -> Path:
@@ -269,13 +270,12 @@ def summary(log: Path) -> str:
 
 
 def _state_file(state: Path, work: Path) -> Path:
-    """A saved state as the emulator's script loads it. States the emulator's own window saves are
-    compressed with gzip; those the probe saves are not."""
+    """A saved state as the emulator's script loads it, copied into the run's own folder: the run clears
+    old files named after its output first, and the state given may be one of them. States the emulator's
+    own window saves are compressed with gzip; those the probe saves are not."""
     data = state.read_bytes()
-    if not data.startswith(GZIP_MAGIC):
-        return state
     plain = work / "state"
-    plain.write_bytes(gzip.decompress(data))
+    plain.write_bytes(gzip.decompress(data) if data.startswith(GZIP_MAGIC) else data)
     return plain
 
 
@@ -303,8 +303,10 @@ def run(
         work = Path(temporary)
         state = _state_file(plan.state, work) if plan.state else None
         settings = build_plan(plan, prefix, work, state)
+        given = plan.state.resolve() if plan.state else None
         for old in prefix.parent.glob(prefix.name + "-*"):
-            if old.is_file():
+            # The state the run starts from may be named like its output, and is kept.
+            if old.is_file() and old.resolve() != given:
                 old.unlink()
         if settings["save"]:
             Path(settings["save"]["path"]).parent.mkdir(parents=True, exist_ok=True)

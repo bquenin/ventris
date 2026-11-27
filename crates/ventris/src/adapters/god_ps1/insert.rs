@@ -393,6 +393,11 @@ fn fit(data: &[u8], codes: &ByteCodes, wrap: bool) -> Result<Vec<u8>> {
     text_error("it cannot be laid out in the window")
 }
 
+/// Stands for one cell of a tag that takes room on screen while a line is broken: the shared
+/// `layout::wrap_lines` lets a tag start while the line has room and run past its end, but here a
+/// name, a number or a word that would not fit must go to the next line whole, as a word does.
+const TAG_CELL: char = '\u{E000}';
+
 /// A changed string's text broken at spaces to the window's width: 15 characters in a spoken line,
 /// 16 otherwise. Line breaks and waits already in it are kept.
 fn wrap(text: &str) -> Result<String> {
@@ -401,7 +406,7 @@ fn wrap(text: &str) -> Result<String> {
     for line in text.split('\n') {
         let spoken = speaking || line.starts_with("{SAY}");
         let limit = if spoken { COLUMNS - 1 } else { COLUMNS };
-        let tag = |name: &str, value: Option<&str>| match name {
+        let cells = |name: &str, value: Option<&str>| match name {
             "NAME" => NAME_CELLS,
             "NUM" => NUMBER_CELLS,
             "WORD" => WORD_CELLS,
@@ -410,7 +415,35 @@ fn wrap(text: &str) -> Result<String> {
             "K" | "W" | "B" => 1,
             _ => 0,
         };
-        lines.push(layout::wrap_lines(line, &|_| Ok(1), limit, &tag, &["WAIT", "CLEAR"])?);
+        // Each tag that takes room is measured as that many cells of a word with no space in it,
+        // and put back once the line is broken.
+        let mut sized = Vec::new();
+        let mut measured = String::new();
+        for token in tokens(line) {
+            match token {
+                Token::Tag { raw, name, value } if cells(name, value) > 0 => {
+                    let width = cells(name, value);
+                    measured.extend(std::iter::repeat_n(TAG_CELL, width));
+                    sized.push((raw, width));
+                }
+                other => measured.push_str(&other.text()),
+            }
+        }
+        let broken = layout::wrap_lines(&measured, &|_| Ok(1), limit, &|_, _| 0, &["WAIT", "CLEAR"])?;
+        let mut restored = String::new();
+        let (mut sized, mut chars) = (sized.into_iter(), broken.chars());
+        while let Some(char) = chars.next() {
+            if char != TAG_CELL {
+                restored.push(char);
+                continue;
+            }
+            let (raw, width) = sized.next().expect("each run of tag cells stands for a tag");
+            restored.push_str(raw);
+            for _ in 1..width {
+                chars.next();
+            }
+        }
+        lines.push(restored);
         for token in tokens(line) {
             match token {
                 Token::Tag { name: "SAY", .. } => speaking = true,

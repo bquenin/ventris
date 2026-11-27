@@ -152,10 +152,16 @@ pub fn code_use(data: &[u8], code: Range<usize>, base: u32) -> CodeUse {
     let words: Vec<u32> = code.clone().step_by(4).map_while(|at| number(data, at)).collect();
     let ways: Vec<Way> = words.iter().map(|word| way_of(*word)).collect();
     let count = words.len();
-    // Where the branch or the jump at instruction `at` leads.
+    // Where the branch or the jump at instruction `at` leads. A jump gives the low 28 bits of its
+    // target; the top 4 are those of the instruction after it, which matters where code runs high in
+    // memory, as on the PlayStation (0x80000000 up).
     let target = |at: usize| {
         let to = match words[at] >> 26 {
-            0x02 => (i64::from((words[at] & 0x03FF_FFFF) << 2) - i64::from(base) - code.start as i64) / 4,
+            0x02 => {
+                let next = i64::from(base) + code.start as i64 + 4 * at as i64 + 4;
+                let destination = (next & 0xF000_0000) | i64::from((words[at] & 0x03FF_FFFF) << 2);
+                (destination - i64::from(base) - code.start as i64) / 4
+            }
             _ => at as i64 + 1 + i64::from(words[at] as u16 as i16),
         };
         (0..count as i64).contains(&to).then_some(to as usize)
@@ -227,4 +233,31 @@ pub fn code_use(data: &[u8], code: Range<usize>, base: u32) -> CodeUse {
         }
     }
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Code that runs high in memory, as a PlayStation program does from 0x80010000: a `lui` gives
+    /// `a0` the high half of an address, a `j` jumps over an instruction that would replace it, and
+    /// the `addiu` at the jump's target adds the low half. The jump's target keeps the top bits of
+    /// its own address, so the address is found.
+    #[test]
+    fn an_address_built_across_a_jump_is_found_in_code_that_runs_high_in_memory() {
+        let base = 0x8000_F800;
+        let start = 0x800;
+        let target = base + start as u32 + 4 * 4;
+        let words = [
+            0x3C04_800B,                                 // lui a0, 0x800B
+            0x0800_0000 | ((target & 0x0FFF_FFFF) >> 2), // j target
+            0x0000_0000,                                 // nop, in the jump's delay slot
+            0x3C04_1111,                                 // lui a0, 0x1111, jumped over
+            0x2484_1234,                                 // addiu a0, a0, 0x1234
+        ];
+        let mut data = vec![0; start];
+        data.extend(words.iter().flat_map(|word: &u32| word.to_le_bytes()));
+        let found = code_use(&data, start..data.len(), base);
+        assert_eq!(found.built.get(&0x800B_1234), Some(&vec![start + 16]));
+    }
 }

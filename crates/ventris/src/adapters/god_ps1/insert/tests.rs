@@ -106,6 +106,10 @@ fn wrapping_breaks_lines_at_spaces_and_waits_before_the_window_scrolls() {
     assert_eq!(wrap("{SAY}aaaa bbbb ccccc d{/SAY}").unwrap(), "{SAY}aaaa bbbb ccccc\nd{/SAY}");
     assert_eq!(wrap("{SAY}aaaa {NAME:19} aaa{/SAY}").unwrap(), "{SAY}aaaa {NAME:19} aaa{/SAY}");
     assert_eq!(wrap("{SAY}aaaaa {NAME:19} aaa{/SAY}").unwrap(), "{SAY}aaaaa {NAME:19}\naaa{/SAY}");
+    // A name, a number or a word that would run past the line's end goes to the next line whole.
+    assert_eq!(wrap("{SAY}abcdefghijklm {NAME:19}{/SAY}").unwrap(), "{SAY}abcdefghijklm\n{NAME:19}{/SAY}");
+    assert_eq!(wrap("you pay {NUM} G here").unwrap(), "you pay {NUM} G\nhere");
+    assert_eq!(wrap("you must now pay {NUM} G").unwrap(), "you must now pay\n{NUM} G");
     assert_eq!(wrap("aaaa\nbbbb cccc{WAIT}\ndddd eeee").unwrap(), "aaaa\nbbbb cccc{WAIT}\ndddd eeee");
     // A fifth line would scroll the first away unread: a wait goes in place of the break before it.
     assert_eq!(shown(&written("A A A A A A", true).unwrap()), "A A A A A A");

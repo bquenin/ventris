@@ -726,9 +726,13 @@ pub fn write_image(disc: &Disc, output: &Path, patches: &[(&str, u64, Vec<u8>)])
     }
     let sheet = cue_for(disc, &bin)?;
 
+    // Which outputs this attempt has started to write: only those are removed if it fails, so that a
+    // failure to open one leaves whatever was there before.
+    let (mut bin_started, mut cue_started) = (false, false);
     let written = (|| -> Result<()> {
         let mut source = File::open(&disc.path).map_err(at(&disc.path))?;
         let mut out = OpenOptions::new().write(true).create(true).truncate(true).open(&bin).map_err(at(&bin))?;
+        bin_started = true;
         let mut buffer = vec![0; BATCH * RAW_SECTOR];
         let mut sector = 0u64;
         loop {
@@ -745,11 +749,16 @@ pub fn write_image(disc: &Disc, output: &Path, patches: &[(&str, u64, Vec<u8>)])
             out.write_all(&buffer[..count]).map_err(at(&bin))?;
             sector = end;
         }
+        cue_started = true;
         fs::write(&cue, &sheet).map_err(at(&cue))
     })();
     if written.is_err() {
-        let _ = fs::remove_file(&bin);
-        let _ = fs::remove_file(&cue);
+        if bin_started {
+            let _ = fs::remove_file(&bin);
+        }
+        if cue_started {
+            let _ = fs::remove_file(&cue);
+        }
     }
     written
 }
