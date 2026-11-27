@@ -33,7 +33,9 @@ procedure and its guardrails; the facts are there, and they win where the two di
   saved state and a patch made from it are the game. Study scripts, extracted text, dumps and screenshots
   stay under `work/` or `roms/`, which git ignores, or outside the repository.
 - **The game comes from the user.** Ask for the path to their copy, the release they mean to support.
-  Never download a game, a BIOS or a patch.
+  Never download a game or a BIOS. A fan translation's patch may be fetched to use as an answer key, from
+  its authors' own page, never a copy of the game with it applied; what it may be used for is in "An
+  answer key is for facts" below.
 - **Text only.** An adapter does not change the game beyond its text: no name-entry screens, no boxes laid
   out again, no pictures redrawn, nothing in how the game behaves (`docs/adding-a-game.md`, "Scope"). An
   adapter that only extracts is a whole contribution.
@@ -53,6 +55,9 @@ Before any study, look for:
   Chinese, Korean, Spanish, Portuguese, Russian and others), on GitHub, in the databases of fan
   translations and ROM hacks, and in forums. Patches are often kept where an English search does not
   reach. Days of work have been spent on a game that turned out to have patches published this way.
+- **A translation of another version of the game**: the original on another console, a port or a remake.
+  It is an answer key for what the script says and the names and terms it uses; it says nothing about
+  where anything is in the release you are working on, whose program and formats are its own.
 - **A decompilation or a commented disassembly**, of any release: the formats carry over even when the
   addresses do not.
 - **Documented formats**: notes on the game's text, compression, archive or font.
@@ -76,7 +81,19 @@ look at the screen.
 - Build and run with the tools the guide names: `ventris` for `check`, `extract` and `font`, and the
   Python workbench (`uv run ventris-workbench --help`) for identifying the file, probing the emulator,
   disassembling and comparing files.
+- When the text is in no standard encoding, as on most consoles, find a line by its shape, not its bytes:
+  get one line on screen, save memory at that moment, and search it for the gaps between the codes of the
+  line's kana, taken in the order of the syllabary, in steps of one and two bytes. Most games number kana in
+  that order, whatever the numbers are. What it finds is often a buffer the line was copied into; record
+  which code writes the buffer, and it leads to the routine that reads the script and to how it is coded.
+- A font that looks like noise in a viewer may be several 1-bit fonts stacked in one 4-bit texture, the
+  palette choosing which bit is drawn. Split the bits before reading the glyphs; the routine that draws a
+  character says which bit, page and cell a code selects.
 - Get extraction right first: `extract` and `verify`, with the script encoding back to the game's bytes.
+- Before writing the build, settle its design on facts: how the game finds the files it reads (by name or
+  by a fixed place, and whether anything checks a size), where it puts what it loads in memory and how much
+  room there is, and what else must move when text grows. Then prove the design on one image changed by
+  hand, with a longer line run in the emulator, before any of it becomes code.
   The build can come later, from the user or from someone else.
 - Reuse the shared modules the top of `adapters/mod.rs` lists. What is about a console and not about the
   game goes under `platforms/`.

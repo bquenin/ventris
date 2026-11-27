@@ -42,8 +42,9 @@ start work, and the build can come later, from you or from someone else.
 
 - **The game**, the release you mean to support, as a clean image. Your own copy; it never goes into the
   repository.
-- **An emulator with a debugger**: Mesen for the Super Famicom, PCSX2 for the PlayStation 2, DeSmuME for
-  the Nintendo DS. The workbench drives all three, once they are [set up](#setting-up-the-emulators) for it.
+- **An emulator with a debugger**: Mesen for the Super Famicom, PCSX-Redux for the PlayStation, PCSX2 for
+  the PlayStation 2, DeSmuME for the Nintendo DS. The workbench drives all four, once they are
+  [set up](#setting-up-the-emulators) for it.
 - **The workbench**, the Python package in `src/ventris_workbench`: tools for taking a game apart. Install
   [uv](https://docs.astral.sh/uv/) and Python 3.11 or later; `uv run ventris-workbench --help` lists the
   tools. Nothing in it is part of what a translator runs.
@@ -81,8 +82,8 @@ proves the workbench can drive it. All of this has been done on Windows. The emu
 Linux too, but the workbench's commands have not been tried with them there.
 
 Two things are yours to supply, and neither ever goes into the repository: the game, your own copy, and
-for the PlayStation 2 a BIOS dumped from your own console. PCSX2 cannot start a game without one. DeSmuME
-needs none: it stands in for the Nintendo DS's own.
+for the PlayStation and the PlayStation 2 a BIOS dumped from your own console. PCSX-Redux and PCSX2 cannot
+start a game without one. DeSmuME needs none: it stands in for the Nintendo DS's own.
 
 ### Mesen, for the Super Famicom
 
@@ -113,6 +114,46 @@ uv run ventris-workbench probe roms/game.sfc -o work/game/first --frames 600 --s
 It takes a few seconds and prints the path of the one file it wrote, `work/game/first-shot-600.png`: the
 game ten seconds after power-on, usually its opening or title screen. An error that names `MESEN` or the setup
 wizard sends you back to the two steps above.
+
+### PCSX-Redux, for the PlayStation
+
+[PCSX-Redux](https://github.com/grumpycoders/pcsx-redux) has a Lua scripting interface of its own, which
+is all the workbench needs: no patch. Build it from source; the workbench has been used with a build of
+commit `dbda684a4` (November 2026). On Windows that takes Visual Studio 2026 with its C++ tools and two more
+components, `Microsoft.VisualStudio.Component.VC.Llvm.Clang` and
+`Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset`, because the configuration to build is
+`ReleaseWithClangCL`. The plain `Release` configuration, with Microsoft's own compiler, fails: the Lua
+files it builds into the program are longer than that compiler allows a string to be. From a Developer
+Command Prompt, in the folder of the source:
+
+```bash
+MSBuild vsprojects/pcsx-redux.sln -t:restore -p:RestorePackagesConfig=true
+MSBuild vsprojects/pcsx-redux.sln -p:Configuration=ReleaseWithClangCL -p:Platform=x64 -p:PreferredToolArchitecture=x64 -m:4
+```
+
+The first command fetches the packages the build needs. In the second, `PreferredToolArchitecture=x64`
+matters: without it the build links with the 32-bit linker, which runs out of memory writing the debugging
+information. The program is `vsprojects/x64/ReleaseWithClangCL/pcsx-redux.exe`. On macOS and Linux,
+PCSX-Redux's own README says how to build it.
+
+1. Set the environment variable `PCSX_REDUX` to the path of the binary.
+2. Set `PCSX_REDUX_BIOS` to the path of a BIOS dumped from your own console, such as `scph5500.bin` for a
+   Japanese one. Use a BIOS of the game's region.
+
+Like Mesen, PCSX-Redux is started by the workbench for each run, with no window, and given on the command
+line the game, the BIOS and the script to run; it quits when the script is done. Its settings and memory
+cards go to a new empty folder for each run, so a run never depends on what an earlier one saved
+(`--portable` names a folder to keep them in instead).
+
+To check, run the game from power-on for 600 frames and take a screenshot at the end:
+
+```bash
+uv run ventris-workbench ps1-probe roms/game.cue -o work/game/first --frames 600 --shot 600
+```
+
+It takes a few seconds and prints the path of the screenshot it wrote, `work/game/first-shot-600.png`: ten
+seconds after power-on, which is still the console's own start-up screen, the Sony logo. An error that names `PCSX_REDUX` or `PCSX_REDUX_BIOS` sends you back to the two steps
+above.
 
 ### PCSX2, for the PlayStation 2
 
@@ -238,6 +279,51 @@ A useful order: find the font in the file (it is often uncompressed, and Mesen's
 record which code reads it while a line is drawn, follow that code back to where it fetches the next
 character, and from there to where the string is and what points at it. The bytes of a string you can
 read on screen, set beside the glyphs they draw, give the encoding.
+
+### Watch the game run (PlayStation)
+
+`ps1-probe` does for [PCSX-Redux](#pcsx-redux-for-the-playstation) what `probe` does for Mesen: it runs the
+game from power-on, or from a saved state, presses buttons at given frames, takes screenshots, saves memory,
+records which code reads or writes a range of memory and what the registers hold each time an address is
+run, and saves a state on the way. It runs as fast as the machine allows; `--real-time` slows it to the
+game's own speed.
+
+```bash
+# from power-on to the title screen, then start a new game and save a state there
+uv run ventris-workbench ps1-probe roms/game.cue -o work/game/start --frames 3000     --input 2400:press:circle --shot 2400 3000 --save 3000:work/game/start.state
+
+# from that state, see which code writes a buffer and dump all of RAM
+uv run ventris-workbench ps1-probe roms/game.cue -o work/game/run --state work/game/start.state     --frames 120 --writes 800DB600-800DB700 --dump ram@60 vram@60 --shot 0 120
+```
+
+Frame 0 is the first frame after power-on or, from a state, the moment it is loaded, which shows the
+picture the state was saved with. Input steps are `FRAME:KIND:BUTTONS` as for the other probes, with the
+PlayStation's buttons: `cross`, `circle`, `square`, `triangle`, `start`, `select`, `up`, `down`, `left`,
+`right`, `l1`, `r1`, `l2`, `r2`. Japanese games confirm with circle, not cross.
+
+Addresses are in hexadecimal. RAM is 2 MB, which the game's code sees at `80000000` to `801FFFFF`; an
+address of RAM may be given without the `80`, and the files always show it with. What it writes, all named
+after `-o`:
+
+- `-shot-FRAME.png`, the picture on screen.
+- `-ram-FRAME.bin`, all of RAM; `-vram-FRAME.bin` and `.png`, the video memory, 1024 by 512 pixels of 16
+  bits, where the font and the other pictures are; `-scratch-FRAME.bin`, the 1 KB scratchpad; and
+  `-dump-ADDRESS-FRAME.bin` for `--dump ADDRESS:LENGTH@FRAME`.
+- `-reads.txt` and `-writes.txt`, a line for every access to the ranges given: the frame, the instruction's
+  address (`pc`) and code (`op`), the address touched, the width, the value read or written, and a few
+  registers. `-reads-summary.txt` and `-writes-summary.txt` sum them up, a line per instruction.
+- `-exec.txt`, a line with every register each time an address given to `--exec` runs, and
+  `-registers-FRAME.txt` for `--registers`.
+
+`--trace-from FRAME` waits until that frame to start watching. Watching memory or addresses runs the
+emulator's interpreter with its debugger, which is slower: from power-on to a title screen 2400 frames in,
+forty seconds at the game's own speed, took four seconds without a watch and fifteen with one.
+`--state` also takes a state saved from PCSX-Redux's own window.
+
+The workbench package also holds a reader for PlayStation disc images, `ventris_workbench.platforms.ps1`:
+it opens a `.cue` or a `.bin`, lists the files on the disc with their first sector and size, reads them, and
+reads whole sectors, which movies and XA audio need. Scripts written to study one game are scratch; keep
+them under `work/`.
 
 ### Watch the game run (PlayStation 2)
 

@@ -258,7 +258,7 @@
 //! each byte, in 272 bytes per glyph of which the last 8 are unused.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::{Range, RangeInclusive};
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
@@ -269,6 +269,7 @@ use crate::error::{Error, Result, text_error};
 use crate::fonts::{self, Bitmap, Font};
 use crate::layout;
 use crate::platform::{Image, Platform};
+use crate::platforms::mips::{ADDIU, CodeUse, RETURN, code_use, number, pointed_at};
 use crate::platforms::ps2::{self, Disc, write_image};
 use crate::script::{self, Pack, Script, string_name};
 use crate::shift_jis;
@@ -476,9 +477,6 @@ const COMPRESSED_ALIGNMENT: usize = 4;
 const COMPRESSED_MODULES_LIMIT: usize = 0x4A_8100 - 0x43_C600;
 /// Where the game loads any of those three.
 const LARGE_MODULE_BASE: u32 = 0x2AEA80;
-/// The instruction a function returns with, `jr $ra`. A module is its code and then its data, so
-/// its text is all past the last of these.
-const RETURN: u32 = 0x03E0_0008;
 
 /// The most bytes a menu's module may have: those of the largest of the game's own, member 6806.
 /// The game loads a module as long as the archive says it is, and a fan translation made 17 of the
@@ -533,11 +531,6 @@ const MENU_CODES: [u8; 2] = [0x05, 0x09];
 /// "オート設定（重複時：　　　　　　）" does, and shows its brackets and colon. Such a character is
 /// kept in a script as the game has it, a byte in a tag and the next one as itself.
 const SHIFT_JIS_LEADS: RangeInclusive<u8> = 0x81..=0x98;
-/// The instructions that build an address between them: `lui` gives a register its high half, and
-/// an `addiu` or an `ori` on that register adds the low half.
-const LUI: u32 = 0x0F;
-const ADDIU: u32 = 0x09;
-const ORI: u32 = 0x0D;
 /// The name the program's own text has in a pack. Its strings are numbered by their offset in the
 /// program's file.
 const PROGRAM_SECTION: &str = "program";
@@ -595,33 +588,6 @@ const COLUMN_STEP: usize = 256;
 /// How far apart the three strings of a column's pointers may be, counted in strings in the order
 /// the file has them. A table's strings were put in the file together.
 const COLUMN_NEAR: usize = 64;
-/// Instructions that load a value from memory into a register.
-const LOADS: [u32; 11] = [0x1A, 0x1B, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x37];
-/// In an instruction that works on registers alone, the two that jump to an address in a register:
-/// they put nothing into the register the others put their result in.
-const JUMPS: [u32; 2] = [0x08, 0x09];
-/// Instructions that put into a register the result of arithmetic on a register and a number.
-const NUMBERS: [u32; 9] = [0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x18, 0x19];
-/// The instruction that calls a function at a fixed address, and, among those that work on
-/// registers alone, the one that calls a function whose address is in a register.
-const CALL: u32 = 0x03;
-const CALL_BY_REGISTER: u32 = 0x09;
-/// The registers a function may change, by the convention the program's compiler keeps: after a
-/// call they no longer hold what they held.
-const CHANGED_BY_A_CALL: [usize; 18] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 31];
-/// The console's own arithmetic, which puts its result where the instructions on registers alone do.
-const MULTIMEDIA: u32 = 0x1C;
-
-/// Whether an instruction reads or writes memory at a number added to a register.
-fn is_memory(operation: u32) -> bool {
-    matches!(operation, 0x1A | 0x1B | 0x1E | 0x1F | 0x20..=0x2E | 0x31 | 0x36 | 0x37 | 0x39 | 0x3E | 0x3F)
-}
-
-/// Whether an instruction moves a value from the registers of another unit into one of the 32.
-fn is_move_in(word: u32) -> bool {
-    matches!(word >> 26, 0x10..=0x12) && (word >> 21 & 31) <= 2
-}
-
 // --- the encoding
 const END: u8 = 0x00;
 const LINE: u8 = 0x01;
@@ -714,12 +680,6 @@ const HALF_SPARE_CELLS: Range<usize> = 49..132;
 /// Single bytes that can be given to new characters: the half-width kana from $A6 up, which the
 /// story scripts do not use. $A1-$A5 are punctuation, $A5 the dot of the script's ellipsis.
 const SPARE_BYTES: Range<u8> = 0xA6..0xE0;
-
-/// The 32-bit number at `at` in `data`, little-endian, if `data` reaches that far.
-fn number(data: &[u8], at: usize) -> Option<u32> {
-    let bytes = data.get(at..at.checked_add(4)?)?;
-    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-}
 
 // --- the archive
 
@@ -1225,37 +1185,6 @@ pub fn menu_modules(disc: &Disc) -> Result<Arc<BTreeMap<usize, Vec<u8>>>> {
     })
 }
 
-/// The places in a module that something in it may point at, as offsets, the module being loaded
-/// at `base`: a 32-bit word that is an address inside the module, or an `addiu` or `ori` that adds
-/// a low half to a register some `lui` in the module gives a high half.
-///
-/// A function sets the high half once, at its start, and adds low halves to it wherever it needs
-/// an address, so the two instructions are not looked for side by side: every low half is tried
-/// with every high half its register is ever given. That finds addresses nobody builds, too. What
-/// is found here is therefore only where to look; `menu_strings` decides what is text.
-pub fn pointed_at(module: &[u8], base: u32) -> BTreeSet<usize> {
-    let inside =
-        |address: u32| address.checked_sub(base).map(|offset| offset as usize).filter(|offset| *offset < module.len());
-    let words: Vec<u32> = (0..module.len() / 4).filter_map(|word| number(module, 4 * word)).collect();
-    let mut found: BTreeSet<usize> = words.iter().filter_map(|word| inside(*word)).collect();
-    let mut highs: [BTreeSet<u32>; 32] = Default::default();
-    for word in words.iter().filter(|word| *word >> 26 == LUI) {
-        highs[(word >> 16 & 31) as usize].insert((word & 0xFFFF) << 16);
-    }
-    for word in &words {
-        let (operation, low) = (word >> 26, word & 0xFFFF);
-        for high in &highs[(word >> 21 & 31) as usize] {
-            let address = match operation {
-                ADDIU => high.wrapping_add(low as u16 as i16 as u32), // this one adds its half as a signed number
-                ORI => high | low,
-                _ => break,
-            };
-            found.extend(inside(address));
-        }
-    }
-    found
-}
-
 /// How long the text at `offset` of `data` is, if what is there is text: characters of the game's
 /// list, ASCII, line breaks and the codes given with their 32-bit numbers, up to a zero byte that
 /// is not part of such a number, with at least one character of the list among them. With `kana`,
@@ -1464,153 +1393,6 @@ fn menu_room(module: &[u8], offset: usize, length: usize, targets: &BTreeSet<usi
     let boundary = (end + 1).next_multiple_of(MENU_ALIGNMENT).min(module.len());
     let unused = (end + 1..boundary).take_while(|at| module[*at] == 0 && !targets.contains(at)).count();
     length + unused
-}
-
-/// What a piece of code does with the addresses of its data, as far as it can be followed.
-#[derive(Debug, Default, PartialEq)]
-struct CodeUse {
-    /// The addresses the code builds with two instructions, as its compiler has it: one gives a
-    /// register the high half of an address, and a later one adds the low half. Each address is
-    /// with the offsets of the instructions that add its low half.
-    built: BTreeMap<u32, Vec<usize>>,
-    /// The addresses the code reads or writes without building them: a load or a store through a
-    /// register that holds a high half, the low half being in the load or the store itself.
-    straight: BTreeSet<u32>,
-}
-
-/// What an instruction does to the order the code runs in.
-#[derive(Clone, Copy, PartialEq)]
-enum Way {
-    /// Nothing: the next instruction follows.
-    On,
-    /// A branch that may be taken: the next instruction runs, then the target or what follows.
-    Branch,
-    /// A branch that runs the next instruction only when it is taken.
-    Likely,
-    /// A branch that is always taken, or a jump to a fixed address.
-    Jump,
-    /// A call: the next instruction runs, the function does, and the code goes on from there.
-    Call,
-    /// A return, or a jump to an address in a register: where the code goes on is not known.
-    Away,
-}
-
-fn way_of(word: u32) -> Way {
-    let (operation, source, target) = (word >> 26, word >> 21 & 31, word >> 16 & 31);
-    match operation {
-        0 if word & 0x3F == CALL_BY_REGISTER => Way::Call,
-        0 if word & 0x3F == 0x08 => Way::Away,
-        CALL => Way::Call,
-        0x02 => Way::Jump,
-        0x04 if source == target => Way::Jump, // equal to itself, which the compiler writes for "always"
-        0x04..=0x07 => Way::Branch,
-        0x14..=0x17 => Way::Likely,
-        0x01 if matches!(target, 0x00 | 0x01) => Way::Branch,
-        0x01 if matches!(target, 0x02 | 0x03) => Way::Likely,
-        0x01 if matches!(target, 0x10..=0x13) => Way::Call,
-        0x10..=0x12 if source == 0x08 => match target & 2 {
-            0 => Way::Branch,
-            _ => Way::Likely,
-        },
-        _ => Way::On,
-    }
-}
-
-/// Follows the code at `code` of `data`, which runs at its offset plus `base`, along the ways it
-/// can run, and keeps for every instruction the high halves each register may hold when the
-/// instruction runs: those a `lui` gave it, on any way that leads there, that nothing has replaced
-/// since. An `addiu` or an `ori` on such a register builds an address, and a load or a store
-/// through it reads or writes one.
-///
-/// The ways: an instruction is followed by the next one. After a branch the next instruction still
-/// runs, and then the target or the instruction after; a branch of the kind that runs the next
-/// instruction only when taken leads to it and on to the target, or past it. A jump leads to its
-/// target alone. After a call, and the instruction that follows it, the registers a function may
-/// change hold nothing known. A return leads nowhere, and neither does a jump through a register,
-/// whose targets are not followed: taking them to be every place a table names made addresses out
-/// of numbers.
-///
-/// Reading the code in the order of the file instead, as was done first, loses a register at every
-/// branch: of the references to text that a fan translation of this game changed, it missed nine.
-fn code_use(data: &[u8], code: Range<usize>, base: u32) -> CodeUse {
-    let words: Vec<u32> = code.clone().step_by(4).map_while(|at| number(data, at)).collect();
-    let ways: Vec<Way> = words.iter().map(|word| way_of(*word)).collect();
-    let count = words.len();
-    // Where the branch or the jump at instruction `at` leads.
-    let target = |at: usize| {
-        let to = match words[at] >> 26 {
-            0x02 => (i64::from((words[at] & 0x03FF_FFFF) << 2) - i64::from(base) - code.start as i64) / 4,
-            _ => at as i64 + 1 + i64::from(words[at] as u16 as i16),
-        };
-        (0..count as i64).contains(&to).then_some(to as usize)
-    };
-    // The instructions that may run after instruction `at`.
-    let after = |at: usize| -> [Option<usize>; 2] {
-        let before = if at == 0 { Way::On } else { ways[at - 1] };
-        match before {
-            Way::Away => [None, None],
-            Way::Jump | Way::Likely => [target(at - 1), None],
-            Way::Branch => [target(at - 1), Some(at + 1)],
-            Way::On | Way::Call => [Some(at + 1), (ways[at] == Way::Likely).then_some(at + 2)],
-        }
-    };
-    // What the registers may hold after instruction `at`, given what they may hold before it: a
-    // sorted list of a register and a high half.
-    let apply = |at: usize, held: &[(u8, u16)]| -> Vec<(u8, u16)> {
-        let word = words[at];
-        let (operation, target, result) = (word >> 26, (word >> 16 & 31) as u8, (word >> 11 & 31) as u8);
-        let written = match operation {
-            LUI => Some(target),
-            _ if NUMBERS.contains(&operation) || LOADS.contains(&operation) || is_move_in(word) => Some(target),
-            0 if !JUMPS.contains(&(word & 0x3F)) => Some(result),
-            MULTIMEDIA => Some(result),
-            _ => None,
-        };
-        let called = at > 0 && ways[at - 1] == Way::Call;
-        let lost = |register: u8| Some(register) == written || (called && CHANGED_BY_A_CALL.contains(&register.into()));
-        let mut out: Vec<(u8, u16)> = held.iter().copied().filter(|(register, _)| !lost(*register)).collect();
-        if operation == LUI && target != 0 {
-            out.push((target, word as u16));
-            out.sort_unstable();
-        }
-        out
-    };
-    let mut held: Vec<Vec<(u8, u16)>> = vec![Vec::new(); count];
-    let mut waiting: VecDeque<usize> = (0..count).collect();
-    let mut queued = vec![true; count];
-    while let Some(at) = waiting.pop_front() {
-        queued[at] = false;
-        let out = apply(at, &held[at]);
-        for next in after(at).into_iter().flatten().filter(|next| *next < count) {
-            if out.iter().all(|pair| held[next].binary_search(pair).is_ok()) {
-                continue;
-            }
-            held[next].extend(&out);
-            held[next].sort_unstable();
-            held[next].dedup();
-            if !queued[next] {
-                queued[next] = true;
-                waiting.push_back(next);
-            }
-        }
-    }
-    let mut found = CodeUse::default();
-    for (at, word) in words.iter().enumerate() {
-        let (operation, source, low) = (word >> 26, (word >> 21 & 31) as u8, word & 0xFFFF);
-        let signed = low as u16 as i16 as u32; // `addiu`, a load and a store add their half as a signed number
-        for (_, half) in held[at].iter().filter(|(register, _)| *register == source) {
-            let half = u32::from(*half) << 16;
-            match operation {
-                ADDIU => found.built.entry(half.wrapping_add(signed)).or_default().push(code.start + 4 * at),
-                ORI => found.built.entry(half | low).or_default().push(code.start + 4 * at),
-                _ if is_memory(operation) => {
-                    found.straight.insert(half.wrapping_add(signed));
-                }
-                _ => {}
-            }
-        }
-    }
-    found
 }
 
 /// What the program's code does with the addresses of its data.

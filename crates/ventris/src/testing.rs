@@ -54,6 +54,53 @@ pub fn cartridge(id: &str) -> Option<Vec<u8>> {
     let (image, _, _) = tasks::open_game(&game(id)?).ok()?;
     match image {
         Image::Cartridge(rom) => Some(rom),
-        Image::Disc(_) => None,
+        Image::Disc(_) | Image::Ps1Disc(_) => None,
     }
+}
+
+/// The file in the games folder, or a folder inside it, that is the image with this size and SHA-1,
+/// for a test of a console's module, which has no adapter to find a game by. Only files of that size
+/// are read. `None`, with a word about why, where it is not there to test with.
+pub fn image_file(size: u64, sha1: &str) -> Option<PathBuf> {
+    use sha1::{Digest, Sha1};
+    use std::io::Read;
+
+    fn search(folder: &Path, depth: usize, size: u64, sha1: &str) -> Option<PathBuf> {
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(folder).ok()?.flatten().map(|entry| entry.path()).collect();
+        paths.sort();
+        for path in paths {
+            let Ok(about) = std::fs::metadata(&path) else { continue };
+            if about.is_dir() {
+                if depth > 0
+                    && let Some(found) = search(&path, depth - 1, size, sha1)
+                {
+                    return Some(found);
+                }
+                continue;
+            }
+            if about.len() != size {
+                continue;
+            }
+            let Ok(mut file) = std::fs::File::open(&path) else { continue };
+            let mut digest = Sha1::new();
+            let mut chunk = vec![0; 1 << 22];
+            while let Ok(count) = file.read(&mut chunk) {
+                if count == 0 {
+                    break;
+                }
+                digest.update(&chunk[..count]);
+            }
+            let found: String = digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
+            if found == sha1 {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    let found = search(&games_folder(), 8, size, sha1);
+    if found.is_none() {
+        eprintln!("skipped: the image with SHA-1 {sha1} was not found in {}", games_folder().display());
+    }
+    found
 }

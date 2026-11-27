@@ -13,13 +13,15 @@ use crate::error::Result;
 use crate::platform::Platform;
 
 pub mod asm65816;
+pub mod mips;
 pub mod nds;
+pub mod ps1;
 pub mod ps2;
 pub mod snes;
 pub mod w65816;
 
 /// Every console, in the order they are asked whether a file is theirs.
-pub static ALL: &[&dyn Platform] = &[&ps2::PLATFORM, &snes::PLATFORM, &nds::PLATFORM];
+pub static ALL: &[&dyn Platform] = &[&ps2::PLATFORM, &ps1::PLATFORM, &snes::PLATFORM, &nds::PLATFORM];
 
 /// The console the file at `path` is an image for, if any here knows it.
 pub fn recognise(path: &Path) -> Result<Option<&'static dyn Platform>> {

@@ -553,7 +553,7 @@ mod tests {
     fn every_game_is_listed_with_what_a_pack_can_change() {
         let listed = games();
         let ids: Vec<&str> = listed.iter().map(|game| game.id).collect();
-        assert_eq!(ids, ["top-sfc", "tod2-ps2", "srwz-ps2", "goemon-nds"]);
+        assert_eq!(ids, ["top-sfc", "tod2-ps2", "srwz-ps2", "goemon-nds", "god-ps1"]);
         // A game that can only be extracted so far is listed too, with nothing a pack can change.
         let extract_only = &listed[3];
         assert_eq!((extract_only.platform, extract_only.can_insert), ("Nintendo DS", false));

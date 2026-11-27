@@ -52,13 +52,15 @@
 
 use crate::adapter::Adapter;
 
+pub mod god_ps1;
 pub mod goemon_nds;
 pub mod srwz_ps2;
 pub mod tod2_ps2;
 pub mod top_sfc;
 
 /// Every game ventris knows.
-pub static ALL: &[&dyn Adapter] = &[&top_sfc::ADAPTER, &tod2_ps2::ADAPTER, &srwz_ps2::ADAPTER, &goemon_nds::ADAPTER];
+pub static ALL: &[&dyn Adapter] =
+    &[&top_sfc::ADAPTER, &tod2_ps2::ADAPTER, &srwz_ps2::ADAPTER, &goemon_nds::ADAPTER, &god_ps1::ADAPTER];
 
 /// The adapter for the game whose image has this SHA-1.
 pub fn find(sha1: &str) -> Option<&'static dyn Adapter> {
@@ -81,7 +83,7 @@ mod tests {
     fn the_registry_holds_adapters_that_declare_themselves_properly() {
         assert_eq!(
             ALL.iter().map(|adapter| adapter.id()).collect::<Vec<_>>(),
-            ["top-sfc", "tod2-ps2", "srwz-ps2", "goemon-nds"]
+            ["top-sfc", "tod2-ps2", "srwz-ps2", "goemon-nds", "god-ps1"]
         );
         let same = |found: Option<&dyn Adapter>, adapter: &dyn Adapter| {
             found.is_some_and(|found| crate::adapter::same_adapter(found, adapter))

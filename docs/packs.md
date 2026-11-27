@@ -374,3 +374,21 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   that still does not fit is refused, with the page that is too full.
 - In the lists and the menus, the strings a pack changes share the room they had between them: one may be
   longer where others are shorter.
+
+### G.O.D pure (`god-ps1`)
+
+- Only the dialogue can be changed so far: the sections `096` to `188`, one for each area of the game. The
+  sections `program` and `menu` can be extracted and read, and a pack that changes them is refused.
+- Every character takes the same room, a cell of 14 pixels, and the window shows 4 lines of 16 cells.
+  After `{SAY}`, which starts a spoken line and draws its 「, the lines that follow are indented by one
+  cell, so a spoken line holds 15. Changed lines are broken at spaces to fit, and a `{WAIT}` is put in
+  where the window would fill; the window then scrolls one line at a time, so the end of the last page
+  stays in view above the new one. A name the game fills in is counted as 6 cells, a number as 6 and a
+  word as 8.
+- Latin letters, digits and punctuation are drawn with the game's own full-width glyphs; a space is its
+  blank cell. Characters the font lacks (accented letters, the comma, the apostrophe, quotation marks)
+  are drawn from `unifont`, or from the fonts the pack names, into the font's 26 free cells, so a pack can
+  use at most 26 such characters.
+- An area that grows past its place on the disc is moved to free room at the end of the disc, and an
+  area's code with its text can grow to 186,832 bytes, the largest seen to work; a build that passes
+  either limit is refused with the area and what to do.

@@ -6,10 +6,10 @@ import sys
 import zlib
 from pathlib import Path
 
-from ventris_workbench import __version__, dsprobe, emulator, pcsx2, ps2probe
+from ventris_workbench import __version__, dsprobe, emulator, pcsx2, ps1probe, ps2probe
 from ventris_workbench.bindiff import diff_ranges, merge_ranges
 from ventris_workbench.patch import PatchError, apply_patch, create_bps, detect_format
-from ventris_workbench.platforms import snes, w65816
+from ventris_workbench.platforms import ps1, snes, w65816
 
 
 class UnknownGameError(Exception):
@@ -169,6 +169,35 @@ def _cmd_ds_probe(args: argparse.Namespace) -> int:
         save=args.save or "",
     )
     for path in dsprobe.run(args.rom, args.output, plan, timeout=args.timeout):
+        print(path)
+    return 0
+
+
+def _cmd_ps1_probe(args: argparse.Namespace) -> int:
+    plan = ps1probe.Plan(
+        frames=args.frames,
+        input=args.input,
+        shots=args.shot,
+        dumps=args.dump,
+        registers=args.registers,
+        reads=args.reads,
+        writes=args.writes,
+        exec=args.exec,
+        trace_from=args.trace_from,
+        state=args.state,
+        save=args.save or "",
+        real_time=args.real_time,
+    )
+    files = ps1probe.run(
+        args.game,
+        args.output,
+        plan,
+        emulator=args.emulator,
+        bios=args.bios,
+        portable=args.portable,
+        timeout=args.timeout,
+    )
+    for path in files:
         print(path)
     return 0
 
@@ -390,6 +419,80 @@ def build_parser() -> argparse.ArgumentParser:
     ds.add_argument("--timeout", type=int, default=600, help="seconds before giving up")
     ds.set_defaults(func=_cmd_ds_probe)
 
+    ps1_probe = sub.add_parser(
+        "ps1-probe",
+        help="run a PlayStation game in the PCSX-Redux emulator with scripted input and record what it does",
+        description="Starts PCSX-Redux headless for the run, from power-on or from a saved state, and quits it at "
+        "the last frame. Frame 0 is the first frame after power-on, or the moment the state is loaded. Addresses "
+        "are hexadecimal; RAM is given and shown at 80000000-801FFFFF, and an address in RAM may leave out the 80. "
+        f"Needs {ps1probe.EMULATOR_VARIABLE} to name the pcsx-redux binary and {ps1probe.BIOS_VARIABLE} a BIOS, "
+        "or --emulator and --bios.",
+    )
+    ps1_probe.add_argument("game", type=Path, help="the disc image: a .cue, or a .bin or .iso")
+    ps1_probe.add_argument("-o", "--output", type=Path, required=True, help="path prefix for everything written")
+    ps1_probe.add_argument("--frames", type=int, default=600, help="frame at which to stop")
+    ps1_probe.add_argument(
+        "--input",
+        nargs="*",
+        action="extend",
+        default=[],
+        metavar="STEP",
+        help="input steps FRAME:KIND:BUTTONS, where KIND is mash, press, hold or none and the buttons are among "
+        "cross, circle, square, triangle, start, select, up, down, left, right, l1, r1, l2, r2; such as 0:mash:start",
+    )
+    ps1_probe.add_argument(
+        "--shot", nargs="*", action="extend", type=int, default=[], metavar="FRAME", help="take screenshots"
+    )
+    ps1_probe.add_argument(
+        "--dump",
+        nargs="*",
+        action="extend",
+        default=[],
+        metavar="WHAT@FRAME",
+        help="save memory: ram@300 (2 MB), vram@300 (with a PNG of it), scratch@300, or ADDRESS:LENGTH@300",
+    )
+    ps1_probe.add_argument(
+        "--registers", nargs="*", action="extend", type=int, default=[], metavar="FRAME", help="save the registers"
+    )
+    ps1_probe.add_argument(
+        "--reads",
+        nargs="*",
+        action="extend",
+        default=[],
+        metavar="START-END",
+        help="record every read of this range of RAM: frame, instruction, address, width, value, registers",
+    )
+    ps1_probe.add_argument(
+        "--writes", nargs="*", action="extend", default=[], metavar="START-END", help="the same for writes"
+    )
+    ps1_probe.add_argument(
+        "--exec",
+        nargs="*",
+        action="extend",
+        default=[],
+        metavar="ADDRESS",
+        help="record every register each time the instruction at this address runs",
+    )
+    ps1_probe.add_argument(
+        "--trace-from", type=int, default=0, metavar="FRAME", help="start watching and logging at this frame"
+    )
+    ps1_probe.add_argument("--state", type=Path, help="saved state to start from")
+    ps1_probe.add_argument("--save", metavar="FRAME:FILE", help="save a state at this frame")
+    ps1_probe.add_argument("--real-time", action="store_true", help="run at the game's own speed")
+    ps1_probe.add_argument(
+        "--emulator", type=Path, help=f"the pcsx-redux binary, when {ps1probe.EMULATOR_VARIABLE} is not set"
+    )
+    ps1_probe.add_argument("--bios", type=Path, help=f"the BIOS, when {ps1probe.BIOS_VARIABLE} is not set")
+    ps1_probe.add_argument(
+        "--portable",
+        type=Path,
+        metavar="FOLDER",
+        help="where the emulator keeps its memory cards and settings between runs; by default an empty folder "
+        "for each run",
+    )
+    ps1_probe.add_argument("--timeout", type=int, default=300, help="seconds before giving up")
+    ps1_probe.set_defaults(func=_cmd_ps1_probe)
+
     addr = sub.add_parser("addr", help="convert between SNES CPU addresses and file offsets")
     addr.add_argument("value", help="hexadecimal address or offset")
     addr.add_argument("--mapping", choices=("LoROM", "HiROM", "ExHiROM"), required=True)
@@ -416,6 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         pcsx2.Pcsx2Error,
         ps2probe.ProbeError,
         dsprobe.DesmumeError,
+        ps1.DiscError,
         OSError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)

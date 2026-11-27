@@ -12,6 +12,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::error::{Error, Result, at};
+use crate::platforms::ps1;
 use crate::platforms::ps2::Disc;
 
 /// What an adapter is given to read the game from. Each console adds the form its games take.
@@ -19,8 +20,11 @@ pub enum Image {
     /// A cartridge, small enough to hold whole: its bytes, without anything a dumping tool added.
     Cartridge(Vec<u8>),
     /// A disc, too large to hold whole: it stays open, and the files inside it are read as they
-    /// are asked for. It is closed when the image is dropped.
+    /// are asked for. It is closed when the image is dropped. This is a PlayStation 2 disc, an
+    /// image of 2048-byte sectors.
     Disc(Disc),
+    /// A PlayStation disc, held the same way: an image of whole 2352-byte CD sectors.
+    Ps1Disc(ps1::Disc),
 }
 
 impl Image {
@@ -39,6 +43,14 @@ impl Image {
             _ => Err(Error::Image("the image is not a disc".into())),
         }
     }
+
+    /// The open PlayStation disc. An adapter for a PlayStation game starts here.
+    pub fn ps1_disc(&self) -> Result<&ps1::Disc> {
+        match self {
+            Image::Ps1Disc(disc) => Ok(disc),
+            _ => Err(Error::Image("the image is not a PlayStation disc".into())),
+        }
+    }
 }
 
 impl Image {
@@ -47,6 +59,7 @@ impl Image {
         match self {
             Image::Cartridge(rom) => Ok(rom.len() as u64),
             Image::Disc(disc) => Ok(fs::metadata(&disc.path).map_err(at(&disc.path))?.len()),
+            Image::Ps1Disc(disc) => Ok(fs::metadata(&disc.path).map_err(at(&disc.path))?.len()),
         }
     }
 }
