@@ -89,9 +89,12 @@ pub const ROM_SHA1: &str = "a90e1c3491a3120567385245fdb7302c9866fcd4";
 pub const ROM_SIZE: u64 = 0x400_0000;
 pub const SOURCE_LANGUAGE: &str = "ja";
 
-/// The files of the font: the glyphs, and their records.
+/// The files of the font, the glyphs and their records, by name and by number. A glyph is read by the
+/// file's number, which a rebuild keeps, so that drawing the font does not read the name table for each.
 pub const FONT_FILE: &str = "ssfont.dat";
 pub const FONT_RECORDS_FILE: &str = "ssssf.dat";
+pub const FONT_FILE_NUMBER: u16 = 1629;
+pub const FONT_RECORDS_FILE_NUMBER: u16 = 1630;
 pub const GLYPH_SIZE: usize = 16;
 pub const GLYPH_COUNT: usize = 1500;
 /// The greys of the font's palette, from black to white.
@@ -425,9 +428,8 @@ pub fn verify_script(rom: &[u8], texts: &Script) -> Result<()> {
 
 /// The pixels of a glyph, each 0 to 15, in rows of 16; a narrow glyph is in the left half.
 pub fn glyph(rom: &[u8], index: usize) -> Result<Vec<Vec<u8>>> {
-    let files = FileSystem::read(rom)?;
-    let font = files.file_at(rom, FONT_FILE)?;
-    let records = files.file_at(rom, FONT_RECORDS_FILE)?;
+    let font = nds::file_by_number(rom, FONT_FILE_NUMBER)?;
+    let records = nds::file_by_number(rom, FONT_RECORDS_FILE_NUMBER)?;
     let damaged_font = || Error::Image(format!("{FONT_RECORDS_FILE} is damaged"));
     let start = offset_in(records, 0).ok_or_else(damaged_font)?;
     let half = |at: usize| records.get(at..at + 2).map(|pair| usize::from(u16::from_le_bytes([pair[0], pair[1]])));

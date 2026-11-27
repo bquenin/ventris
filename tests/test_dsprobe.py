@@ -90,6 +90,11 @@ def test_what_makes_no_sense_is_refused():
         Plan(exec_range="here"),
         Plan(save="scene.dst"),
         Plan(touch=["1:300,10"]),
+        # What is asked for after the run ends would silently not be there.
+        Plan(frames=600, save="scene.dst@900"),
+        Plan(frames=60, shots=[61]),
+        Plan(frames=60, dumps=["main@120"]),
+        Plan(frames=60, registers=[100]),
     ):
         with pytest.raises(ProbeError):
             dsprobe.prepare(plan)
@@ -209,6 +214,23 @@ def test_a_run_that_fails_says_why(tmp_path, monkeypatch):
     with pytest.raises(DesmumeError, match="the emulator run failed"):
         dsprobe.run(rom, tmp_path / "run", Plan(frames=1))
     assert not (tmp_path / "run-shot-1.png").exists()
+
+
+def test_only_what_a_run_wrote_is_cleared(tmp_path):
+    # A state kept beside the outputs, or in a folder whose name starts with the prefix, is not an output.
+    states = tmp_path / "run-states"
+    states.mkdir()
+    (states / "scene.dst").write_bytes(b"state")
+    (tmp_path / "run-scene.dst").write_bytes(b"state")
+    (tmp_path / "run-notes.txt").write_text("mine")
+    battery = tmp_path / "run-battery"
+    battery.mkdir()
+    (battery / "game.dsv").write_bytes(b"save")
+    for name in ("run-shot-60.png", "run-main-60.bin", "run-dump-02200000-60.bin", "run-reads.txt"):
+        (tmp_path / name).write_bytes(b"old")
+    dsprobe._clear(tmp_path / "run", [states / "scene.dst"])
+    left = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
+    assert left == ["run-battery", "run-notes.txt", "run-scene.dst", "run-states", "run-states/scene.dst"]
 
 
 @needs_emulator

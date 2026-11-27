@@ -24,7 +24,7 @@ that made the access sees them; both processors are watched at once, and each li
 import ctypes
 import json
 import os
-import shutil
+import re
 import struct
 import subprocess
 import sys
@@ -177,7 +177,7 @@ def prepare(plan: Plan) -> Schedule:
     """Check a plan and work out what to do at each frame. Raises ``ProbeError`` for what makes no sense."""
     watches = [("reads", text, *parse_range(text)) for text in plan.reads]
     watches += [("writes", text, *parse_range(text)) for text in plan.writes]
-    return Schedule(
+    schedule = Schedule(
         keypad=keypad(button_changes(plan.input, plan.frames, BUTTONS)),
         touches=[parse_touch(text) for text in plan.touch],
         dumps=[parse_ds_dump(text) for text in plan.dumps],
@@ -185,6 +185,16 @@ def prepare(plan: Plan) -> Schedule:
         exec_range=parse_range(plan.exec_range) if plan.exec_range else None,
         save=parse_save(plan.save) if plan.save else None,
     )
+    # Something asked for at a frame the run never reaches would silently not be there.
+    asked = [("a screenshot", frame) for frame in plan.shots]
+    asked += [("the registers", frame) for frame in plan.registers]
+    asked += [(f"a dump of {dump.name}", dump.frame) for dump in schedule.dumps]
+    if schedule.save:
+        asked.append((f"the state {schedule.save[0]}", schedule.save[1]))
+    for what, frame in asked:
+        if frame > plan.frames:
+            raise ProbeError(f"{what} is asked for at frame {frame}, after the run ends at frame {plan.frames}")
+    return schedule
 
 
 def write_png(path: Path, rgb: bytes, width: int, height: int) -> None:
@@ -290,15 +300,26 @@ def request(library: Path, rom: Path, prefix: Path, plan: Plan) -> str:
     )
 
 
-def _clear(prefix: Path, keep: Path | None) -> None:
-    """Remove what an earlier run with the same prefix wrote, but for the state this one starts from."""
+# The names a run gives what it writes, after its prefix and a hyphen: nothing else is removed before a run.
+_WRITTEN = re.compile(
+    r"(shot-\d+\.png|[a-z0-9]+-\d+\.bin|dump-[0-9a-f]+-\d+\.bin|registers-\d+\.txt|reads\.txt|writes\.txt|exec\.txt)"
+)
+
+
+def _clear(prefix: Path, keep: list[Path]) -> None:
+    """Remove what an earlier run with the same prefix wrote: its screenshots, dumps and reports, and its
+    battery save. Only files named as a run names them go, and never one of ``keep``, the files this run
+    is given or asked to write, so a state kept beside the outputs, or in a folder whose name starts with
+    the prefix, is safe."""
+    kept = {path.resolve() for path in keep}
     for old in prefix.parent.glob(prefix.name + "-*"):
-        if keep is not None and old.resolve() == keep.resolve():
-            continue
-        if old.is_dir():
-            shutil.rmtree(old)
-        else:
+        if old.is_file() and old.resolve() not in kept and _WRITTEN.fullmatch(old.name[len(prefix.name) + 1 :]):
             old.unlink()
+    battery = prefix.parent / (prefix.name + "-battery")
+    if battery.is_dir():
+        for old in battery.iterdir():
+            if old.is_file() and old.resolve() not in kept:
+                old.unlink()
 
 
 def run(rom: Path, output: Path, plan: Plan, timeout: int = 600) -> list[Path]:
@@ -313,7 +334,8 @@ def run(rom: Path, output: Path, plan: Plan, timeout: int = 600) -> list[Path]:
         raise DesmumeError(f"the state {plan.state} is not a file")
     prefix = output.resolve()
     prefix.parent.mkdir(parents=True, exist_ok=True)
-    _clear(prefix, plan.state)
+    keep = [rom] + ([plan.state] if plan.state else []) + ([Path(schedule.save[0])] if schedule.save else [])
+    _clear(prefix, keep)
     try:
         result = subprocess.run(
             command(),
@@ -331,9 +353,11 @@ def run(rom: Path, output: Path, plan: Plan, timeout: int = 600) -> list[Path]:
         code = result.returncode if result.returncode >= 0 else result.returncode & 0xFFFFFFFF
         detail = "; ".join(errors[-3:]) or f"it stopped with exit code {code:#x}, with no error message"
         raise DesmumeError(f"the emulator run failed: {detail}")
-    files = sorted(path for path in prefix.parent.glob(prefix.name + "-*") if path.is_file())
-    if schedule.save and Path(schedule.save[0]).resolve() not in files:
-        files.append(Path(schedule.save[0]).resolve())
+    written = prefix.parent.glob(prefix.name + "-*")
+    files = sorted(path for path in written if path.is_file() and _WRITTEN.fullmatch(path.name[len(prefix.name) + 1 :]))
+    state = Path(schedule.save[0]).resolve() if schedule.save else None
+    if state and state.is_file() and state not in files:
+        files.append(state)
     return files
 
 

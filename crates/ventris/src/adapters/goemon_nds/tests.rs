@@ -151,6 +151,10 @@ fn every_glyph_the_script_uses_has_a_character() {
 #[test]
 fn the_font_is_read() {
     let Some(rom) = testing::cartridge("goemon-nds") else { return };
+    // The font's files are where their numbers say.
+    let files = FileSystem::read(&rom).unwrap();
+    assert_eq!(files.names[&FONT_FILE_NUMBER], FONT_FILE);
+    assert_eq!(files.names[&FONT_RECORDS_FILE_NUMBER], FONT_RECORDS_FILE);
     // あ fills its square; a narrow glyph, the capital A of the ASCII table, only its left half.
     let wide = glyph(&rom, 0x0E).unwrap();
     assert!(wide.iter().flatten().any(|pixel| *pixel == 15));

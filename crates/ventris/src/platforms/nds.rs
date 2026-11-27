@@ -275,6 +275,23 @@ impl FileSystem {
     }
 }
 
+/// The bytes of a file, found by its number in the allocation table alone, without reading the name
+/// table: for an adapter that knows the number and reads the file often, such as once per glyph.
+pub fn file_by_number(rom: &[u8], number: u16) -> Result<&[u8]> {
+    let Some(header) = Header::read(rom) else {
+        return image_error("this is not a Nintendo DS game: its header is not one");
+    };
+    let entry = header.fat_offset + 8 * usize::from(number);
+    if 8 * usize::from(number) + 8 > header.fat_size || entry + 8 > rom.len() {
+        return image_error(format!("the image has no file {number}"));
+    }
+    let (start, end) = (u32_at(rom, entry) as usize, u32_at(rom, entry + 4) as usize);
+    match rom.get(start..end) {
+        Some(data) => Ok(data),
+        None => image_error(format!("file {number} is past the end of the image")),
+    }
+}
+
 fn align(offset: usize) -> usize {
     offset.div_ceil(FILE_ALIGNMENT) * FILE_ALIGNMENT
 }
@@ -492,6 +509,8 @@ pub(crate) mod tests {
         assert_eq!(fs.names.values().collect::<Vec<_>>(), ["a.dat", "b.dat", "sub/c.dat"]);
         assert_eq!(fs.file_at(&rom, "sub/c.dat").unwrap(), b"charlie");
         assert_eq!(fs.file(&rom, 1).unwrap(), b"bravo!");
+        assert_eq!(file_by_number(&rom, 2).unwrap(), b"charlie");
+        assert!(file_by_number(&rom, 3).is_err());
         assert!(fs.file_at(&rom, "missing.dat").is_err());
     }
 
