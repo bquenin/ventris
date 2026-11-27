@@ -105,7 +105,16 @@
 //! for the readings beside each column and puts lines written across 49 dots apart, four to a page,
 //! the fourth behind the storyteller's figure. The option sets it to 1, which puts them 16 dots apart,
 //! as lines of the dialogue are. (2 puts the second line at the foot of the page; what the numbers
-//! stand for is not known beyond what was seen.)
+//! stand for is not known beyond what was seen.) The script sets up two windows, the book's pages,
+//! with the instruction 0x67, and fills the first before the second: the right page, then the left,
+//! as Japanese columns go. The option swaps their corners, so that the text starts on the left page
+//! and goes on to the right; a speaker's icon goes with its window.
+//!
+//! Some of the storyteller's strings run on into the next, with no line break between: the next
+//! string goes on in the same line. A speaker's icon takes about three cells at the start of a line.
+//! A pack lays these out in its text (`NOTES.md` of the English pack says how): after the string
+//! that ends at 16654, which the script gives an odd order of instructions, a longer first line
+//! beside the icon, or a line break at its end, stops the game.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -708,21 +717,33 @@ const VERTICAL: u8 = 0x84;
 /// storyteller's script gives 4, and 1 puts lines written across 16 dots apart.
 const SPACING: u8 = 0x88;
 const SPACING_ACROSS: u16 = 1;
+/// The instruction that gives the window being set up its corners, in dots (left, top, right,
+/// bottom), and the storyteller's two windows: the first is the book's right page, which Japanese
+/// fills first, and the second its left page.
+const WINDOW: u8 = 0x67;
+const RIGHT_PAGE: [u16; 4] = [0x90, 8, 0xF0, 0xAD];
+const LEFT_PAGE: [u16; 4] = [0x10, 8, 0x70, 0xAD];
 
-/// A script file with each instruction `VERTICAL` set to write across, and each `SPACING` of the
-/// storyteller's to put the lines 16 dots apart: the same bytes, but for those arguments.
+/// A script file written across: each instruction `VERTICAL` set to write across, each `SPACING` of the
+/// storyteller's to put the lines 16 dots apart, and the two pages of the book swapped, so that the
+/// text starts on the left page and goes on to the right, as English is read. The same bytes, but for
+/// those arguments.
 pub fn written_across(name: &str, data: &[u8]) -> Result<Vec<u8>> {
     let mut out = data.to_vec();
     for piece in pieces(name, data)? {
         for instruction in instructions(name, data, piece)? {
-            let argument = match (instruction.op, instruction.args.as_slice()) {
-                (VERTICAL, [1]) => Some((0, 0)),
-                (SPACING, [0xFFFF, 4]) => Some((1, SPACING_ACROSS)),
+            let arguments: Option<&[u16]> = match (instruction.op, instruction.args.as_slice()) {
+                (VERTICAL, [1]) => Some(&[0]),
+                (SPACING, [0xFFFF, 4]) => Some(&[0xFFFF, SPACING_ACROSS]),
+                (WINDOW, args) if args == RIGHT_PAGE => Some(&LEFT_PAGE),
+                (WINDOW, args) if args == LEFT_PAGE => Some(&RIGHT_PAGE),
                 _ => None,
             };
-            if let Some((index, value)) = argument {
-                let at = instruction.offset + 2 + 2 * index;
-                out[at..at + 2].copy_from_slice(&value.to_le_bytes());
+            if let Some(arguments) = arguments {
+                for (index, value) in arguments.iter().enumerate() {
+                    let at = instruction.offset + 2 + 2 * index;
+                    out[at..at + 2].copy_from_slice(&value.to_le_bytes());
+                }
             }
         }
     }

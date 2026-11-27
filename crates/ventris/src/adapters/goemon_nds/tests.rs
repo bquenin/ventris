@@ -186,18 +186,33 @@ fn a_script_is_laid_out_again_with_a_longer_string() {
 }
 
 #[test]
-fn the_storyteller_is_written_across_with_lines_16_dots_apart() {
-    // The direction and the spacing of the storyteller's windows change; another spacing does not.
-    let code: Vec<u8> =
-        [op(0x62, &[0]), op(VERTICAL, &[1]), op(SPACING, &[0xFFFF, 4]), op(SPACING, &[0, 4]), op(TEXT, &[0x0E])]
-            .concat();
+fn the_storyteller_is_written_across_left_page_first() {
+    // The direction, the spacing and the place of the storyteller's two windows change; another
+    // spacing and another window do not.
+    let other_window = [0x10, 0x78, 0xF0, 0xA8];
+    let code: Vec<u8> = [
+        op(0x62, &[0]),
+        op(WINDOW, &RIGHT_PAGE),
+        op(VERTICAL, &[1]),
+        op(SPACING, &[0xFFFF, 4]),
+        op(0x62, &[1]),
+        op(WINDOW, &LEFT_PAGE),
+        op(SPACING, &[0, 4]),
+        op(WINDOW, &other_window),
+        op(TEXT, &[0x0E]),
+    ]
+    .concat();
     let data = make_script(&[&code]);
     let across = written_across("x.dat", &data).unwrap();
     let expected: Vec<u8> = [
         op(0x62, &[0]),
+        op(WINDOW, &LEFT_PAGE),
         op(VERTICAL, &[0]),
         op(SPACING, &[0xFFFF, SPACING_ACROSS]),
+        op(0x62, &[1]),
+        op(WINDOW, &RIGHT_PAGE),
         op(SPACING, &[0, 4]),
+        op(WINDOW, &other_window),
         op(TEXT, &[0x0E]),
     ]
     .concat();
