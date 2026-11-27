@@ -290,6 +290,36 @@ fn areas_that_grew_go_in_the_sectors_moved_areas_leave_before_the_free_room() {
     assert_eq!(place_grown(&[], 100..120), (vec![], 0));
 }
 
+#[test]
+fn a_door_short_on_the_heap_is_said_once_and_never_dropped() {
+    let short = |area, other, mutual, moment: &str| Shortfall { area, other, mutual, moment: moment.into(), over: 8 };
+    let changed = BTreeSet::from([153]);
+    // A door the events show between a changed area and one that is not: both sides count it, and
+    // the build says it from the changed side alone.
+    let both = vec![
+        short(153, Some(154), true, "going from it into area 154"),
+        short(154, Some(153), true, "going into it from area 153"),
+    ];
+    let said = heap_refusals(both, &changed);
+    assert_eq!(said.len(), 1);
+    assert!(said[0].starts_with("area 153: going from it into area 154,"), "{said:?}");
+    assert!(said[0].ends_with(": shorten some of its changed lines"), "{said:?}");
+    // A door assumed into an unchanged area from the changed one, which has no door there: no moment
+    // of the changed area counts it, so it is said from the unchanged one, with the lines to shorten.
+    let assumed = vec![short(123, Some(153), false, "going into it from area 153")];
+    let said = heap_refusals(assumed, &changed);
+    assert_eq!(said.len(), 1);
+    assert!(said[0].starts_with("area 123: going into it from area 153,"), "{said:?}");
+    assert!(said[0].ends_with(": shorten some of the changed lines of area 153"), "{said:?}");
+    // Between two changed areas, each side says it; an unchanged area alone is short for the grids.
+    let said = heap_refusals(
+        vec![short(154, Some(153), true, "going into it from area 153"), short(96, None, false, "in a battle")],
+        &BTreeSet::from([153, 154]),
+    );
+    assert!(said[0].ends_with("(or those of area 153)"), "{said:?}");
+    assert!(said[1].contains(FULL_WIDTH), "{said:?}");
+}
+
 /// The game's disc, opened, or None where it is not there to test with.
 fn game() -> Option<Image> {
     Some(Image::Ps1Disc(Disc::open(&crate::testing::game("god-ps1")?).unwrap()))
@@ -478,8 +508,17 @@ fn build_puts_the_program_s_text_and_the_menus_labels_in() {
         // is zero bytes.
         let file = program_text::program_file(&copy).unwrap();
         assert_eq!(file[687388..687398], *b"ITEMS\0\0\0\0\0");
+        // Without the renderer and with no area changed, the heap is as the game has it: not checked,
+        // and the game still reads a new area's rest in advance.
+        assert_eq!(program_word(&copy, heap::REST_IN_ADVANCE), program_word(disc, heap::REST_IN_ADVANCE));
         assert_eq!(file[687398..687460], program_text::program_file(disc).unwrap()[687398..687460]);
     }
+    // With the renderer, which a program's string in Latin letters puts in, every area is checked, and
+    // the game made to read the rest after.
+    fs::remove_file(&out).unwrap();
+    let built = build(disc, &program_pack(&[(657748, "Welcome!")], &[]), &out, &BuildOptions::default()).unwrap();
+    assert!(built.summary.iter().any(|line| line.starts_with("room:      105200 bytes")), "{:?}", built.summary);
+    assert_eq!(program_word(&Disc::open(&out).unwrap(), heap::REST_IN_ADVANCE), 0x0000_1021);
     // What does not fit the screen or the room is refused, every string at once, and nothing written.
     fs::remove_file(&out).unwrap();
     let pack = program_pack(
@@ -515,35 +554,46 @@ fn build_puts_the_program_s_text_and_the_menus_labels_in() {
     assert!(!out.exists());
 }
 
+/// The word at an address in the program's file.
+fn program_word(disc: &Disc, address: u32) -> u32 {
+    let file = program_text::program_file(disc).unwrap();
+    let at = exe::offset(&file, address, 4).unwrap();
+    u32::from_le_bytes(file[at..at + 4].try_into().unwrap())
+}
+
 #[test]
-fn an_area_the_game_leaves_no_room_for_cannot_grow() {
+fn area_105_grows_as_far_as_the_three_copies_from_area_107_leave_room() {
     let Some(image) = game() else { return };
     let disc = image.ps1_disc().unwrap();
     let folder = tempfile::tempdir().unwrap();
     let out = folder.path().join("built.bin");
-    let pack = |text: &str| Pack::of(Script::from([("105".to_string(), BTreeMap::from([(4, text.to_string())]))]));
-    // Going from area 107 into area 105, the game leaves only `SPARE` bytes of its heap free: area 105
-    // cannot take a word more, and the three copies of its code need three times that.
-    let refused = build(
-        disc,
-        &pack("{SAY}おやおや、{NAME:17}さんは\nマヒしてますね。\n{NUM}Ｇかかりますが\nなおしますか？いいえ{/SAY}"),
-        &out,
-        &BuildOptions::default(),
-    );
+    let pack = |kanji: usize| {
+        let text = format!("{{SAY}}{}{{/SAY}}", "日".repeat(kanji));
+        Pack::of(Script::from([("105".to_string(), BTreeMap::from([(4, text)]))]))
+    };
+    // Going from area 107 into area 105, the original game leaves only `SPARE` bytes of its heap free,
+    // as it has read 105's rest in advance; the build makes it read the rest after, which leaves
+    // 249,048 bytes free there. The three copies of 105's code take three times what it grows.
+    let built = build(disc, &pack(30_000), &out, &BuildOptions::default()).unwrap();
+    let copy = Disc::open(&out).unwrap();
+    let grown = footprints(&copy).unwrap()[&105].code - footprints(disc).unwrap()[&105].code;
+    assert!(grown > 60_000, "{grown}");
     assert_eq!(
-        refused.err().unwrap().to_string(),
-        "area 105: going into it from area 107, the game would need 12 bytes more of its heap than it has room for: \
-         shorten some of its changed lines"
+        built.summary[2],
+        format!(
+            "room:      {} bytes of the heap free at the tightest moment, area 105, going into it from area 107 \
+             (the game leaves 19636 at its own)",
+            SPARE + 229_412 - 3 * grown
+        )
     );
+    assert_eq!(program_word(&copy, heap::REST_IN_ADVANCE), 0x0000_1021);
+    assert_eq!(program_word(disc, heap::REST_IN_ADVANCE), 0x0C00_AD89);
+    // Grown by more than a third of what is past `SPARE` there, it no longer fits.
+    fs::remove_file(&out).unwrap();
+    let refused = build(disc, &pack(40_000), &out, &BuildOptions::default()).err().unwrap().to_string();
+    assert!(refused.starts_with("area 105: going into it from area 107, the game would need "), "{refused}");
+    assert!(refused.ends_with(" bytes more of its heap than it has room for: shorten some of its changed lines"));
     assert!(!out.exists());
-    // A line as long as the game's own goes in.
-    let same = "{SAY}おやおや、{NAME:17}さんは\nマヒしてますね。\n{NUM}Ｇかかりますが\nなおすのですか{/SAY}";
-    let built = build(disc, &pack(same), &out, &BuildOptions::default()).unwrap();
-    assert_eq!(
-        built.summary[1],
-        "room:      19636 bytes of the heap free at the tightest moment, area 105, going into it from area 107 (the \
-         game leaves 19636 at its own)"
-    );
 }
 
 #[test]
@@ -911,6 +961,13 @@ fn build_draws_each_character_at_its_own_width_and_installs_the_renderer() {
     let text = "{SAY}Wake up, {NAME:19}! It's morning, élan.{/SAY}";
     let built = build(disc, &pack_of(&[(109, text)]), &out, &BuildOptions::default()).unwrap();
     let characters = plain_characters("Wake up,! It's morning, élan.").len();
+    // With the renderer, every area's moments are checked, its grids counted at each, in the game
+    // made to read a new area's rest after a door.
+    assert_eq!(
+        built.summary[1],
+        "room:      105200 bytes of the heap free at the tightest moment, area 177, in a battle (the game leaves \
+         19636 at its own)"
+    );
     let pairs: usize = built.summary[2].split(", and ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
     assert!(pairs > 0);
     assert_eq!(

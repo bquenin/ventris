@@ -54,8 +54,10 @@
 //!
 //! How large an area may grow. The game loads an area's code onto its heap, where it must find room
 //! for it among everything else, and most of all when the player goes through a door, as the old
-//! area and the new are both there for a while. Every moment of a changed area must leave at least as
-//! much of the heap free as the game itself does at its tightest (see `heap`).
+//! area and the new are both there for a while. Every moment of a changed area, and of every area
+//! where the build puts the renderer in, must leave at least as much of the heap free as the game
+//! itself does at its tightest; and the build makes the game read a new area's pictures and other
+//! data only once the old area is gone, which leaves its doors far more room (see `heap`).
 //!
 //! How a string is fitted to the window (`fit`). The dialogue's window is 16 cells wide and 4 lines
 //! high, 224 pixels across, a glyph of the game's being 14. A spoken line starts with 「, and the lines
@@ -194,11 +196,11 @@ pub const LIMITS: &str = "the window shows 4 lines of 224 pixels, 210 in a spoke
                           game fills in as 84 pixels, a number as 84 and a word as 112 (with wrapping off, a line \
                           wider than the window is refused); an area's code, its text included, can grow only as far \
                           as the game's heap has room for when the player goes through a door into or out of the \
-                          area, loads one of its maps or fights in it: not at all for areas 105 and 107, a few \
-                          thousand bytes for areas 131, 154, 157 and 179, and over 150,000 for half of the areas \
-                          (docs/packs.md lists the tightest); a letter drawn at its own width takes one byte, and \
-                          each run of them one more, a kana one, and the pairs of letters a pack writes most are \
-                          written a byte each, which takes about two fifths of the bytes off English";
+                          area, loads one of its maps or fights in it: by more than 52,000 bytes for every area, and \
+                          by more than 180,000 for half of them (docs/packs.md lists the tightest); a letter drawn at \
+                          its own width takes one byte, and each run of them one more, a kana one, and the pairs of \
+                          letters a pack writes most are written a byte each, which takes about two fifths of the \
+                          bytes off English";
 
 // --- characters ------------------------------------------------------------
 
@@ -1216,7 +1218,7 @@ struct Done {
     /// they used, of how many it has.
     moved: Vec<String>,
     spare: (usize, usize),
-    /// The least of the heap that a moment of the changed areas leaves free, and which moment it is.
+    /// The least of the heap that a moment of the areas checked leaves free, and which moment it is.
     least: Option<(usize, String)>,
     new_characters: Vec<char>,
     /// The characters drawn at their own widths, and the cells free for them, and the pairs of them
@@ -1658,30 +1660,27 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         done.moved.push(section.to_string());
     }
     done.spare = (spare_used, spare.len());
-    // Room on the heap for every moment of the areas that changed. A pack that changes no area's
-    // code has nothing to check, and the areas are not read for it.
+    // Room on the heap for every moment of the areas that changed, and of every area where the
+    // renderer is put in, since its grids take more of the heap while windows are open (see `vwf`).
+    // The game is made to read a new area's rest only once it has left the old one, which leaves its
+    // doors much more room, and the check counts on it (see `heap`). A pack that changes neither
+    // leaves the heap as the game has it: nothing is checked or changed, and the areas are not read.
     let changed: BTreeSet<usize> = new_codes.keys().copied().collect();
-    let (shortfalls, least) = if changed.is_empty() {
+    let (shortfalls, least) = if changed.is_empty() && renderer.is_empty() {
         (Vec::new(), None)
     } else {
+        let (at, data) = heap::door_patch(&program_text::program_file(disc)?)?;
+        patches.push((PROGRAM, at as u64, data));
         let mut footprints = (*footprints(disc)?).clone();
         for (entry, code) in &new_codes {
             footprints.get_mut(entry).expect("every area has a footprint").code = *code;
         }
-        // The renderer's grids take more of the heap while windows are open (see `vwf`).
-        heap::check(&footprints, &changed, if renderer.is_empty() { 0 } else { vwf::GRIDS })
+        let (checked, reserve) =
+            if renderer.is_empty() { (changed.clone(), 0) } else { (footprints.keys().copied().collect(), vwf::GRIDS) };
+        heap::check(&footprints, &checked, reserve)
     };
     done.least = least;
-    for Shortfall { area, other, moment, over } in shortfalls {
-        let also = match other {
-            Some(other) if changed.contains(&other) => format!(" (or those of area {other:03})"),
-            _ => String::new(),
-        };
-        refusals.push(format!(
-            "area {area:03}: {moment}, the game would need {over} bytes more of its heap than it has room for: \
-             shorten some of its changed lines{also}"
-        ));
-    }
+    refusals.extend(heap_refusals(shortfalls, &changed));
     if !homeless.is_empty() {
         let wanted: usize = needs.iter().map(|(.., sectors)| sectors).sum();
         refusals.push(format!(
@@ -1705,6 +1704,37 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
     }
     ps1::write_image(disc, output, &patches)?;
     Ok(Built { summary: done.summary() })
+}
+
+/// What a build says of each moment on the heap it would leave short, and how to fix it. `changed` is
+/// the areas whose code the pack changes. A door between a changed area and one that is not is said
+/// once, from the changed side, where the other side's moment is the changed area's own too
+/// (`Shortfall::mutual`); a door assumed into an unchanged area is said from that area, since no
+/// moment of the changed one counts it.
+fn heap_refusals(shortfalls: Vec<Shortfall>, changed: &BTreeSet<usize>) -> Vec<String> {
+    let mut refusals = Vec::new();
+    for Shortfall { area, other, mutual, moment, over } in shortfalls {
+        let fix = match other {
+            Some(other) if changed.contains(&other) && !changed.contains(&area) => {
+                if mutual {
+                    continue;
+                }
+                format!("shorten some of the changed lines of area {other:03}")
+            }
+            Some(other) if changed.contains(&other) => {
+                format!("shorten some of its changed lines (or those of area {other:03})")
+            }
+            _ if changed.contains(&area) => "shorten some of its changed lines".to_string(),
+            _ => format!(
+                "the renderer's larger grids take {} bytes of it: build with the option {FULL_WIDTH}",
+                vwf::GRIDS
+            ),
+        };
+        refusals.push(format!(
+            "area {area:03}: {moment}, the game would need {over} bytes more of its heap than it has room for: {fix}"
+        ));
+    }
+    refusals
 }
 
 #[cfg(test)]
