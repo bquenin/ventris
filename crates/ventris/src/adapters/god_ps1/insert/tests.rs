@@ -928,6 +928,20 @@ fn a_monster_s_name_leaves_room_for_the_letter_after_it() {
 }
 
 #[test]
+fn a_place_s_name_fits_the_caption_s_copy_of_it() {
+    let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
+    let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
+    let place = program_text::PLACE_NAMES.start + 0x10;
+    // A run and 30 characters fit, with the zero byte, in the caption's 32 bytes: narrow ones, so that
+    // the line is not too wide first.
+    let (thirty, thirty_one) = ("|".repeat(30), "|".repeat(31));
+    assert!(width_of(&thirty_one, &renderer) <= 96);
+    assert_eq!(program_string(&thirty, place, &hex("a3"), &writing, false).unwrap().len(), 31);
+    let refused = program_string(&thirty_one, place, &hex("a3"), &writing, false).unwrap_err();
+    assert!(refused.to_string().starts_with("it takes 32 bytes, and the caption"), "{refused}");
+}
+
+#[test]
 fn a_code_has_a_cell_in_each_of_the_two_fonts() {
     let large = large_cell(0x5A7);
     assert_eq!((large.page, large.plane, large.x, large.y, large.width), (1, 0, 7 * 16, 10 * 16, 16));
@@ -1048,8 +1062,7 @@ fn build_draws_each_character_at_its_own_width_and_installs_the_renderer() {
     // stands for a character's code, or two.
     let (old, new) = (program_text::program_file(disc).unwrap(), program_text::program_file(&copy).unwrap());
     let code = vwf::PLACEMENT.code_address();
-    let assembly = crate::platforms::asm_mips::assemble(include_str!("../vwf.asm"), &[("CODE", i64::from(code))]);
-    let run_codes = (assembly.unwrap().label("run_codes").unwrap() - code) as usize;
+    let run_codes = (vwf::assemble_renderer().unwrap().label("run_codes").unwrap() - code) as usize;
     let table = exe::offset(&new, vwf::PLACEMENT.room.start, 4).unwrap()
         + (exe::LOADER_SIZE + exe::FINISH_SIZE) as usize
         + run_codes;

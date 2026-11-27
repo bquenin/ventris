@@ -184,6 +184,9 @@ const SMALL_NARROW_LEFT: usize = 2;
 /// The most bytes a monster's name may take with the renderer: the battle copies it into a record of
 /// 20 bytes, and puts a space, a letter and a zero byte after it (see `vwf`).
 const MONSTER_NAME_BYTES: usize = 17;
+/// The most bytes a place's name may take: the caption that names an area copies it, with its zero
+/// byte, into 32 bytes on the stack.
+const PLACE_NAME_BYTES: usize = 31;
 
 /// The characters the renderer always has, when a build puts it in: those of the numbers and names
 /// the game puts into a string, and of the letters after the names of monsters of a kind.
@@ -1419,6 +1422,14 @@ fn program_string(text: &str, offset: u32, own: &[u8], writing: &Writing, wrap: 
     if writing.renderer.is_some() && program_text::MONSTER_NAMES.contains(&offset) && data.len() > MONSTER_NAME_BYTES {
         return text_error(format!(
             "it takes {} bytes, and a battle copies a monster's name into a record of 20 bytes, where a name drawn              at its own widths needs room for a space and a letter after it when several of a kind are met:              shorten it to {MONSTER_NAME_BYTES}, a letter taking a byte and each run of them one more",
+            data.len()
+        ));
+    }
+    if program_text::PLACE_NAMES.contains(&offset) && data.len() > PLACE_NAME_BYTES {
+        return text_error(format!(
+            "it takes {} bytes, and the caption that names an area the first time it is entered copies a place's \
+             name into 32 bytes, with the zero byte that ends it: shorten it to {PLACE_NAME_BYTES}, a letter taking \
+             a byte and each run of them one more",
             data.len()
         ));
     }

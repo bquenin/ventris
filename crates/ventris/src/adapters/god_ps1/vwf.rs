@@ -70,14 +70,35 @@
 //! kind ($8004A9BC), the game's own byte for A, B, C; after a name that ends in a run, the renderer
 //! puts a space and the letter in the run (`suffix`), so a monster's name needs room for one byte more.
 //!
-//! Where the code is. The renderer's code and its tables, about 7 KB, go at $801F8000, the bottom
+//! What the game centres. A few boxes are placed by counting the characters of their text, each 12
+//! or 14 pixels, and the renderer places text with a run by how wide it is drawn instead (`measure`
+//! in `vwf.asm`: the widest line, a pair as its two characters), so it sits as the game's own did.
+//! Text with no run is placed by the game's own count, exactly as before.
+//!
+//! - The shop's title is centred on the screen, 12 pixels a character ($800532CC, by the count at
+//!   $80057B48), and so is a name centred on a point ($800564CC, from $800560E0).
+//! - The caption that names an area the first time it is entered ($80031EE8) is a window of the
+//!   dialogue's font as many cells wide as its text has characters (the count at $8003340C), centred
+//!   by 16 pixels a cell, whose grid is 16 cells of the game's own variables. Its text's width now
+//!   gives the cells, 14 pixels each, and the draw routines start its lines half of what the text
+//!   leaves of them further in, so the text is centred in its frame. Its grid has four cells to a
+//!   cell, as the other windows' do, at `CAPTION_GRID`, past what the loader copies.
+//! - The memory card's message box ($800716A4) is sized and centred by its longest line, 12 pixels a
+//!   character (the count at $800715EC); the width is taken to the next multiple of 4, which every
+//!   width of 12 a character is, for the box's sides to come out even.
+//! - Event $4A ($8001E7EC), which opens the lists of choices (the diary's, an inn's, a shop's), makes
+//!   its window as many cells wide as the longest line has characters, its right side at a set place;
+//!   the width of that line now gives the cells.
+//!
+//! Where the code is. The renderer's code and its tables, about 8 KB, go at $801F8000, the bottom
 //! of the 32 KB the game leaves for its stack above its heap (the heap ends at $801F8000, the stack
 //! starts at $801FFFF0). Measured in PCSX-Redux from power-on through the opening movie and the
 //! first dialogue, nothing the game runs wrote to $801F8000-$801FDFFF; only the BIOS's start-up,
 //! before the game is loaded, uses it. The game's file has no free room, and cannot grow, so the code
 //! is kept until then in the zero bytes at $8008EFC0-$80091000, variables of the game's that start
 //! at zero, and loaded by `ps1::exe::install`: main's call of the heap's set-up ($800129C8) goes to
-//! a loader there first, which copies the code to $801F8000 and sets the block back to zero.
+//! a loader there first, which copies the code to $801F8000 and sets the block back to zero. The
+//! caption's grid is past the most the loader can copy, at $801FA000, in the same unused room.
 //!
 //! The grids of the four windows are four times as large, on the heap: the largest the game opens
 //! is 18 cells by 4, so the grids take at most `GRIDS` bytes more than the game's own while four
@@ -96,6 +117,12 @@ use crate::platforms::ps1::exe::{self, Placement};
 /// Where the renderer's code is kept and goes (see the module's comment).
 pub const PLACEMENT: Placement =
     Placement { hook: 0x8001_29C8, room: 0x8008_EFC0..0x8009_1000, destination: 0x801F_8000 };
+/// Where the caption that names an area keeps its grid (see the module's comment): past the most of
+/// the room the loader copies, in the stack's room that nothing the game runs was seen to write.
+pub const CAPTION_GRID: u32 = 0x801F_A000;
+/// The bytes of that grid: 16 cells wide, the most the game's caption has, each cell four, two bytes
+/// a cell (`CAPTION_BYTES` in `vwf.asm`).
+pub const CAPTION_GRID_BYTES: u32 = 16 * CELLS_PER_COLUMN as u32 * 2;
 /// The width of a glyph of the game's own, in the dialogue's font and in the small one.
 pub const LARGE: usize = 14;
 pub const SMALL: usize = 12;
@@ -249,7 +276,7 @@ impl Renderer {
     /// in the file.
     pub fn install(&self, exe: &[u8], pairs: &Pairs) -> Result<Vec<(usize, Vec<u8>)>> {
         let code = PLACEMENT.code_address();
-        let assembly = assemble(include_str!("vwf.asm"), &[("CODE", i64::from(code))])?;
+        let assembly = assemble_renderer()?;
         let widths = (assembly.label("widths")? - code) as usize;
         let run_codes = (assembly.label("run_codes")? - code) as usize;
         let narrow_codes = (assembly.label("narrow_codes")? - code) as usize;
@@ -284,6 +311,12 @@ impl Renderer {
         }
         Ok(patches)
     }
+}
+
+/// The renderer's code and tables, assembled where they go.
+pub(super) fn assemble_renderer() -> Result<crate::platforms::asm_mips::Assembly> {
+    let symbols = [("CODE", i64::from(PLACEMENT.code_address())), ("CAPTION_GRID", i64::from(CAPTION_GRID))];
+    assemble(include_str!("vwf.asm"), &symbols)
 }
 
 /// The pairs of the renderer's characters written a byte each in a run (see the module's comment).
@@ -424,7 +457,7 @@ mod tests {
         assert!(kept.len() as u32 <= PLACEMENT.room.end - PLACEMENT.room.start);
         // Each byte of a run stands for a character's code and 0, or for a pair's two codes.
         let code = PLACEMENT.code_address();
-        let assembly = assemble(include_str!("vwf.asm"), &[("CODE", i64::from(code))]).unwrap();
+        let assembly = assemble_renderer().unwrap();
         let run_codes = (assembly.label("run_codes").unwrap() - code) as usize;
         let at = |byte: usize| (exe::LOADER_SIZE + exe::FINISH_SIZE) as usize + run_codes + RUN_ENTRY * byte;
         let entry = |byte: usize| kept[at(byte)..at(byte) + 4].to_vec();
@@ -445,9 +478,29 @@ mod tests {
         assert_eq!(kept[ends..ends + 2], [0, 0]);
         // A renderer without a space or capitals leaves them 0, and the game puts its own letter.
         assert_eq!(kept[start(suffix_bytes)..start(suffix_bytes) + 2], [0, renderer.byte('A').unwrap()]);
-        // The draw routine's move of the pen by 14 pixels is now a call.
-        let draw = exe::offset(&exe, 0x8002_5DD0, 4).unwrap();
-        let (_, call) = patches.iter().find(|(at, _)| *at == draw).unwrap();
-        assert_eq!(u32::from_le_bytes(call[..4].try_into().unwrap()) >> 26, 3);
+        // The draw routine's move of the pen by 14 pixels is now a call, and so are the counts of
+        // characters that place the shop's title, a name centred on a point, the caption, the memory
+        // card's message and event $4A's window, and the pen at the start of a line.
+        for address in
+            [0x8002_5DD0, 0x8005_32F4, 0x8005_64EC, 0x8003_1F54, 0x8002_5C54, 0x8002_5F58, 0x8007_16B8, 0x8001_E8D0]
+        {
+            let at = exe::offset(&exe, address, 4).unwrap();
+            let (_, call) = patches.iter().find(|(patched, _)| *patched == at).unwrap();
+            assert_eq!(u32::from_le_bytes(call[..4].try_into().unwrap()) >> 26, 3, "{address:08X}");
+        }
+        // The caption's grid is ours: the game's clears it and points the window at it.
+        let clear = exe::offset(&exe, 0x8003_1F18, 4).unwrap();
+        let (_, clear) = patches.iter().find(|(at, _)| *at == clear).unwrap();
+        assert_eq!(clear[..8], [0x20, 0x80, 0x04, 0x3C, 0x00, 0xA0, 0x84, 0x24]); // lui a0, $8020; addiu a0, -$6000
+    }
+
+    #[test]
+    fn the_caption_s_grid_is_past_what_the_loader_copies_in_the_room_left_unused() {
+        // The end of the stack's room that was seen unused (see the module's comment).
+        const UNUSED_END: u32 = 0x801F_E000;
+        const COPIED_END: u32 = PLACEMENT.destination + (PLACEMENT.room.end - PLACEMENT.room.start) - exe::LOADER_SIZE;
+        const { assert!(CAPTION_GRID >= COPIED_END && CAPTION_GRID + CAPTION_GRID_BYTES <= UNUSED_END) };
+        let assembly = assemble_renderer().unwrap();
+        assert_eq!(assembly.label("CAPTION_BYTES").unwrap(), CAPTION_GRID_BYTES);
     }
 }
