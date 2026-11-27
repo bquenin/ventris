@@ -443,7 +443,9 @@ check never reached, or cut a line short. That takes an emulator and a person.
 A change to what the game shows is not done until it has been seen in a screenshot from the emulator.
 Build with a few changed strings, in the kinds of text you support, and look at each where the game shows
 it. When the font changes, start from power-on: a saved state carries the video memory, and with it the
-old font.
+old font. Start from power-on too when a build moved a file the game had open: a state remembers where in
+the image the game read it from, and on a Nintendo DS game that streams its font from the cartridge, as
+Ganbare Goemon does, a state from another build draws from where the font used to be.
 
 ## What a pull request shows
 
