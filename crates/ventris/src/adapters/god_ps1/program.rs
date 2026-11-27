@@ -121,7 +121,8 @@ pub const LIMITS: &str = "a line is no wider than the note on the first string o
                           has no more lines than the game's own, but a shopkeeper's line may have 2, a description \
                           in the monster book 5, and the help pages, the chakra lessons and the diary may run on; a choice, such as yes and no, is no wider than the game's own, its box \
                           being made for that; a name of the party takes at most 6 characters, a cell each, and 15 \
-                          bytes, in capitals; the strings a pack changes share the room they had between them, 70,402 \
+                          bytes, in capitals; a monster's name takes at most 17 bytes, the battle putting a space \
+                          and a letter after it; the strings a pack changes share the room they had between them, 70,402 \
                           bytes if every one changes, where a letter drawn at its own width takes one byte and each \
                           run of them one more, the pairs of letters a pack writes most taking a byte for two, a \
                           kanji two, and a kana, or a letter written a cell each, one, and \
@@ -251,6 +252,9 @@ pub const PARTS: [Part; 25] = [
     part(0xB_8894, "How a monster looks at the party, which the game puts before what it does.", 14, Lines::Own),
     part(0xB_8B68, "The rumours an informant tells.", 22, Lines::Own),
 ];
+
+/// Where the names of the monsters are: a battle copies each it meets into a record of 20 bytes.
+pub const MONSTER_NAMES: Range<u32> = 0xB_1D50..0xB_2AB0;
 
 /// Where the names of the party are: a new game copies each into a record of its own.
 pub const NAMES: u32 = 0xA_B350;

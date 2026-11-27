@@ -912,6 +912,22 @@ fn a_name_of_the_party_is_never_drawn_at_its_own_width() {
 }
 
 #[test]
+fn a_monster_s_name_leaves_room_for_the_letter_after_it() {
+    let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
+    let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
+    let monster = program_text::MONSTER_NAMES.start + 3;
+    // A run and 16 letters fit, with the space, the letter and the zero byte, in a record of 20: narrow
+    // letters, so that the line is not too wide first.
+    let (sixteen, seventeen) = ("il".repeat(8), format!("{}i", "il".repeat(8)));
+    assert_eq!(program_string(&sixteen, monster, &hex("a3"), &writing, false).unwrap().len(), 17);
+    let refused = program_string(&seventeen, monster, &hex("a3"), &writing, false).unwrap_err();
+    assert!(refused.to_string().starts_with("it takes 18 bytes, and a battle copies a monster's name"), "{refused}");
+    // Without the renderer the game puts its own letter alone after the name, as it does its own names.
+    let full = Writing { renderer: None, ..writing };
+    assert!(program_string("ABCDEFGHI", monster, &hex("a3"), &full, false).is_ok());
+}
+
+#[test]
 fn a_code_has_a_cell_in_each_of_the_two_fonts() {
     let large = large_cell(0x5A7);
     assert_eq!((large.page, large.plane, large.x, large.y, large.width), (1, 0, 7 * 16, 10 * 16, 16));
@@ -974,6 +990,9 @@ fn the_cells_the_renderer_takes_are_kanji_no_string_left_as_it_is_uses() {
     // a pixel off: the 37 kanji there no text uses are left out.
     let last = |code: &u32| (code - FIRST_CODE) & 0xF == 0xF || (code - FIRST_CODE) & 0xF0 == 0xF0;
     assert!(!unused.iter().any(last));
+    // Nor a code whose low byte is zero, which the renderer's two-byte codes for names and numbers
+    // would turn into a string's end.
+    assert!(unused.iter().all(|code| code & 0xFF != 0));
     assert!(drawn_true(0x29E) && !drawn_true(0x29F) && !drawn_true(0x2F0) && !drawn_true(0x5FF) && drawn_true(0x600));
     // Every string of area 096 changed frees the kanji only they used, which come first.
     let area = areas.iter().find(|area| area.entry == 96).unwrap();
@@ -981,6 +1000,7 @@ fn the_cells_the_renderer_takes_are_kanji_no_string_left_as_it_is_uses() {
     let freed = free_cells(&file, &kept(all.clone()), &[], codes);
     let more = freed.len() - unused.len();
     assert!(more > 0 && freed[more..] == unused[..], "{more}");
+    assert!(freed.iter().all(|code| code & 0xFF != 0 && drawn_true(*code)));
     // A code the pack's own text writes stays.
     let written = format!("{{K:{:04X}}}", freed[0]);
     assert!(!free_cells(&file, &kept(all), &[written.as_str()], codes).contains(&freed[0]));
@@ -994,7 +1014,9 @@ fn build_draws_each_character_at_its_own_width_and_installs_the_renderer() {
     let out = folder.path().join("built.bin");
     let text = "{SAY}Wake up, {NAME:19}! It's morning, élan.{/SAY}";
     let built = build(disc, &pack_of(&[(109, text)]), &out, &BuildOptions::default()).unwrap();
-    let characters = plain_characters("Wake up,! It's morning, élan.").len();
+    // The string's characters, and every digit and capital, which a name or a number the game puts in
+    // is drawn with.
+    let characters = plain_characters("Wake up,! It's morning, élan.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ").len();
     // With the renderer, every area's moments are checked, its grids counted at each, in the game
     // made to read a new area's rest after a door.
     assert_eq!(
@@ -1081,10 +1103,11 @@ fn a_wide_character_goes_in_a_blank_cell_and_the_narrow_ones_at_their_widths() {
     let disc = image.ps1_disc().unwrap();
     let folder = tempfile::tempdir().unwrap();
     let out = folder.path().join("built.bin");
-    // 한 is 16 pixels wide in Unifont, so it is drawn into a blank cell; é is drawn at its own width.
+    // 한 is 16 pixels wide in Unifont, so it is drawn into a blank cell; é is drawn at its own width,
+    // with a space, the digits and the capitals, which the game's names and numbers are drawn with.
     let built = build(disc, &pack_of(&[(109, "{SAY}한éé{/SAY}")]), &out, &BuildOptions::default()).unwrap();
     assert_eq!(built.summary[2], "font:      1 new characters drawn into its blank cells, of 26: 한");
-    assert!(built.summary[3].starts_with("renderer:  1 characters drawn at their own widths"), "{:?}", built.summary);
+    assert!(built.summary[3].starts_with("renderer:  38 characters drawn at their own widths"), "{:?}", built.summary);
 }
 
 #[test]

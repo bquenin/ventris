@@ -46,7 +46,31 @@
 //! measures every string a byte a character before it puts the pairs in (see `insert`): only the
 //! number of bytes changes.
 //!
-//! Where the code is. The renderer's code and its tables, under 6 KB, go at $801F8000, the bottom
+//! What the game puts into a string. A $0C puts in a name, a number or a word (see the module above),
+//! and the game puts these in three ways. The writers give the window the inserted string, and go back
+//! to their own at its zero byte ($8002492C); the $0C, a byte under $10, ends a run, and so does that
+//! zero byte, so the run after the tag starts again with its RUN, as the pack's text has it. The
+//! battle's messages are made by copying the message into a line of their own ($80039DD4), each $0C
+//! replaced by what it stands for, so a run open before the $0C would go on into it, and the RUN after
+//! it would end it: the renderer keeps the runs whole there (`fmt_insert` in `vwf.asm`), going on into
+//! an inserted string that starts with a run or after one that ends in one, and ending one before a
+//! character of the game's. The menus' screens draw what a $0C stands for with their own routine
+//! ($80058CD4, which calls $80058828), and moved the pen 12 pixels a character after it; the renderer
+//! moves it by what was drawn, and leaves the string out of a run, as the $0C left it.
+//!
+//! The game writes a name of the party and a number with the codes of its own font, full-width letters
+//! and digits 14 pixels wide (12 in the small font): the pack writes the names so, and the name entry
+//! and the game's formatting of a number ("%u") do too. Where one is put into a string, the renderer
+//! copies it first with the codes of its own characters for those (`narrow_codes`), in two bytes each,
+//! leaving out the spaces a number is padded with: so a name or a number is drawn as narrow as the
+//! letters around it, and the game's own glyphs, and its text that shows none, are as before. A build
+//! that puts the renderer in gives it a space, every digit and every capital for that, and leaves out
+//! the cells whose code ends in a zero byte, which a routine reading a byte at a time would take for
+//! the end of the string. The battle puts a letter after the name of each of several monsters of a
+//! kind ($8004A9BC), the game's own byte for A, B, C; after a name that ends in a run, the renderer
+//! puts a space and the letter in the run (`suffix`), so a monster's name needs room for one byte more.
+//!
+//! Where the code is. The renderer's code and its tables, about 7 KB, go at $801F8000, the bottom
 //! of the 32 KB the game leaves for its stack above its heap (the heap ends at $801F8000, the stack
 //! starts at $801FFFF0). Measured in PCSX-Redux from power-on through the opening movie and the
 //! first dialogue, nothing the game runs wrote to $801F8000-$801FDFFF; only the BIOS's start-up,
@@ -61,7 +85,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use super::insert::{Cell, draw_cell, eleven_rows, large_cell, small_cell};
+use super::TABLE;
+use super::insert::{Cell, draw_cell, eleven_rows, large_cell, small_cell, stand_in};
 use crate::byte_pairs::{self, Unit};
 use crate::error::{Error, Result, text_error};
 use crate::fonts::{self, CELL, Glyph};
@@ -90,6 +115,8 @@ pub use super::RUN;
 const FIRST_BYTE: u8 = 0x10;
 /// The bytes of `run_codes` in `vwf.asm` for each byte of a run: two codes of two bytes.
 const RUN_ENTRY: usize = 4;
+/// The most pairs of codes `narrow_codes` in `vwf.asm` has (`NARROW_ENTRIES` there).
+const NARROW_ENTRIES: usize = 192;
 
 /// The characters a build draws at their own widths: each one's code, its cell in both fonts, and
 /// its width in pixels, the same in both.
@@ -185,6 +212,24 @@ impl Renderer {
         Ok(())
     }
 
+    /// For each code of the game's own font that draws the full-width form of one of the renderer's
+    /// characters (Ａ for A, ０ for 0), that code and the renderer's, lowest first, as many as
+    /// `narrow_codes` in `vwf.asm` has room for. The game writes names and numbers with its own codes,
+    /// and the renderer puts the narrow ones in their place where it puts them into a string.
+    pub fn narrow_codes(&self) -> Vec<(u16, u16)> {
+        let mut pairs: Vec<(u16, u16)> = self
+            .cells
+            .iter()
+            .filter_map(|(char, (code, _))| stand_in(*char).map(|full| (full, *code)))
+            .flat_map(|(full, code)| {
+                TABLE.codes.get(&full).into_iter().flatten().map(move |own| (*own as u16, code as u16))
+            })
+            .collect();
+        pairs.sort();
+        pairs.truncate(NARROW_ENTRIES);
+        pairs
+    }
+
     /// The bytes of a run that its characters leave over, for pairs.
     fn spare_bytes(&self) -> Vec<u8> {
         (usize::from(FIRST_BYTE) + self.len()..=usize::from(u8::MAX)).map(|byte| byte as u8).collect()
@@ -207,6 +252,8 @@ impl Renderer {
         let assembly = assemble(include_str!("vwf.asm"), &[("CODE", i64::from(code))])?;
         let widths = (assembly.label("widths")? - code) as usize;
         let run_codes = (assembly.label("run_codes")? - code) as usize;
+        let narrow_codes = (assembly.label("narrow_codes")? - code) as usize;
+        let suffix_bytes = (assembly.label("suffix_bytes")? - code) as usize;
         let mut patches = Vec::new();
         for (address, bytes) in &assembly.segments {
             if *address == code {
@@ -221,6 +268,14 @@ impl Renderer {
                     let at = run_codes + RUN_ENTRY * usize::from(byte);
                     bytes[at..at + 2].copy_from_slice(&(first as u16).to_le_bytes());
                     bytes[at + 2..at + 4].copy_from_slice(&(second as u16).to_le_bytes());
+                }
+                for (index, (own, narrow)) in self.narrow_codes().into_iter().enumerate() {
+                    let at = narrow_codes + 4 * index;
+                    bytes[at..at + 2].copy_from_slice(&own.to_le_bytes());
+                    bytes[at + 2..at + 4].copy_from_slice(&narrow.to_le_bytes());
+                }
+                for (index, char) in std::iter::once(' ').chain('A'..='H').enumerate() {
+                    bytes[suffix_bytes + index] = self.byte(char).unwrap_or(0);
                 }
                 patches.extend(exe::install(exe, &PLACEMENT, &bytes)?);
             } else {
@@ -313,6 +368,20 @@ mod tests {
     }
 
     #[test]
+    fn the_game_s_full_width_letters_and_digits_are_drawn_with_the_renderer_s() {
+        let glyphs = BTreeMap::from([('A', glyph([0; CELL])), ('0', glyph([0; CELL])), ('é', glyph([0; CELL]))]);
+        let renderer = Renderer::new(&glyphs, &[0x2F0, 0x2F1, 0x2F2]).unwrap();
+        // Ａ and ０ of the game's font are drawn with the renderer's A and 0; é has no full-width form.
+        let pairs = renderer.narrow_codes();
+        let a = TABLE.codes[&'Ａ'].iter().map(|own| (*own as u16, renderer.code('A').unwrap() as u16));
+        let zero = TABLE.codes[&'０'].iter().map(|own| (*own as u16, renderer.code('0').unwrap() as u16));
+        let mut expected: Vec<(u16, u16)> = a.chain(zero).collect();
+        expected.sort();
+        assert_eq!(pairs, expected);
+        assert!(pairs.contains(&(0x110, 0x2F0)) && pairs.contains(&(0x11A, 0x2F1)), "{pairs:X?}");
+    }
+
+    #[test]
     fn pairs_take_the_bytes_the_characters_leave_and_write_a_run_in_fewer() {
         let glyphs = BTreeMap::from([('a', glyph([0; CELL])), ('b', glyph([0; CELL])), ('c', glyph([0; CELL]))]);
         let renderer = Renderer::new(&glyphs, &[0x2F0, 0x2F1, 0x2F2]).unwrap();
@@ -346,7 +415,7 @@ mod tests {
         exe[0x1C..0x20].copy_from_slice(&0xD3000u32.to_le_bytes());
         let hook = exe::offset(&exe, PLACEMENT.hook, 4).unwrap();
         exe[hook..hook + 4].copy_from_slice(&0x0C00_AC13u32.to_le_bytes()); // jal $8002B04C
-        let glyphs = BTreeMap::from([('a', glyph([0; CELL])), ('b', glyph([0; CELL]))]);
+        let glyphs = BTreeMap::from([('A', glyph([0; CELL])), ('b', glyph([0; CELL]))]);
         let renderer = Renderer::new(&glyphs, &[0x2F0, 0x2F1]).unwrap();
         let pairs = Pairs::choose(&renderer, &[vec![0x10, 0x11, 0x11, 0x10]]);
         let patches = renderer.install(&exe, &pairs).unwrap();
@@ -365,6 +434,17 @@ mod tests {
         assert_eq!(paired.len(), 1);
         assert_eq!(entry(usize::from(paired[0])), [0xF0, 0x02, 0xF1, 0x02]);
         assert_eq!(entry(0x0F), [0; 4]);
+        // The game's Ａ is written with the renderer's a's code where the game puts it into a string,
+        // and the bytes of a space and of the letters after monsters' names are those of the run.
+        let narrow_codes = (assembly.label("narrow_codes").unwrap() - code) as usize;
+        let suffix_bytes = (assembly.label("suffix_bytes").unwrap() - code) as usize;
+        let start = |label: usize| (exe::LOADER_SIZE + exe::FINISH_SIZE) as usize + label;
+        let first = &kept[start(narrow_codes)..start(narrow_codes) + 4];
+        assert_eq!(first, [0x1A, 0x01, 0xF0, 0x02]);
+        let ends = start(narrow_codes) + 4 * renderer.narrow_codes().len();
+        assert_eq!(kept[ends..ends + 2], [0, 0]);
+        // A renderer without a space or capitals leaves them 0, and the game puts its own letter.
+        assert_eq!(kept[start(suffix_bytes)..start(suffix_bytes) + 2], [0, renderer.byte('A').unwrap()]);
         // The draw routine's move of the pen by 14 pixels is now a call.
         let draw = exe::offset(&exe, 0x8002_5DD0, 4).unwrap();
         let (_, call) = patches.iter().find(|(at, _)| *at == draw).unwrap();

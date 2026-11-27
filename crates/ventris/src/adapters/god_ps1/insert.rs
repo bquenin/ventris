@@ -181,6 +181,14 @@ const SMALL_PER_PLANE: usize = SMALL_COLUMNS * 23;
 const SMALL_END: u32 = FIRST_CODE + 4 * SMALL_PER_PLANE as u32;
 /// A glyph 8 pixels wide is put this far in, in the middle of the small font's 12 columns.
 const SMALL_NARROW_LEFT: usize = 2;
+/// The most bytes a monster's name may take with the renderer: the battle copies it into a record of
+/// 20 bytes, and puts a space, a letter and a zero byte after it (see `vwf`).
+const MONSTER_NAME_BYTES: usize = 17;
+
+/// The characters the renderer always has, when a build puts it in: those of the numbers and names
+/// the game puts into a string, and of the letters after the names of monsters of a kind.
+const INSERTED: &str = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
 /// The build switch that writes every character a cell, narrow ones with the font's full-width glyphs.
 pub const FULL_WIDTH: &str = "full-width";
 pub const SWITCHES: [(&str, &str); 1] = [(
@@ -208,7 +216,7 @@ pub const LIMITS: &str = "the window shows 4 lines of 224 pixels, 210 in a spoke
 
 /// The character of the font an ASCII character of a pack is written with: its full-width form,
 /// the blank between words for a space, and 〜 for a tilde.
-fn stand_in(char: char) -> Option<char> {
+pub(super) fn stand_in(char: char) -> Option<char> {
     match char {
         ' ' => Some('\u{3000}'),
         '~' => Some('〜'),
@@ -1151,8 +1159,10 @@ struct Kept<'a> {
 /// characters (kana, digits, letters, punctuation, the blank cells) are never taken, since the
 /// program draws some of them itself: the 「 of a spoken line, a number's digits, the names it keeps.
 /// Nor are the codes the small font has no glyph for, nor the cells the dialogue's font draws a pixel
-/// off (see `drawn_true`). The kanji the pack's changes free come first, then those no string of
-/// the game uses.
+/// off (see `drawn_true`), nor those whose low byte is zero: the renderer writes a name or a number
+/// the game puts into a string with these codes, in two bytes (see `vwf`), and a zero byte there
+/// would end the string for whatever reads it a byte at a time. The kanji the pack's changes free
+/// come first, then those no string of the game uses.
 fn free_cells(file: &[u8], kept: &Kept, texts: &[&str], codes: &ByteCodes) -> Vec<u32> {
     let (mut kept_codes, mut freed) = (BTreeSet::new(), BTreeSet::new());
     for area in kept.areas {
@@ -1193,7 +1203,7 @@ fn free_cells(file: &[u8], kept: &Kept, texts: &[&str], codes: &ByteCodes) -> Ve
     }
     let kanji = (FIRST_CODE..FIRST_CODE + GLYPH_COUNT as u32)
         .filter(|code| TABLE.characters.get(code).is_some_and(|char| fonts::is_kanji(*char)))
-        .filter(|code| !kept_codes.contains(code) && *code < SMALL_END && drawn_true(*code));
+        .filter(|code| !kept_codes.contains(code) && *code < SMALL_END && code & 0xFF != 0 && drawn_true(*code));
     let (first, then): (Vec<u32>, Vec<u32>) = kanji.partition(|code| freed.contains(code));
     first.into_iter().chain(then).collect()
 }
@@ -1406,6 +1416,12 @@ fn program_string(text: &str, offset: u32, own: &[u8], writing: &Writing, wrap: 
             data.len()
         ));
     }
+    if writing.renderer.is_some() && program_text::MONSTER_NAMES.contains(&offset) && data.len() > MONSTER_NAME_BYTES {
+        return text_error(format!(
+            "it takes {} bytes, and a battle copies a monster's name into a record of 20 bytes, where a name drawn              at its own widths needs room for a space and a letter after it when several of a kind are met:              shorten it to {MONSTER_NAME_BYTES}, a letter taking a byte and each run of them one more",
+            data.len()
+        ));
+    }
     Ok(data)
 }
 
@@ -1485,10 +1501,15 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
     if !options.switches.contains(FULL_WIDTH) {
         let drawn_narrow = dialogue.iter().chain(program_changes.iter().filter(|(_, number, _)| !is_name(*number)));
         let drawn_narrow: String = drawn_narrow.map(|(_, _, text)| text.as_str()).collect();
-        let narrow: Vec<char> = plain_characters(&drawn_narrow)
+        let mut narrow: Vec<char> = plain_characters(&drawn_narrow)
             .into_iter()
             .filter(|char| !matches!(char, '{' | '}') && code_of(*char, codes).is_none())
             .collect();
+        // What the game puts into a string is drawn narrow too: a number, a name of the party, the
+        // letter after a monster's name (see `vwf`). So the renderer has every digit and capital.
+        if !narrow.is_empty() {
+            narrow.extend(INSERTED.chars().filter(|char| !narrow.contains(char)).collect::<Vec<_>>());
+        }
         let glyphs = fonts::narrow_glyphs(sources, &narrow)?;
         if !glyphs.is_empty() {
             let file = program_text::program_file(disc)?;
