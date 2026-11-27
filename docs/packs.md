@@ -399,21 +399,25 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   pack leaves as it is uses: 275 when a pack changes little, most of the font's 1,516 kanji in a full
   translation; a pack needs about a hundred, and one that needs more cells than there are, or more than 240
   such characters, is refused. Such a letter takes **one byte**, in a run that a byte starts, so a run takes
-  one more; a line break or a tag ends a run. The game's own text, and what the pack leaves Japanese, is
-  drawn as before.
+  one more; a line break or a tag ends a run. The bytes a run's characters leave over (156 when a pack writes
+  84 such characters) each stand for **two characters**, the pairs that save the most bytes in the pack's own
+  text, chosen at each build: the game draws such a byte as it draws the two letters, so a line is measured,
+  broken and drawn exactly as without them, and only the bytes are fewer. The game's own text, and what the
+  pack leaves Japanese, is drawn as before.
 - With the build option `full-width` (`--option full-width`, or `options = ["full-width"]` under
   `[build]` in `pack.toml`), every character takes a cell, as in the game's own text: Latin letters,
   digits and punctuation are drawn with the game's full-width glyphs, a space is its blank cell, and
   characters the font lacks (accented letters, the comma, the apostrophe, quotation marks) are drawn from
   `unifont`, or from the fonts the pack names, into the font's 26 free cells, so a pack can use at most 26
   such characters. Without the option, those 26 cells take only the characters drawn 16 pixels wide.
-- What English costs in bytes, measured on the pack in progress (areas 096 to 104, 497 strings): its
-  English has twice as many characters as the Japanese, and its text blocks came out 1.5 times the
-  Japanese ones' bytes (11,796 bytes more over 23,612; two letters to a cell, as before the renderer,
-  cost 11,092). A letter is a byte where a kana is one and a kanji two. So an area that cannot grow, such
-  as 105 (27,598 bytes of text for 17,258 Japanese characters), takes an English of roughly 1.25 times as
-  many characters as its Japanese. That is an estimate: what counts is the bytes, which runs, tags and line
-  breaks change too, and the build says whether an area fits.
+- What English costs in bytes, measured on the pack in progress (every area, 7,642 strings in 87 of them,
+  and 3,118 strings of `program`): its English has about twice as many characters as the Japanese, a
+  letter a byte where a kana is one and a kanji two, so a byte a letter its areas' text came out 1.42
+  times the Japanese bytes (501,460 over 353,100); with two letters to many bytes it is 354,654, as many
+  as the Japanese, and the program's strings take 41,503 bytes of the 68,617 they share instead of 59,591.
+  Area 105, which cannot grow at all (27,598 bytes of text for 17,258 Japanese characters), takes 24,596 in
+  English. What counts is the bytes, which runs, tags and line breaks change too, and the build says
+  whether an area fits.
 - An area that grows past its sectors on the disc is moved: into the sectors other areas that moved
   left, or to the disc's free room near its end, 16,384 sectors. Every area of the game can grow and
   move: an area takes a few hundred to a few thousand sectors, and a full translation adds a few to
@@ -444,8 +448,8 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   that lead to each other share their room: what one takes, the other cannot, and an area whose code
   grows past another's can make the door between them need the three copies.
 - The program cannot grow, so the strings of `program` a pack changes share the room they had between them:
-  70,402 bytes if every one changes, a kana taking one byte, and a kanji or a cell of two letters two, as
-  does the cell of an odd letter at the end of a run, its other half blank.
+  70,402 bytes if every one changes, a kana or a letter drawn at its own width taking one byte (and a run of
+  letters one more), a pair of letters often one byte for both, and a kanji two.
   One may be longer where others are shorter, and strings given the same text are written once, which
   frees much room, since the game repeats many (the monster book's descriptions above all); but where the
   code that finds such strings cannot reach one place from all of them, each is written apart, and needs
