@@ -812,6 +812,36 @@ fn paired(data: &[u8], writing: &Writing, pairs: &Pairs) -> Vec<u8> {
     out
 }
 
+/// The pairs that save the most in the runs of the areas' strings that changed, `replaced`, and of
+/// the program's, `changed`, put into them (see `vwf::Pairs` and `paired`).
+///
+/// A program string that the program also reads from a place inside (see
+/// `program_text::Room::inside`, `rooms` giving each string's) is left a byte a character, and its
+/// runs are not counted: its bytes from that place on must stay where they are, and a pair before
+/// it would move them.
+fn put_pairs(
+    replaced: &mut BTreeMap<&str, BTreeMap<u32, Vec<u8>>>,
+    changed: &mut BTreeMap<u32, Vec<u8>>,
+    rooms: &BTreeMap<u32, program_text::Room>,
+    writing: &Writing,
+    renderer: &Renderer,
+) -> Pairs {
+    let read_inside = |offset: &u32| rooms.get(offset).is_some_and(|room| room.inside.is_some());
+    let pairable: Vec<u32> = changed.keys().filter(|offset| !read_inside(offset)).copied().collect();
+    let strings = replaced.values().flat_map(BTreeMap::values).chain(pairable.iter().map(|offset| &changed[offset]));
+    let runs: Vec<Vec<u8>> =
+        strings.flat_map(|data| run_stretches(data, writing).into_iter().map(|run| data[run].to_vec())).collect();
+    let pairs = Pairs::choose(renderer, &runs);
+    for data in replaced.values_mut().flat_map(BTreeMap::values_mut) {
+        *data = paired(data, writing, &pairs);
+    }
+    for offset in &pairable {
+        let data = changed.get_mut(offset).expect("a changed string");
+        *data = paired(data, writing, &pairs);
+    }
+    pairs
+}
+
 /// The tags after which the game goes on at the start of a new line, as a line break does.
 const NEW_LINE_TAGS: [&str; 2] = ["WAIT", "CLEAR"];
 
@@ -1540,16 +1570,19 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         }
     }
 
-    // Two characters a byte (see `vwf::Pairs`): the pairs that save the most in the runs of every
-    // string laid out above, put into them now that each has been measured a byte a character.
+    // Where the program's strings are, which the pairs below must know.
+    let rooms = if changed.is_empty() {
+        BTreeMap::new()
+    } else {
+        let file = program_text::program_file(disc)?;
+        let references = program_text::references(disc)?;
+        program_text::rooms(&file, &own_text[PROGRAM_SECTION], &references, codes)
+    };
+
+    // Two characters a byte, in the runs of every string laid out above, now that each has been
+    // measured a byte a character.
     if !renderer.is_empty() {
-        let strings = replaced.values().flat_map(BTreeMap::values).chain(changed.values());
-        let runs: Vec<Vec<u8>> =
-            strings.flat_map(|data| run_stretches(data, &writing).into_iter().map(|run| data[run].to_vec())).collect();
-        let pairs = Pairs::choose(&renderer, &runs);
-        for data in replaced.values_mut().flat_map(BTreeMap::values_mut).chain(changed.values_mut()) {
-            *data = paired(data, &writing, &pairs);
-        }
+        let pairs = put_pairs(&mut replaced, &mut changed, &rooms, &writing, &renderer);
         let file = program_text::program_file(disc)?;
         patches.extend(renderer.install(&file, &pairs)?.into_iter().map(|(at, data)| (PROGRAM, at as u64, data)));
         done.pairs = pairs.len();
@@ -1558,8 +1591,6 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
     // The program's strings written back into the room they share.
     if !changed.is_empty() {
         let file = program_text::program_file(disc)?;
-        let references = program_text::references(disc)?;
-        let rooms = program_text::rooms(&file, &own_text[PROGRAM_SECTION], &references, codes);
         match program_text::write_strings(&file, &rooms, &changed) {
             Ok(written) => {
                 (done.program_moved, done.program_once) = (written.moved, written.once);

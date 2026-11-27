@@ -664,6 +664,35 @@ fn pairs_are_put_in_the_runs_of_a_string_laid_out_a_byte_a_character() {
 }
 
 #[test]
+fn a_program_string_read_from_inside_is_not_paired() {
+    let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
+    let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
+    // Two program strings of the same letters; the program also reads the second from its line
+    // break on, so its bytes before it may change only to as many bytes, and the rest not at all.
+    let letters = encode_text("the then the", &writing).unwrap();
+    let kept = vec![0x0D, 0xA2];
+    let inside = [&letters[..], &kept].concat();
+    let room = |inside| program_text::Room { size: 64, tail: Vec::new(), reached: None, inside };
+    let rooms = BTreeMap::from([(0x100, room(None)), (0x200, room(Some((letters.len(), kept.clone()))))]);
+    // Pairs in the second would move what the program reads from inside it.
+    let pairs = Pairs::choose(&renderer, &[letters[1..].to_vec()]);
+    let moved = BTreeMap::from([(0x200, paired(&inside, &writing, &pairs))]);
+    let refused = program_text::write_strings(&[], &rooms, &moved).unwrap_err();
+    assert!(refused.contains("the rest must stay as it is"), "{refused}");
+    // So only the first is paired, and both are written.
+    let mut changed = BTreeMap::from([(0x100, letters.clone()), (0x200, inside.clone())]);
+    let pairs = put_pairs(&mut BTreeMap::new(), &mut changed, &rooms, &writing, &renderer);
+    assert!(!pairs.is_empty());
+    assert!(changed[&0x100].len() < letters.len(), "{:02X?}", changed[&0x100]);
+    assert_eq!(changed[&0x200], inside);
+    assert!(program_text::write_strings(&[], &rooms, &changed).is_ok());
+    // Its runs are not counted for the pairs either: alone, it gives none.
+    let mut alone = BTreeMap::from([(0x200, inside.clone())]);
+    assert_eq!(put_pairs(&mut BTreeMap::new(), &mut alone, &rooms, &writing, &renderer).len(), 0);
+    assert_eq!(alone[&0x200], inside);
+}
+
+#[test]
 fn a_line_break_left_out_after_a_run_does_not_end_it() {
     let (codes, none, renderer) = (codes(), HashMap::new(), renderer());
     let writing = Writing { codes: &codes, drawn: &none, renderer: Some(&renderer) };
