@@ -414,15 +414,6 @@ pub fn assign_slots(characters: &[char], free: &[usize], what: &str) -> Result<B
     Ok(characters.iter().copied().zip(free.iter().copied()).collect())
 }
 
-/// Give the free places of a font to the keys that are used most, as many as there is room for:
-/// `counts` says how often each key is used. Keys used as often keep their order. Where there is
-/// room for all, all have a place. The keys left out are those a build writes some other way.
-pub fn assign_most_used<K: Ord + Copy>(counts: &BTreeMap<K, usize>, free: &[usize]) -> BTreeMap<K, usize> {
-    let mut keys: Vec<(&K, &usize)> = counts.iter().collect();
-    keys.sort_by(|one, other| other.1.cmp(one.1).then(one.0.cmp(other.0)));
-    keys.into_iter().zip(free).map(|((key, _), place)| (*key, *place)).collect()
-}
-
 // --- two narrow characters to a cell ---------------------------------------
 //
 // A game whose font has cells as wide as a kanji can draw two narrow letters in each, and so fit
@@ -785,15 +776,6 @@ mod tests {
             assign_slots(&['a', 'b'], &[7], "the menu font").unwrap_err().to_string(),
             "the pack needs 2 new characters and the menu font has room for 1"
         );
-    }
-
-    #[test]
-    fn the_most_used_keys_get_the_free_places() {
-        let counts = BTreeMap::from([("ab", 3), ("cd", 9), ("ef", 3), ("gh", 1)]);
-        // The most used first; as often used, in their order.
-        assert_eq!(assign_most_used(&counts, &[10, 11, 12]), BTreeMap::from([("cd", 10), ("ab", 11), ("ef", 12)]));
-        assert_eq!(assign_most_used(&counts, &[1, 2, 3, 4, 5]).len(), 4);
-        assert!(assign_most_used(&counts, &[]).is_empty());
     }
 
     #[test]

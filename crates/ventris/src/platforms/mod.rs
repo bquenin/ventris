@@ -13,6 +13,7 @@ use crate::error::Result;
 use crate::platform::Platform;
 
 pub mod asm65816;
+pub mod asm_mips;
 pub mod mips;
 pub mod nds;
 pub mod ps1;

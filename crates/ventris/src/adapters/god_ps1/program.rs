@@ -49,11 +49,13 @@
 //!
 //! A changed string must also fit the screen. Each part of the section has a width in cells, the
 //! widest line of the game's own there, and a number of lines (see `PARTS`); lines are broken at
-//! spaces to the width, and what still does not fit is refused. Latin letters go two to a cell here
-//! as in the dialogue (see `insert`). A few strings are in a box the game made as wide as its own
-//! text, and keep to that (see `OWN_WIDTH`). The party's names are copied into records of 16 bytes
-//! when a new game starts, and the menus draw them in a small font that has no lowercase letters,
-//! so a name has at most 15 bytes and is written in capitals, a character to a cell; the name entry
+//! spaces to the width, and what still does not fit is refused. A line is measured in the pixels of
+//! the small font, 12 a cell, which some parts are drawn in: Latin letters are drawn at their own
+//! widths here as in the dialogue (see `insert`), as wide in both fonts, and a glyph of the game's is
+//! narrower in the small font, so a line that fits there fits in the dialogue's font too. A few
+//! strings are in a box the game made as wide as its own text, and keep to that (see `OWN_WIDTH`).
+//! The party's names are copied into records of 16 bytes when a new game starts, and the menus
+//! draw them in a small font that has no lowercase letters, so a name has at most 15 bytes and is written in capitals, a character to a cell; the name entry
 //! gives the player 6 characters, which the screens that show a name have room for, and which is
 //! what the dialogue counts for a name it fills in.
 //!
@@ -99,20 +101,20 @@ const SWITCH: u8 = b'@';
 
 /// What a translator is told about the program's text. The room is what all the section's strings
 /// have between them (see `rooms`), counted by a test.
-pub const LIMITS: &str = "a line takes no more cells than the note on the first string of its part gives, the widest \
-                          the game's own lines there take; Latin letters, digits, spaces and punctuation go two to a \
-                          cell (a cell each with the build option full-width), and a kana, a kanji or a mark of the \
-                          game's own font takes a cell, counting a name the game fills in as 6 cells, a number as 6 \
-                          and a word as 8; lines are broken at spaces to fit (with wrapping off, a wider one is \
-                          refused); a string has no more lines than the game's own, but a shopkeeper's line may have \
-                          2, a description in the monster book 5, and the help pages, the chakra lessons and the \
-                          diary may run on; a choice, such as yes and no, is no wider than the game's own, its box \
+pub const LIMITS: &str = "a line is no wider than the note on the first string of its part gives, the widest the \
+                          game's own lines there take, in cells of 12 pixels; Latin letters, digits, spaces and \
+                          punctuation are each drawn at their own width, from 2 to 9 pixels and 4 for a space (12 \
+                          each with the build option full-width), and a kana, a kanji or a mark of the game's own \
+                          font takes 12, counting a name the game fills in as 6 cells, a number as 6 and a word as \
+                          8; lines are broken at spaces to fit (with wrapping off, a wider one is refused); a string \
+                          has no more lines than the game's own, but a shopkeeper's line may have 2, a description \
+                          in the monster book 5, and the help pages, the chakra lessons and the diary may run on; a choice, such as yes and no, is no wider than the game's own, its box \
                           being made for that; a name of the party takes at most 6 characters, a cell each, and 15 \
                           bytes, in capitals; the strings a pack changes share the room they had between them, 70,402 \
-                          bytes if every one changes, where two letters in a cell take two bytes, as do a letter alone \
-                          in its cell and a kanji, and a kana, or a letter written a cell each, takes one, and strings \
-                          given the same text are written once, unless the code that finds them cannot reach one \
-                          place from all of them";
+                          bytes if every one changes, where a letter drawn at its own width takes one byte and each \
+                          run of them one more, a kanji two, and a kana, or a letter written a cell each, one, and \
+                          strings given the same text are written once, unless the code that finds them cannot reach \
+                          one place from all of them";
 
 /// What a translator is told about the menus' labels.
 pub const MENU_LIMITS: &str = "a label stays in its slot, and takes no more bytes than the game left for it there, the \
@@ -259,11 +261,11 @@ impl Part {
             1 => "1 cell".to_string(),
             width => format!("{width} cells"),
         };
-        let pairs = match self.start {
+        let drawn = match self.start {
             NAMES => ", each character taking a cell",
-            _ => ", two Latin letters, digits, spaces or marks to a cell",
+            _ => " of 12 pixels, Latin letters, digits, spaces and marks each at its own width",
         };
-        format!("Lines are at most {width}{pairs}, and {lines}.")
+        format!("Lines are at most {width}{drawn}, and {lines}.")
     }
 }
 

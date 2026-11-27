@@ -188,8 +188,9 @@ pub struct Shortfall {
 
 /// The heap an area needs at each of its moments: going through each door into it and out of it,
 /// loading each of its maps, and fighting there. Each comes with what it is, the other area for a
-/// door, and the bytes it takes. `areas` is every area, by entry.
-fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Option<usize>, usize)> {
+/// door, and the bytes it takes. `areas` is every area, by entry; `reserve` is what the build takes
+/// of the heap besides (see `check`), which leaves less room for the new rest at a door.
+fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize, reserve: usize) -> Vec<(String, Option<usize>, usize)> {
     let here = &areas[&entry];
     let (largest_map, _) = here.map_blocks();
     let mut found = Vec::new();
@@ -204,7 +205,7 @@ fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Opt
             if block(to.code) <= hole {
                 return read;
             }
-            let rest = if read + block(to.rest) <= ROOM + SPARE { block(to.rest) } else { 0 };
+            let rest = if read + reserve + block(to.rest) <= ROOM + SPARE { block(to.rest) } else { 0 };
             read.max(hole + 3 * block(to.code) + rest)
         })
         .max()
@@ -244,10 +245,12 @@ fn moments(areas: &BTreeMap<usize, Footprint>, entry: usize) -> Vec<(String, Opt
 
 /// The moments of the areas in `changed` at which they would leave less of the heap free than
 /// `SPARE`, and the least that any of their moments leaves free, with what that moment is. `areas`
-/// is every area, by entry, as the build would have them.
+/// is every area, by entry, as the build would have them; `reserve` is what the build takes of the
+/// heap at every moment besides, such as the larger grids of the windows' text (see `vwf`).
 pub fn check(
     areas: &BTreeMap<usize, Footprint>,
     changed: &BTreeSet<usize>,
+    reserve: usize,
 ) -> (Vec<Shortfall>, Option<(usize, String)>) {
     let mut shortfalls = Vec::new();
     let mut least: Option<(usize, String)> = None;
@@ -255,7 +258,8 @@ pub fn check(
         if !areas.contains_key(&entry) {
             continue;
         }
-        for (moment, other, used) in moments(areas, entry) {
+        for (moment, other, used) in moments(areas, entry, reserve) {
+            let used = used + reserve;
             let free = (ROOM + SPARE).saturating_sub(used);
             if least.as_ref().is_none_or(|(least, _)| free < *least) {
                 least = Some((free, format!("area {entry:03}, {moment}")));

@@ -383,29 +383,37 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   pack that changes it is refused. It is what the bosses say in battle, and the messages that take the place
   of the battle's own when such a battle starts, is won or is lost; it is shown in the battle's window, 4
   lines of 18 smaller cells, where the game goes on to the next line by itself when a line is full.
-- The game draws its text in cells of 14 pixels, and the window shows 4 lines of 16 cells. After `{SAY}`,
-  which starts a spoken line and draws its 「, the lines that follow are indented by one cell, so a spoken
-  line holds 15. Changed lines are broken at spaces to fit, and a `{WAIT}` is put in where the window would
-  fill; the window then scrolls one line at a time, so the end of the last page stays in view above the
-  new one. A name the game fills in is counted as 6 cells, a number as 6 and a word as 8.
-- Latin letters, digits, spaces and punctuation go **two to a cell**, so a line holds about 30 of them: each
-  pair of characters a pack writes side by side, accented letters included, is drawn from `unifont` (or the
-  fonts the pack names) as a glyph of its own, in both of the game's fonts: the one of 16 pixels the
-  dialogue's window uses, where each character of a pair is 7 pixels wide, and the one of 12 by 11 the
-  battle's window and the menus' screens use, where it is 6. A run of such characters is paired from its
-  start and ends at a tag (a pause or a sound inside a word does not end it), a line break or a kana, kanji
-  or mark of the game's own; an odd one at the end of a run has a cell to itself. This holds for the
-  dialogue and the program's text, but not for the party's names, which stay a character to a cell. The
-  pairs take the cells of kanji that no string the pack leaves as it is uses: 275 when a pack changes
-  little, most of the font's 1,516 kanji in a full translation. If a pack needs more pairs than that, those
-  it writes most get cells and the others are written a character to a cell; the build says how many pairs
-  it drew. A pair takes two bytes, as a kanji does.
+- The window shows 4 lines of 224 pixels; a kana, kanji or mark of the game's own font is 14 pixels wide, so
+  a line of Japanese holds 16. After `{SAY}`, which starts a spoken line and draws its 「, the lines that
+  follow start under its first character, 14 pixels in, so a spoken line has 210. Changed lines are broken at
+  spaces to fit, and a `{WAIT}` is put in where the window would fill; the window then scrolls one line at a
+  time, so the end of the last page stays in view above the new one. A name the game fills in is counted as
+  6 cells of 14 pixels, a number as 6 and a word as 8. A word wider than a line is refused.
+- Latin letters, digits, spaces and punctuation are drawn **each at its own width**, by a renderer the build
+  puts into the game: Unifont's ink and a pixel more, from 2 to 9 pixels, and 4 for a space, so a line holds
+  about 35 letters. Each character a pack writes that the game's font lacks and `unifont` (or the fonts the
+  pack names) draws 8 pixels wide, accented letters included, is drawn once into both of the game's fonts:
+  the one of 16 pixels the dialogue's window uses, and the one of 12 by 11 the battle's window and the menus'
+  screens use, at the same width. This holds for the dialogue and the program's text, but not for the
+  party's names, which stay a character to a cell. The characters take the cells of kanji that no string the
+  pack leaves as it is uses: 275 when a pack changes little, most of the font's 1,516 kanji in a full
+  translation; a pack needs about a hundred, and one that needs more cells than there are, or more than 240
+  such characters, is refused. Such a letter takes **one byte**, in a run that a byte starts, so a run takes
+  one more; a line break or a tag ends a run. The game's own text, and what the pack leaves Japanese, is
+  drawn as before.
 - With the build option `full-width` (`--option full-width`, or `options = ["full-width"]` under
   `[build]` in `pack.toml`), every character takes a cell, as in the game's own text: Latin letters,
   digits and punctuation are drawn with the game's full-width glyphs, a space is its blank cell, and
   characters the font lacks (accented letters, the comma, the apostrophe, quotation marks) are drawn from
   `unifont`, or from the fonts the pack names, into the font's 26 free cells, so a pack can use at most 26
-  such characters. Without the option, those 26 cells take only the characters that are not paired.
+  such characters. Without the option, those 26 cells take only the characters drawn 16 pixels wide.
+- What English costs in bytes, measured on the pack in progress (areas 096 to 104, 497 strings): its
+  English has twice as many characters as the Japanese, and its text blocks came out 1.5 times the
+  Japanese ones' bytes (11,796 bytes more over 23,612; two letters to a cell, as before the renderer,
+  cost 11,092). A letter is a byte where a kana is one and a kanji two. So an area that cannot grow, such
+  as 105 (27,598 bytes of text for 17,258 Japanese characters), takes an English of roughly 1.25 times as
+  many characters as its Japanese. That is an estimate: what counts is the bytes, which runs, tags and line
+  breaks change too, and the build says whether an area fits.
 - An area that grows past its sectors on the disc is moved: into the sectors other areas that moved
   left, or to the disc's free room near its end, 16,384 sectors. Every area of the game can grow and
   move: an area takes a few hundred to a few thousand sectors, and a full translation adds a few to
