@@ -67,6 +67,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+use super::battle::{BATTLE_SECTION, battle_text};
 use super::program::{self as program_text, MENU_SECTION, PROGRAM_SECTION};
 use super::{
     ARCHIVE, AREA_HEADER, Area, ByteCodes, CONTENTS, Entry, FIRST_CODE, FONT_PAGES, GLYPH_SIZE, NAME_INSERTS, PROGRAM,
@@ -615,13 +616,15 @@ impl Done {
 }
 
 /// Write to `output` the game with the pack's strings in it. Only the areas' dialogue can be
-/// changed; a pack that changes the program's text is refused.
+/// changed; a pack that changes the program's text, the bosses' speeches in battle among it, is
+/// refused.
 pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) -> Result<Built> {
     let program = program(disc)?;
     let codes = &program.codes;
     let areas = areas(disc)?;
     let by_section: HashMap<String, &Area> = areas.iter().map(|area| (area.section(), area)).collect();
     let own_text = program_text::program_text(disc)?;
+    let battle_lines = battle_text(disc)?;
     let changes = changes_by_place(&pack.texts, |section| match by_section.get(section) {
         Some(area) => Some(area.strings().into_iter().map(|(number, data)| (number, decode(data, codes))).collect()),
         None if section == PROGRAM_SECTION => {
@@ -629,6 +632,9 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         }
         None if section == MENU_SECTION => {
             Some(own_text[section].iter().map(|(number, data)| (*number, program_text::decode_small(data))).collect())
+        }
+        None if section == BATTLE_SECTION => {
+            Some(battle_lines.iter().map(|(number, line)| (*number, decode(&line.data, codes))).collect())
         }
         None => None,
     })?;

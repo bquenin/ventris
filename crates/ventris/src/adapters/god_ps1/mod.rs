@@ -1,10 +1,10 @@
 //! G.O.D pure (PlayStation, Japan).
 //!
-//! What is known so far covers the dialogue, the text of the game's areas, and most of the text the
-//! program itself holds (its lists, help pages, battle messages and menus, see `program`): where it
-//! is, how it is encoded, and how to write it out and read it back without loss. The dialogue can be
-//! changed, longer than the game's own and with characters its font lacks (see `insert`); the
-//! program's text cannot be yet.
+//! What is known so far covers the dialogue, the text of the game's areas, most of the text the
+//! program itself holds (its lists, help pages, battle messages and menus, see `program`), and what
+//! the bosses say in battle (see `battle`): where it is, how it is encoded, and how to write it out
+//! and read it back without loss. The dialogue can be changed, longer than the game's own and with
+//! characters its font lacks (see `insert`); the program's text cannot be yet.
 //!
 //! Where things are. The disc holds one large archive, `GOD.DAT`, with no header of its own. Its
 //! table of contents is in the program the console starts, `SLPS_009.44`, at offset $86F64 of the
@@ -78,7 +78,8 @@
 //!
 //! The program's text is in two more sections, `program` and `menu`, each of them a kind of its own
 //! since the two are written and drawn differently; their strings are numbered by their offset in the
-//! program's file (see `program`).
+//! program's file (see `program`). What the bosses say in battle, also in the program's file, is a
+//! third, `battle`, numbered the same way (see `battle`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::ops::RangeInclusive;
@@ -632,6 +633,11 @@ pub fn extract(disc: &Disc) -> Result<Script> {
         program::MENU_SECTION.to_string(),
         labels.iter().map(|(number, data)| (*number, program::decode_small(data))).collect(),
     );
+    let lines = battle::battle_text(disc)?;
+    script.insert(
+        battle::BATTLE_SECTION.to_string(),
+        lines.iter().map(|(number, line)| (*number, decode(&line.data, codes))).collect(),
+    );
     Ok(script)
 }
 
@@ -648,6 +654,11 @@ pub fn verify_script(disc: &Disc, script: &Script) -> Result<()> {
         })
         .collect();
     original.insert(program::PROGRAM_SECTION.to_string(), text[program::PROGRAM_SECTION].clone());
+    let lines = battle::battle_text(disc)?;
+    original.insert(
+        battle::BATTLE_SECTION.to_string(),
+        lines.iter().map(|(number, line)| (*number, line.data.clone())).collect(),
+    );
     let labels = BTreeMap::from([(program::MENU_SECTION.to_string(), text[program::MENU_SECTION].clone())]);
     let (menu, rest): (Script, Script) =
         script.clone().into_iter().partition(|(section, _)| section == program::MENU_SECTION);
@@ -656,7 +667,7 @@ pub fn verify_script(disc: &Disc, script: &Script) -> Result<()> {
 }
 
 /// An area is named by its entry in the table of contents, in three digits. The program's text is
-/// in two sections named in words.
+/// in three sections named in words.
 fn is_dialogue(section: &str) -> bool {
     let digits = section.len() == 3 && section.bytes().all(|byte| byte.is_ascii_digit());
     digits && section.parse().is_ok_and(|entry: usize| AREAS.contains(&entry))
@@ -670,7 +681,11 @@ fn is_menu(section: &str) -> bool {
     section == program::MENU_SECTION
 }
 
-static KINDS: [TextKind; 3] = [
+fn is_battle(section: &str) -> bool {
+    section == battle::BATTLE_SECTION
+}
+
+static KINDS: [TextKind; 4] = [
     TextKind {
         insert: true,
         grow: true,
@@ -685,6 +700,7 @@ static KINDS: [TextKind; 3] = [
     },
     TextKind { numbered_by_place: true, ..TextKind::new("program", is_program) },
     TextKind { numbered_by_place: true, ..TextKind::new("menu", is_menu) },
+    TextKind { numbered_by_place: true, ..TextKind::new("battle", is_battle) },
 ];
 
 /// The adapter itself: what the rest of this module knows, on the contract every game follows.
@@ -740,6 +756,9 @@ impl Adapter for God {
     }
 
     fn note(&self, section: &str, number: Option<u32>) -> Option<String> {
+        if is_battle(section) {
+            return battle::note(number);
+        }
         if !is_dialogue(section) {
             return program::note(section, number);
         }
@@ -805,6 +824,7 @@ impl Adapter for God {
     }
 }
 
+pub mod battle;
 pub mod insert;
 pub mod program;
 
