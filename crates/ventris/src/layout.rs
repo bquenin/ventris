@@ -80,7 +80,8 @@ fn wrap_line<'a>(
             continue;
         }
         if char == ' ' {
-            let step = advance(char)?;
+            // Without `within` a space past the end is not measured, as it is left out.
+            let step = if within || width < limit { advance(char)? } else { 0 };
             if past(width, step) {
                 // the space itself falls off the end: break here
                 pieces.push(&line[start..position]);
@@ -155,6 +156,9 @@ mod tests {
         assert_eq!(wrap_lines("aaa a", &|_| Ok(12), 50, &|_, _| 0, PAGE_TAGS).unwrap(), "aaa a");
         // A line with no space in it is left alone, as without.
         assert_eq!(within("aaaaaaa", 50, 10), "aaaaaaa");
+        // Without `within`, a space that falls off the end is left out unmeasured.
+        let letters = |char: char| if char == ' ' { crate::error::text_error("no space") } else { Ok(10) };
+        assert_eq!(wrap_lines("aa bb", &letters, 20, &|_, _| 0, PAGE_TAGS).unwrap(), "aa\nbb");
     }
 
     #[test]
