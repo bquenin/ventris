@@ -66,7 +66,7 @@
 //! bit of its pixels is written, and the other three fonts are left as they were. The font is loaded
 //! when the game starts.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -760,13 +760,18 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
         }
         done.areas += 1;
     }
-    // Room on the heap for every moment of the areas that changed.
-    let mut footprints = (*footprints(disc)?).clone();
-    for (entry, code) in &new_codes {
-        footprints.get_mut(entry).expect("every area has a footprint").code = *code;
-    }
-    let changed = new_codes.keys().copied().collect();
-    let (shortfalls, least) = heap::check(&footprints, &changed);
+    // Room on the heap for every moment of the areas that changed. A pack that changes no area's
+    // code has nothing to check, and the areas are not read for it.
+    let changed: BTreeSet<usize> = new_codes.keys().copied().collect();
+    let (shortfalls, least) = if changed.is_empty() {
+        (Vec::new(), None)
+    } else {
+        let mut footprints = (*footprints(disc)?).clone();
+        for (entry, code) in &new_codes {
+            footprints.get_mut(entry).expect("every area has a footprint").code = *code;
+        }
+        heap::check(&footprints, &changed)
+    };
     done.least = least;
     for Shortfall { area, other, moment, over } in shortfalls {
         let also = match other {
