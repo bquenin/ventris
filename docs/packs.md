@@ -383,16 +383,29 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   pack that changes it is refused. It is what the bosses say in battle, and the messages that take the place
   of the battle's own when such a battle starts, is won or is lost; it is shown in the battle's window, 4
   lines of 18 smaller cells, where the game goes on to the next line by itself when a line is full.
-- Every character takes the same room, a cell of 14 pixels, and the window shows 4 lines of 16 cells.
-  After `{SAY}`, which starts a spoken line and draws its 「, the lines that follow are indented by one
-  cell, so a spoken line holds 15. Changed lines are broken at spaces to fit, and a `{WAIT}` is put in
-  where the window would fill; the window then scrolls one line at a time, so the end of the last page
-  stays in view above the new one. A name the game fills in is counted as 6 cells, a number as 6 and a
-  word as 8.
-- Latin letters, digits and punctuation are drawn with the game's own full-width glyphs; a space is its
-  blank cell. Characters the font lacks (accented letters, the comma, the apostrophe, quotation marks)
-  are drawn from `unifont`, or from the fonts the pack names, into the font's 26 free cells, so a pack can
-  use at most 26 such characters.
+- The game draws its text in cells of 14 pixels, and the window shows 4 lines of 16 cells. After `{SAY}`,
+  which starts a spoken line and draws its 「, the lines that follow are indented by one cell, so a spoken
+  line holds 15. Changed lines are broken at spaces to fit, and a `{WAIT}` is put in where the window would
+  fill; the window then scrolls one line at a time, so the end of the last page stays in view above the
+  new one. A name the game fills in is counted as 6 cells, a number as 6 and a word as 8.
+- Latin letters, digits, spaces and punctuation go **two to a cell**, so a line holds about 30 of them: each
+  pair of characters a pack writes side by side, accented letters included, is drawn from `unifont` (or the
+  fonts the pack names) as a glyph of its own, in both of the game's fonts: the one of 16 pixels the
+  dialogue's window uses, where each character of a pair is 7 pixels wide, and the one of 12 by 11 the
+  battle's window and the menus' screens use, where it is 6. A run of such characters is paired from its
+  start and ends at a tag (a pause or a sound inside a word does not end it), a line break or a kana, kanji
+  or mark of the game's own; an odd one at the end of a run has a cell to itself. This holds for the
+  dialogue and the program's text, but not for the party's names, which stay a character to a cell. The
+  pairs take the cells of kanji that no string the pack leaves as it is uses: 275 when a pack changes
+  little, most of the font's 1,516 kanji in a full translation. If a pack needs more pairs than that, those
+  it writes most get cells and the others are written a character to a cell; the build says how many pairs
+  it drew. A pair takes two bytes, as a kanji does.
+- With the build option `full-width` (`--option full-width`, or `options = ["full-width"]` under
+  `[build]` in `pack.toml`), every character takes a cell, as in the game's own text: Latin letters,
+  digits and punctuation are drawn with the game's full-width glyphs, a space is its blank cell, and
+  characters the font lacks (accented letters, the comma, the apostrophe, quotation marks) are drawn from
+  `unifont`, or from the fonts the pack names, into the font's 26 free cells, so a pack can use at most 26
+  such characters. Without the option, those 26 cells take only the characters that are not paired.
 - An area that grows past its place on the disc is moved to free room at the end of the disc; a build
   that needs more than that room is refused.
 - An area's code, which holds its text, must fit on the game's heap with everything else that is there
@@ -418,7 +431,8 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   that lead to each other share their room: what one takes, the other cannot, and an area whose code
   grows past another's can make the door between them need the three copies.
 - The program cannot grow, so the strings of `program` a pack changes share the room they had between them:
-  70,402 bytes if every one changes, a letter, a digit, a space or a kana taking one byte and a kanji two.
+  70,402 bytes if every one changes, a kana taking one byte, and a kanji or a cell of two letters two, as
+  does the cell of an odd letter at the end of a run, its other half blank.
   One may be longer where others are shorter, and strings given the same text are written once, which
   frees much room, since the game repeats many (the monster book's descriptions above all); but where the
   code that finds such strings cannot reach one place from all of them, each is written apart, and needs

@@ -383,6 +383,24 @@ pub fn new_glyphs(sources: &[Font], characters: &[char]) -> Result<BTreeMap<char
     Ok(found)
 }
 
+/// Glyphs designed 8 pixels wide for those of `characters` that a font has so, from the first of
+/// `sources` that has each; a character no font draws narrow is left out.
+pub fn narrow_glyphs(sources: &[Font], characters: &[char]) -> Result<BTreeMap<char, Glyph>> {
+    let mut found = BTreeMap::new();
+    for source in sources {
+        let missing: Vec<char> = characters.iter().copied().filter(|char| !found.contains_key(char)).collect();
+        if missing.is_empty() {
+            break;
+        }
+        match load_unifont(source, &missing, true) {
+            Ok(glyphs) => found.extend(glyphs.into_iter().filter(|(_, glyph)| glyph.width == 8)),
+            Err(Error::Font(message)) => return text_error(format!("{}: {message}", source.name())),
+            Err(other) => return Err(other),
+        }
+    }
+    Ok(found)
+}
+
 /// Give each new character one of the free places in a font, in order. `what` names the font in the
 /// message when there are too few: "the font".
 pub fn assign_slots(characters: &[char], free: &[usize], what: &str) -> Result<BTreeMap<char, usize>> {
@@ -394,6 +412,61 @@ pub fn assign_slots(characters: &[char], free: &[usize], what: &str) -> Result<B
         ));
     }
     Ok(characters.iter().copied().zip(free.iter().copied()).collect())
+}
+
+/// Give the free places of a font to the keys that are used most, as many as there is room for:
+/// `counts` says how often each key is used. Keys used as often keep their order. Where there is
+/// room for all, all have a place. The keys left out are those a build writes some other way.
+pub fn assign_most_used<K: Ord + Copy>(counts: &BTreeMap<K, usize>, free: &[usize]) -> BTreeMap<K, usize> {
+    let mut keys: Vec<(&K, &usize)> = counts.iter().collect();
+    keys.sort_by(|one, other| other.1.cmp(one.1).then(one.0.cmp(other.0)));
+    keys.into_iter().zip(free).map(|((key, _), place)| (*key, *place)).collect()
+}
+
+// --- two narrow characters to a cell ---------------------------------------
+//
+// A game whose font has cells as wide as a kanji can draw two narrow letters in each, and so fit
+// twice the text on a line: every pair of characters a translation uses becomes a glyph of its own.
+
+/// Narrow characters in the order they are written, two to a cell. An odd one at the end is alone.
+pub fn pair_up(run: &[char]) -> Vec<(char, Option<char>)> {
+    run.chunks(2).map(|pair| (pair[0], pair.get(1).copied())).collect()
+}
+
+/// Whether a character is a kanji: one of the unified ideographs, or of their first extension.
+/// Fonts that hold a game's kanji in cells of their own are where pairs find room once the
+/// strings that used those kanji are translated.
+pub fn is_kanji(char: char) -> bool {
+    matches!(char, '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}')
+}
+
+/// A narrow glyph (one designed 8 pixels wide) fitted to `width` columns, the last of which is left
+/// empty so that letters side by side do not touch: its rows, the leftmost pixel in the top bit.
+///
+/// Empty columns go first, from the right edge, then from the left, which is where Unifont leaves
+/// its own room. A glyph whose ink is still too wide (Unifont's `m`, `w`, `M`, `W`) loses the
+/// columns inside it that have the least ink, the middlemost first, so that its strokes stay.
+pub fn narrowed(glyph: &Glyph, width: usize) -> [u16; CELL] {
+    let column = |x: usize| -> u16 { (0..CELL).fold(0, |bits, y| bits | (glyph.rows[y] >> (CELL - 1 - x) & 1) << y) };
+    let mut columns: Vec<u16> = (0..glyph.width.min(CELL)).map(column).collect();
+    let room = width.saturating_sub(1);
+    while columns.len() > room {
+        if columns.last() == Some(&0) {
+            columns.pop();
+        } else if columns.first() == Some(&0) {
+            columns.remove(0);
+        } else if columns.len() > 2 {
+            let middle = (columns.len() - 1) as f64 / 2.0;
+            let weight = |x: usize| (columns[x].count_ones(), ((x as f64 - middle).abs() * 2.0) as u32);
+            let thinnest = (1..columns.len() - 1).min_by_key(|x| weight(*x)).unwrap_or(1);
+            columns.remove(thinnest);
+        } else {
+            columns.pop();
+        }
+    }
+    std::array::from_fn(|y| {
+        columns.iter().enumerate().fold(0, |row, (x, bits)| row | (bits >> y & 1) << (CELL - 1 - x))
+    })
 }
 
 /// A glyph of any size, as its font designed it: nothing scaled, nothing trimmed.
@@ -712,6 +785,46 @@ mod tests {
             assign_slots(&['a', 'b'], &[7], "the menu font").unwrap_err().to_string(),
             "the pack needs 2 new characters and the menu font has room for 1"
         );
+    }
+
+    #[test]
+    fn the_most_used_keys_get_the_free_places() {
+        let counts = BTreeMap::from([("ab", 3), ("cd", 9), ("ef", 3), ("gh", 1)]);
+        // The most used first; as often used, in their order.
+        assert_eq!(assign_most_used(&counts, &[10, 11, 12]), BTreeMap::from([("cd", 10), ("ab", 11), ("ef", 12)]));
+        assert_eq!(assign_most_used(&counts, &[1, 2, 3, 4, 5]).len(), 4);
+        assert!(assign_most_used(&counts, &[]).is_empty());
+    }
+
+    #[test]
+    fn narrow_characters_go_two_to_a_cell() {
+        assert_eq!(pair_up(&characters("abcde")), [('a', Some('b')), ('c', Some('d')), ('e', None)]);
+        assert!(pair_up(&[]).is_empty());
+        assert!(is_kanji('目') && is_kanji('㐀') && !is_kanji('あ') && !is_kanji('Ａ'));
+    }
+
+    /// A narrow glyph from rows of 8 pixels written as text, `#` for ink.
+    fn drawn(rows: &[&str]) -> Glyph {
+        let mut glyph = Glyph { rows: [0; CELL], width: 8 };
+        for (y, row) in rows.iter().enumerate() {
+            glyph.rows[y] = row.chars().enumerate().filter(|(_, c)| *c == '#').map(|(x, _)| 0x8000 >> x).sum();
+        }
+        glyph
+    }
+
+    #[test]
+    fn a_narrow_glyph_is_fitted_to_fewer_columns_with_its_last_one_empty() {
+        // Ink in columns 1 to 6, as most of Unifont's letters: the empty columns at the edges go.
+        let o = drawn(&[".######.", ".#....#.", ".######."]);
+        assert_eq!(narrowed(&o, 7)[..3], [0xFC00, 0x8400, 0xFC00]);
+        // Ink in seven columns, as Unifont's m: the inner column with least ink goes, the middlemost first.
+        let m = drawn(&[".###.##.", ".#..#..#", ".#..#..#"]);
+        let fitted = narrowed(&m, 7);
+        assert_eq!(fitted[..3], [0xD800, 0xA400, 0xA400]);
+        assert!(fitted.iter().all(|row| row & 0x0300 == 0));
+        // Narrower still: a column of ink at most, and never past the room.
+        assert!(narrowed(&m, 6).iter().all(|row| row & 0x07FF == 0));
+        assert_eq!(narrowed(&drawn(&["...##..."]), 7)[0], 0x1800);
     }
 
     /// A font with a cell 6 wide and 8 high, 2 rows of it below the baseline, and three glyphs:

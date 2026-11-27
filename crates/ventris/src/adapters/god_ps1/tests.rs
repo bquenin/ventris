@@ -206,7 +206,11 @@ fn notes_say_what_each_part_of_the_program_s_text_is() {
     assert_eq!(line(0xA_0A51), format!("A shopkeeper's line: {}.", SHOP_LINES[1].1));
     assert!(line(0xA_0F4C).contains("monster book"));
     // The first string of a part says the room its lines have; a choice, that its box is the game's own.
-    assert!(first.contains("Lines are at most 13 characters, and a string has at most 2 lines."), "{first}");
+    let room = "Lines are at most 13 cells, two Latin letters, digits, spaces or marks to a cell, and a string has at most 2 \
+                lines.";
+    assert!(first.contains(room), "{first}");
+    let names = ADAPTER.note("program", Some(0xA_B350)).unwrap();
+    assert!(names.contains("Lines are at most 6 cells, each character taking a cell,"), "{names}");
     assert!(line(0xA_9088).ends_with("a string of one line stays one line, and one of several lines has at most 109."));
     assert!(line(0xA_B380).ends_with("no line may be wider than the game's own widest."));
     assert_eq!(ADAPTER.note("program", Some(0xA_B354)), None);

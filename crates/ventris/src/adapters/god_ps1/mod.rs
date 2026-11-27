@@ -67,7 +67,10 @@
 //! 256 pixels of 4 bits. Each bit of a pixel is a font of its own, so each picture holds four fonts
 //! of 256 glyphs of 16 by 16 pixels, and the two hold the 2048 glyphs of codes $100 to $8FF: code
 //! `c` is glyph `c - $100`, in the first picture below $500, in the bit given by the glyph's number
-//! divided by 256, at the column and row given by its last two hexadecimal digits.
+//! divided by 256, at the column and row given by its last two hexadecimal digits. Member 2 holds
+//! the same glyphs again, smaller, 12 by 11 pixels, for the battle's window and the screens of the
+//! main menu: glyph `n` is in the bit `n / 483`, at place `n % 483`, 21 to a row (the routine at
+//! $80058828), 1,932 glyphs in all.
 //!
 //! The table of characters, `characters.tbl`, gives the character each code draws. Where two codes
 //! draw one character, the character is written with the one the game has a byte for, or else
@@ -764,6 +767,10 @@ impl Adapter for God {
 
     fn kinds(&self) -> &'static [TextKind] {
         &KINDS
+    }
+
+    fn switches(&self) -> &'static [(&'static str, &'static str)] {
+        &insert::SWITCHES
     }
 
     fn fonts(&self) -> &'static [&'static str] {
