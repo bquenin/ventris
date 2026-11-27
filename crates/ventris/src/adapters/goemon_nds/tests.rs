@@ -263,6 +263,9 @@ fn the_last_line_of_a_box_leaves_room_for_the_prompt() {
     let text = format!("a\nb\nc\n{} {} {} f", word("d", 19), word("e", 19), word("f", 17));
     let expected = format!("a\nb\nc\n{}\n{}\n{}\nf", word("d", 19), word("e", 19), word("f", 17));
     assert_eq!(wrapped(&text, PROMPT_CELLS), expected);
+    // The line instruction written as a tag starts a line as a line break does.
+    let text = format!("a{{06}}b{{06}}{} d", word("c", 17));
+    assert_eq!(wrapped(&text, PROMPT_CELLS), format!("a{{06}}b{{06}}{}\nd", word("c", 17)));
     // A box started by {0A} on a third line counts its lines from there: its first holds 20 cells.
     let text = format!("a\nb\nccc{{0D}}{{0A}}{} c", word("d", 18));
     assert_eq!(wrapped(&text, PROMPT_CELLS), text);

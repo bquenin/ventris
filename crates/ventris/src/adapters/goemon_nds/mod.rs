@@ -821,10 +821,15 @@ fn break_in_boxes(measured: &str, limit: usize, prompt: usize) -> String {
     let mut position = 0;
     while let Some(char) = measured[position..].chars().next() {
         if char == '{'
-            && let Some(Token::Tag { raw, name, .. }) = text::tag_at(&measured[position..])
+            && let Some(Token::Tag { raw, name, value }) = text::tag_at(&measured[position..])
         {
             if NEW_BOX.contains(&name) {
                 line = 0;
+                width = 0;
+                space = None;
+            } else if value.is_none() && u8::from_str_radix(name, 16) == Ok(LINE) {
+                // The instruction written as a tag, `{06}`, starts a line as a line break does.
+                line += 1;
                 width = 0;
                 space = None;
             }
