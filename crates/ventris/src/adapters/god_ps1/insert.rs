@@ -42,7 +42,9 @@
 //! to 195, so they could not be read wherever the member was; nothing seems to read them.)
 //!
 //! How large an area may grow. The game loads an area's code onto its heap, where it must find room
-//! for it among everything else (`BLOCK_LIMIT`).
+//! for it among everything else, and most of all when the player goes through a door, as the old
+//! area and the new are both there for a while. Every moment of a changed area must leave at least as
+//! much of the heap free as the game itself does at its tightest (see `heap`).
 //!
 //! How a string is fitted to the window (`fit`). The dialogue's window is 16 cells wide and 4 lines
 //! high, and every character takes one cell. A spoken line starts with 「 in the first cell, and the
@@ -64,14 +66,16 @@
 //! bit of its pixels is written, and the other three fonts are left as they were. The font is loaded
 //! when the game starts.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
 use super::battle::{BATTLE_SECTION, battle_text};
+use super::heap::{self, Footprint, SPARE, Shortfall};
 use super::program::{self as program_text, MENU_SECTION, PROGRAM_SECTION};
 use super::{
-    ARCHIVE, AREA_HEADER, Area, ByteCodes, CONTENTS, Entry, FIRST_CODE, FONT_PAGES, GLYPH_SIZE, NAME_INSERTS, PROGRAM,
-    WORD_INSERT, areas, code_of, decode, encode_with, member, program, text_block, word,
+    ARCHIVE, AREA_HEADER, AREAS, Area, ByteCodes, CONTENTS, Entry, FIRST_CODE, FONT_PAGES, GLYPH_SIZE, NAME_INSERTS,
+    PROGRAM, WORD_INSERT, areas, code_of, decode, encode_with, member, program, text_block, word,
 };
 use crate::adapter::{BuildOptions, Built};
 use crate::error::{Error, Result, text_error};
@@ -81,13 +85,6 @@ use crate::platforms::ps1::{self, Disc, tim};
 use crate::script::{Pack, changes_by_place, string_name};
 use crate::text::{Token, plain_characters, tokens};
 
-/// The largest area code the game has been seen to run with: area 096 grown to this size ran to the
-/// field, with about 660 KB of the heap still free there. It is 34 KB more than the largest area of
-/// the game, area 178. A battle takes more of the heap than the field, and the game loads the next
-/// area's code while the current one is still there; neither was measured with an area this large,
-/// so this is the size known to be safe, to be raised once a battle in the largest area has been
-/// seen to work.
-pub const BLOCK_LIMIT: usize = 0x2_D9D0;
 /// The file of the disc whose room takes the members that grew.
 pub const SPARE_FILE: &str = "DATA/OUT3MIN.DAT";
 /// Where the header's entries that give places in the member are, and how many there are.
@@ -127,7 +124,10 @@ pub const LIMITS: &str = "the window shows 4 lines of 16 characters, 15 in a spo
                           and space taking the same room; lines are broken at spaces, and a {WAIT} is put in where \
                           the window would fill, counting a name the game fills in as 6 characters, a number as 6 \
                           and a word as 8 (with wrapping off, a line longer than the window is refused); an area's \
-                          code, its text included, can grow to 186,832 bytes, far more than most areas need";
+                          code, its text included, can grow only as far as the game's heap has room for when the \
+                          player goes through a door into or out of the area, loads one of its maps or fights in it: \
+                          not at all for areas 105 and 107, a few thousand bytes for areas 131, 154, 157 and 179, and \
+                          over 150,000 for half of the areas (docs/packs.md lists the tightest)";
 
 // --- characters ------------------------------------------------------------
 
@@ -525,6 +525,25 @@ pub fn rebuild_member(member: &[u8], text: &[u8]) -> std::result::Result<Vec<u8>
     Ok(out)
 }
 
+/// What each area puts on the heap, by entry, as the game has it, read once for an open disc.
+pub(super) fn footprints(disc: &Disc) -> Result<Arc<BTreeMap<usize, Footprint>>> {
+    disc.keep("god-ps1 footprints", || {
+        let program = program(disc)?;
+        let first = disc.first_sector(ARCHIVE)?;
+        let mut found = BTreeMap::new();
+        for entry in AREAS {
+            let sector = first + program.contents[entry].0;
+            let code = word(&disc.data(sector, 0, AREA_HEADER as u64)?, 0).unwrap_or_default();
+            let start = disc.data(sector, 0, (AREA_HEADER + code) as u64)?;
+            let Some(footprint) = Footprint::of(&start) else {
+                return Err(Error::Image(format!("area {entry:03} is not laid out as an area is")));
+            };
+            found.insert(entry, footprint);
+        }
+        Ok(found)
+    })
+}
+
 /// A word of a member that `layout_holds` has checked is there.
 fn member_word(member: &[u8], number: usize) -> usize {
     header_word(member, number).unwrap_or_default()
@@ -584,8 +603,8 @@ struct Done {
     areas: usize,
     /// The areas that were moved to the free room of the disc.
     moved: Vec<String>,
-    /// The largest code of the areas that changed, and which area it is.
-    largest: Option<(usize, String)>,
+    /// The least of the heap that a moment of the changed areas leaves free, and which moment it is.
+    least: Option<(usize, String)>,
     new_characters: Vec<char>,
 }
 
@@ -598,9 +617,9 @@ impl Done {
                 self.moved.join(", ")
             ));
         }
-        if let Some((size, area)) = &self.largest {
+        if let Some((free, moment)) = &self.least {
             lines.push(format!(
-                "room:      the largest area changed, {area}, has {size} bytes of code, of the {BLOCK_LIMIT} known to work"
+                "room:      {free} bytes of the heap free at the tightest moment, {moment} (the game leaves {SPARE} at its own)"
             ));
         }
         if !self.new_characters.is_empty() {
@@ -706,6 +725,7 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
     let spare_sectors = (disc.size(SPARE_FILE)? / ps1::SECTOR) as usize;
     let mut spare_used = 0;
     let mut spare_wanted = 0;
+    let mut new_codes = BTreeMap::new();
     for (section, strings) in &replaced {
         let area = by_section[*section];
         let old = member(disc, area.entry)?;
@@ -713,18 +733,7 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
             Ok(rebuilt) => rebuilt,
             Err(problem) => return Err(Error::Image(format!("area {section}: {problem}"))),
         };
-        let code = member_word(&rebuilt, 0);
-        if code > BLOCK_LIMIT {
-            refusals.push(format!(
-                "area {section}: its code, which holds its text, would be {code} bytes, {} more than the {BLOCK_LIMIT} \
-                 the game is known to have room for: shorten some of its changed lines",
-                code - BLOCK_LIMIT
-            ));
-            continue;
-        }
-        if done.largest.as_ref().is_none_or(|(size, _)| code > *size) {
-            done.largest = Some((code, section.to_string()));
-        }
+        new_codes.insert(area.entry, member_word(&rebuilt, 0));
         let (sector, size) = program.contents[area.entry];
         let (old_sectors, new_sectors) = ((size as usize).div_ceil(SECTOR), rebuilt.len().div_ceil(SECTOR));
         let mut data = rebuilt.clone();
@@ -750,6 +759,29 @@ pub fn build(disc: &Disc, pack: &Pack, output: &Path, options: &BuildOptions) ->
             }
         }
         done.areas += 1;
+    }
+    // Room on the heap for every moment of the areas that changed. A pack that changes no area's
+    // code has nothing to check, and the areas are not read for it.
+    let changed: BTreeSet<usize> = new_codes.keys().copied().collect();
+    let (shortfalls, least) = if changed.is_empty() {
+        (Vec::new(), None)
+    } else {
+        let mut footprints = (*footprints(disc)?).clone();
+        for (entry, code) in &new_codes {
+            footprints.get_mut(entry).expect("every area has a footprint").code = *code;
+        }
+        heap::check(&footprints, &changed)
+    };
+    done.least = least;
+    for Shortfall { area, other, moment, over } in shortfalls {
+        let also = match other {
+            Some(other) if changed.contains(&other) => format!(" (or those of area {other:03})"),
+            _ => String::new(),
+        };
+        refusals.push(format!(
+            "area {area:03}: {moment}, the game would need {over} bytes more of its heap than it has room for: \
+             shorten some of its changed lines{also}"
+        ));
     }
     if spare_wanted > spare_sectors {
         refusals.push(format!(

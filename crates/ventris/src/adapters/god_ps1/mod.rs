@@ -825,6 +825,7 @@ impl Adapter for God {
 }
 
 pub mod battle;
+pub mod heap;
 pub mod insert;
 pub mod program;
 
