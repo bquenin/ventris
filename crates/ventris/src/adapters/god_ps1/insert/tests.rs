@@ -308,7 +308,8 @@ fn build_puts_a_longer_line_in_and_moves_its_area_when_it_grows() {
         built.summary,
         [
             "dialogue:  1 strings changed in 1 areas",
-            "room:      the largest area changed, 096, has 55576 bytes of code, of the 186832 known to work",
+            "room:      388168 bytes of the heap free at the tightest moment, area 096, in a battle (the game leaves \
+             19636 at its own)",
             "font:      3 new characters drawn into its blank cells, of 26: ,'é",
         ]
     );
@@ -349,11 +350,12 @@ fn build_puts_a_longer_line_in_and_moves_its_area_when_it_grows() {
         assert_eq!(text["096"][&110], original["096"][&110]);
         assert!(text["096"][&109].len() > 6000);
     }
-    // Too large for the room the game is known to have: refused, and nothing written.
+    // Too large for the heap, and the bosses' speeches in battle: refused, and nothing written.
     fs::remove_file(&out).unwrap();
-    let huge = format!("{{SAY}}{}{{/SAY}}", "日".repeat(70_000));
+    let huge = format!("{{SAY}}{}{{/SAY}}", "日".repeat(200_000));
     let refused = build(disc, &pack_of(&[(109, &huge)]), &out, &BuildOptions::default()).err().unwrap().to_string();
-    assert!(refused.starts_with("area 096: its code, which holds its text, would be"), "{refused}");
+    assert!(refused.starts_with("area 096: going into it from area 097, the game would need "), "{refused}");
+    assert!(refused.ends_with(" bytes more of its heap than it has room for: shorten some of its changed lines"));
     let speech = Pack::of(Script::from([("battle".to_string(), BTreeMap::from([(0x9_812A, "x".to_string())]))]));
     let refused = build(disc, &speech, &out, &BuildOptions::default()).err().unwrap().to_string();
     assert!(refused.starts_with("the pack changes what the bosses say in battle (battle.622890)"), "{refused}");
@@ -451,4 +453,35 @@ fn build_puts_the_program_s_text_and_the_menus_labels_in() {
             .starts_with("string menu.688708: it draws 13 characters, and the labels of its screen have room for 11")
     );
     assert!(!out.exists());
+}
+
+#[test]
+fn an_area_the_game_leaves_no_room_for_cannot_grow() {
+    let Some(image) = game() else { return };
+    let disc = image.ps1_disc().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let out = folder.path().join("built.bin");
+    let pack = |text: &str| Pack::of(Script::from([("105".to_string(), BTreeMap::from([(4, text.to_string())]))]));
+    // Going from area 107 into area 105, the game leaves only `SPARE` bytes of its heap free: area 105
+    // cannot take a word more, and the three copies of its code need three times that.
+    let refused = build(
+        disc,
+        &pack("{SAY}おやおや、{NAME:17}さんは\nマヒしてますね。\n{NUM}Ｇかかりますが\nなおしますか？いいえ{/SAY}"),
+        &out,
+        &BuildOptions::default(),
+    );
+    assert_eq!(
+        refused.err().unwrap().to_string(),
+        "area 105: going into it from area 107, the game would need 12 bytes more of its heap than it has room for: \
+         shorten some of its changed lines"
+    );
+    assert!(!out.exists());
+    // A line as long as the game's own goes in.
+    let same = "{SAY}おやおや、{NAME:17}さんは\nマヒしてますね。\n{NUM}Ｇかかりますが\nなおすのですか{/SAY}";
+    let built = build(disc, &pack(same), &out, &BuildOptions::default()).unwrap();
+    assert_eq!(
+        built.summary[1],
+        "room:      19636 bytes of the heap free at the tightest moment, area 105, going into it from area 107 (the \
+         game leaves 19636 at its own)"
+    );
 }

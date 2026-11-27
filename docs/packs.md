@@ -393,9 +393,30 @@ Each game's limits are given by `ventris games`. What follows is what else a pac
   blank cell. Characters the font lacks (accented letters, the comma, the apostrophe, quotation marks)
   are drawn from `unifont`, or from the fonts the pack names, into the font's 26 free cells, so a pack can
   use at most 26 such characters.
-- An area that grows past its place on the disc is moved to free room at the end of the disc, and an
-  area's code with its text can grow to 186,832 bytes, the largest seen to work; a build that passes
-  either limit is refused with the area and what to do.
+- An area that grows past its place on the disc is moved to free room at the end of the disc; a build
+  that needs more than that room is refused.
+- An area's code, which holds its text, must fit on the game's heap with everything else that is there
+  at the area's busiest moment: going through a door into it or out of it, when the game holds both
+  areas for a while, loading one of its maps, or fighting in it. Going through a door into an area
+  whose code does not fit where the old area's was, the game needs room for three copies of the new
+  code at once, and running out of room there stops the game. The game leaves itself little room in
+  places: going from area 107 into area 105, only 19,636 bytes of the heap are free. A build must leave
+  at least that much at every moment of every area it changes, or it is refused with the area, the
+  moment (the door, and the other area) and how many bytes too many it needs. How much an area can
+  grow, if no other area does:
+
+  | Area | Text (bytes) | Can grow by (bytes) | Tightest moment |
+  | --- | ---: | ---: | --- |
+  | 105 | 27,598 | 0 | going into it from area 107 |
+  | 107 | 6,088 | 0 | going from it into area 105 |
+  | 179 | 13,474 | 384 | going into it from area 131 |
+  | 131 | 12,750 | 1,160 | going from it into area 179 |
+  | 157 | 16,370 | 1,652 | going into it from area 154 |
+  | 154 | 20,354 | 3,592 | going into it from area 157 |
+
+  Every other area can grow by more than 27,000 bytes, and half of them by more than 150,000. Two areas
+  that lead to each other share their room: what one takes, the other cannot, and an area whose code
+  grows past another's can make the door between them need the three copies.
 - The program cannot grow, so the strings of `program` a pack changes share the room they had between them:
   70,402 bytes if every one changes, a letter, a digit, a space or a kana taking one byte and a kanji two.
   One may be longer where others are shorter, and strings given the same text are written once, which
