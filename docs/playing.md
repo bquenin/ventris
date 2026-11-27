@@ -16,9 +16,11 @@ and only for this: to get the translation packs, which are text.
 
 ### Which games
 
-Today there are two games, both Japanese releases: Tales of Phantasia for the Super Famicom, and Tales of
-Destiny 2 for the PlayStation 2. Each has an adapter, the code that lets ventris read and rebuild that one
-game.
+Today there are five games, all Japanese releases: Tales of Phantasia for the Super Famicom, G.O.D pure
+for the PlayStation, Tales of Destiny 2 and Super Robot Wars Z for the PlayStation 2, and Ganbare Goemon:
+Tōkai Dōchū Ōedo Tengurigaeshi no Maki for the Nintendo DS. Each has an adapter, the code that lets
+ventris read and rebuild that one game. Super Robot Wars Z can only have its script read so far: a
+translated copy of it cannot be built yet.
 
 ### Your copy of the game
 
@@ -29,8 +31,10 @@ in the catalogue of dumps that lists it, which is the name download sets and too
 can check a file against it. `ventris games` prints the same.
 
 A Super Famicom game can be kept as its image (`.sfc`, `.smc`, `.swc` or `.fig`, with or without a
-copier's header) or as a zip archive that holds one image. A PlayStation 2 game is its disc image (a file
-ending in `.iso`, `.bin` or `.img`).
+copier's header) or as a zip archive that holds one image. A PlayStation game is its disc image, the
+`.bin` file of its data track, with or without the `.cue` sheet kept beside it. A PlayStation 2 game is its
+disc image (a file ending in `.iso`, `.bin` or `.img`). A Nintendo DS game is its cartridge image (`.nds`)
+or a zip archive that holds one.
 
 If your game is not found, or a file you choose is refused, your file is not the exact one the adapter
 knows. When you choose a file, ventris says what it is, as far as it can tell, and what is needed instead;
@@ -73,10 +77,10 @@ Download the installer for your system from the
 
 | System | File |
 | --- | --- |
-| Windows | `ventris-app-0.3.0-windows-x86_64-setup.exe` |
-| macOS, Apple silicon (M1 and later) | `ventris-app-0.3.0-macos-aarch64.dmg` |
-| macOS, Intel | `ventris-app-0.3.0-macos-x86_64.dmg` |
-| Linux | `ventris-app-0.3.0-linux-x86_64.AppImage`, or `ventris-app-0.3.0-linux-x86_64.deb` for Debian and Ubuntu |
+| Windows | `ventris-app-0.4.0-windows-x86_64-setup.exe` |
+| macOS, Apple silicon (M1 and later) | `ventris-app-0.4.0-macos-aarch64.dmg` |
+| macOS, Intel | `ventris-app-0.4.0-macos-x86_64.dmg` |
+| Linux | `ventris-app-0.4.0-linux-x86_64.AppImage`, or `ventris-app-0.4.0-linux-x86_64.deb` for Debian and Ubuntu |
 
 - **Windows**: run the installer. It installs for your own account, without administrator rights. Then
   start ventris from the Start menu.
@@ -84,11 +88,11 @@ Download the installer for your system from the
 - **Linux**: make the AppImage executable and run it:
 
   ```bash
-  chmod +x ventris-app-0.3.0-linux-x86_64.AppImage
-  ./ventris-app-0.3.0-linux-x86_64.AppImage
+  chmod +x ventris-app-0.4.0-linux-x86_64.AppImage
+  ./ventris-app-0.4.0-linux-x86_64.AppImage
   ```
 
-  Or install the `.deb` with `sudo apt install ./ventris-app-0.3.0-linux-x86_64.deb` and start ventris from
+  Or install the `.deb` with `sudo apt install ./ventris-app-0.4.0-linux-x86_64.deb` and start ventris from
   your applications menu.
 
 The app is not signed yet, so Windows and macOS warn the first time it is opened.
@@ -145,9 +149,9 @@ Choose **Build the game…** on the one you want. The button waits until your co
 been found.
 
 The app asks where to save the translated game, and offers a name beside your own file, such as
-`Tales of Phantasia (Japan) (Tales of Phantasia in English 0.9, en).sfc`. A PlayStation 2 game is written
-as a whole new disc image, so it needs as much free space as the disc is large, and takes longer than a
-cartridge game.
+`Tales of Phantasia (Japan) (Tales of Phantasia in English 0.9, en).sfc`. A disc game is written as a
+whole new disc image (for a PlayStation game, a `.bin` with a `.cue` beside it), so it needs as much free
+space as the disc is large, and takes longer than a cartridge game.
 
 When it is done the app says **The translated game is ready**, with the file it wrote, **What was changed**
 to see the details, and **Show in folder**. If the build is refused, it says **The game could not be
@@ -164,8 +168,10 @@ game's script to translate from, the folder of your pack, and a build to try it.
 ## Play it
 
 Open the file you built in an emulator, as you would the original. The built games have been looked at in
-[Mesen](https://github.com/nesdev-org/MesenCE) for the Super Famicom and [PCSX2](https://pcsx2.net/) for
-the PlayStation 2. Other emulators have not been tried.
+[Mesen](https://github.com/nesdev-org/MesenCE) for the Super Famicom,
+[PCSX-Redux](https://github.com/grumpycoders/pcsx-redux) for the PlayStation, [PCSX2](https://pcsx2.net/)
+for the PlayStation 2 and [DeSmuME](https://github.com/TASEmulators/desmume) for the Nintendo DS. Other
+emulators have not been tried.
 
 Start the translated game from power-on. A saved state made with the original game holds what was in the
 console's memory at the time, the original font included, and loading it into the translated game mixes

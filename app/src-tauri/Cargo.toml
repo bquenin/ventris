@@ -1,6 +1,6 @@
 [package]
 name = "ventris-app"
-version = "0.3.0"
+version = "0.4.0"
 description = "The ventris app: choose a translation pack and build the translated game"
 edition = "2024"
 license = "MIT"
